@@ -7,3 +7,5 @@ venv/
 .chainlit/
 *.egg-info/
 dist/
+.DS_Store
+node_modules/

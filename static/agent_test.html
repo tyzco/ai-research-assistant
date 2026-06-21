@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>Agent Test</title>
+<style>body{font-family:sans-serif;max-width:600px;margin:40px auto;padding:20px}
+.loading{color:#2563eb;font-weight:bold}
+.result{background:#f0f9ff;border:1px solid #93c5fd;border-radius:10px;padding:16px;margin-top:12px}
+button{padding:10px 20px;background:#2563eb;color:#fff;border:none;border-radius:10px;cursor:pointer;font-size:14px}
+input{width:100%;padding:10px;border:1px solid #ccc;border-radius:10px;font-size:14px;margin:8px 0}
+#status{color:#64748b;font-size:12px;margin:8px 0}
+</style></head>
+<body>
+<h2>🧪 Agent 快速测试</h2>
+<input id="q" placeholder="输入问题..." value="什么是机器学习？">
+<button onclick="test()">发送</button>
+<div id="status"></div>
+<div id="result"></div>
+
+<script>
+async function test(){
+  const q=document.getElementById('q').value;
+  document.getElementById('status').innerHTML='<span class="loading">⏳ 发送中...</span>';
+  document.getElementById('result').innerHTML='';
+  const t0=Date.now();
+  try{
+    const r=await fetch('http://localhost:8001/agent/quick',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({question:q})
+    });
+    const d=await r.json();
+    const t=((Date.now()-t0)/1000).toFixed(1);
+    if(d.result){
+      document.getElementById('status').innerHTML=`✅ ${t}s | KB: ${d.kb_used||'?'}`;
+      document.getElementById('result').innerHTML=`<div class="result">${d.result}</div>`;
+    }else{
+      document.getElementById('status').innerHTML=`❌ No result after ${t}s`;
+    }
+  }catch(e){
+    document.getElementById('status').innerHTML=`❌ Error: ${e.message}`;
+  }
+}
+</script>
+</body>
+</html>

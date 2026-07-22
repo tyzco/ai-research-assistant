@@ -33,24 +33,29 @@ app = FastAPI(title="AI Research Assistant", version="0.3.0")
 
 @app.on_event("startup")
 async def startup_preload():
-    """预热：提前加载嵌入和重排序模型，避免首次请求卡顿。"""
+    """预热：提前加载嵌入模型（非阻塞，失败不影响启动）。"""
+    import asyncio
     import logging
 
     logger = logging.getLogger("startup")
-    try:
-        from knowledge_base import _get_embed_model
 
-        _get_embed_model()
-        logger.info("Embedding model preloaded")
-    except Exception as e:
-        logger.warning(f"Embed preload failed: {e}")
-    try:
-        from sentence_transformers import CrossEncoder
+    def _do_preload():
+        try:
+            from knowledge_base import _get_embed_model
 
-        CrossEncoder("BAAI/bge-reranker-base", max_length=512)
-        logger.info("Reranker model preloaded")
-    except Exception as e:
-        logger.warning(f"Reranker preload failed: {e}")
+            _get_embed_model()
+            logger.info("Embedding model preloaded")
+        except Exception as e:
+            logger.warning(f"Embed preload failed: {e}")
+        try:
+            from sentence_transformers import CrossEncoder
+
+            CrossEncoder("BAAI/bge-reranker-base", max_length=512)
+            logger.info("Reranker model preloaded")
+        except Exception as e:
+            logger.warning(f"Reranker preload failed: {e}")
+
+    asyncio.get_event_loop().run_in_executor(None, _do_preload)
 
 
 app.add_middleware(
@@ -82,6 +87,41 @@ async def health():
 async def api_metrics():
     """系统监控指标。"""
     return metrics.to_dict()
+
+
+@app.get("/kg_data")
+async def api_kg_data(table: str = ""):
+    """知识图谱数据端点（D3.js 力导向图使用）。"""
+    from knowledge_graph import build_graph_from_kb
+
+    if table:
+        return build_graph_from_kb(table)
+    # 找最大 KB
+    import lancedb
+
+    from config import LANCEDB_DIR
+
+    db = lancedb.connect(str(LANCEDB_DIR))
+    try:
+        raw = db.list_tables()
+        tables = (
+            list(raw.tables)
+            if hasattr(raw, "tables")
+            else (list(raw[0]) if isinstance(raw, tuple) else list(raw))
+        )
+    except Exception:
+        tables = []
+    best, best_n = "", 0
+    for t in tables:
+        try:
+            n = db.open_table(t).count_rows()
+            if n > best_n:
+                best, best_n = t, n
+        except Exception:
+            pass
+    if not best:
+        return {"nodes": [], "links": []}
+    return build_graph_from_kb(str(best))
 
 
 # ===== 认证端点 =====
@@ -446,7 +486,7 @@ async def api_ask(req: AskRequest):
 
 @app.post("/agent/run")
 async def api_agent_run(request: Request):
-    """Agent 端点：高层次调研任务 → 自动规划执行 → 返回报告。"""
+    """Agent 端点（手写ReAct，保留兼容）"""
     req = await request.json()
     task = req.get("task", "")
     topic_id = req.get("topic_id", f"agent_{uuid.uuid4().hex[:8]}")
@@ -469,6 +509,32 @@ async def api_agent_run(request: Request):
             for s in result.get("steps", [])
         ],
     }
+
+
+@app.post("/agent/langgraph")
+async def api_agent_langgraph(request: Request):
+    """LangGraph Agent 端点（图状工作流，支持断点续跑和人工确认）。
+    准备2 §334+§1104+§1251：StateGraph + 条件边 + 循环状态管理。"""
+    req = await request.json()
+    action = req.get("action", "run")  # run | resume
+    task = req.get("task", "")
+    thread_id = req.get("thread_id", "default")
+    max_steps = req.get("max_steps", 10)
+
+    if action == "resume":
+        if not req.get("confirmed"):
+            raise HTTPException(400, "resume 需要 confirmed=true")
+        from agent.langgraph_workflow import resume_langgraph_agent
+
+        result = await resume_langgraph_agent(thread_id, confirmed=True)
+        return result
+
+    if not task:
+        raise HTTPException(400, "需要 task 参数")
+    from agent.langgraph_workflow import run_langgraph_agent
+
+    result = await run_langgraph_agent(task, max_steps=max_steps, thread_id=thread_id)
+    return result
 
 
 @app.post("/ask/stream")
@@ -518,6 +584,18 @@ async def api_ask_stream(request: Request):
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.post("/flywheel")
+async def api_flywheel(request: Request):
+    """数据飞轮：运行机器人模拟用户 → 收集 BadCase → 生成分析报告。
+    准备2(技术) §51+§298: 数据飞轮 = 线上反馈 → BadCase 分析 → 反哺优化。"""
+    req = await request.json()
+    num = req.get("num_queries", 20)
+    from flywheel import simulate_user_session
+
+    report = await simulate_user_session(num)
+    return report
 
 
 @app.post("/agent/quick")

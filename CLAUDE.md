@@ -28,7 +28,10 @@ User input (index.html) → FastAPI (api.py, port 8001)
   ├── /ask             → qa_engine.py → rewrite → hybrid retrieve → cascade rerank → generate
   ├── /ask/stream      → SSE streaming version
   ├── /agent/quick     → Direct KB retrieval + single DeepSeek call (<10s)
-  └── /agent/run       → agent_core.py → ReAct loop with 8 tools
+  ├── /agent/run        → agent_core.py → ReAct loop with 8 tools (legacy)
+  ├── /agent/langgraph  → StateGraph Agent (LangGraph, with checkpoint/resume)
+  ├── /flywheel         → Data flywheel: simulate user sessions, collect BadCases
+  └── /kg_data          → Knowledge graph JSON for D3.js force-graph visualization
 ```
 
 **RAG Pipeline**: Query rewrite (long queries only, cos≥0.75 validation) → AdaptiveHybridRetriever (4-feature dynamic BM25/vector weight) → CascadeRerank (MiniLM pre-filter → bge-reranker refine) → DeepSeek generation with citation format
@@ -49,8 +52,11 @@ User input (index.html) → FastAPI (api.py, port 8001)
 | `downloader.py` | PDF parsing (PyMuPDF), semantic chunking, image filter |
 | `config.py` | All config via env vars |
 | `models.py` | Pydantic models (AskRequest, TopicState, PaperMeta) |
-| `agent/agent_core.py` | ResearchAgent class, ReAct loop |
+| `agent/agent_core.py` | ResearchAgent class, ReAct loop (legacy) |
 | `agent/tool_registry.py` | 8 standardized tools |
+| `agent/langgraph_workflow.py` | LangGraph StateGraph Agent (v2: nodes+conditions+checkpoints) |
+| `knowledge_graph.py` | Paper entity extraction + D3.js graph data |
+| `flywheel.py` | Data flywheel: bot-simulated users → BadCase collection |
 | `monitor.py` | Input sanitization, metrics, safe_call wrapper |
 | `auth.py` | JWT + bcrypt, user DB in data/users.json |
 | `static/index.html` | ~27KB single-file frontend, no build step |

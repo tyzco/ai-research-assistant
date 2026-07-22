@@ -4,7 +4,6 @@ import logging
 from pathlib import Path
 
 import fitz  # PyMuPDF
-
 from config import CHUNK_SIZE, IMAGE_DIR, PAPER_CACHE_DIR
 
 logger = logging.getLogger(__name__)
@@ -57,7 +56,8 @@ def parse_pdf(pdf_bytes: bytes, pdf_name: str) -> dict:
                             "image_path": str(image_path),
                             "page_num": page_num,
                             "ext": ext,
-                            "width": w, "height": h,
+                            "width": w,
+                            "height": h,
                         }
                     )
                 except Exception as e:
@@ -68,8 +68,9 @@ def parse_pdf(pdf_bytes: bytes, pdf_name: str) -> dict:
     return result
 
 
-
-def _fast_image_filter(width: int, height: int, image_bytes: bytes, page_num: int, page_count: int) -> bool:
+def _fast_image_filter(
+    width: int, height: int, image_bytes: bytes, page_num: int, page_count: int
+) -> bool:
     """快速规则预筛：过滤明显噪声图片（Logo/图标/纯色图）。返回 True=可能有用。"""
     # 尺寸过滤：太小的图通常是 Logo/图标
     if width < 100 or height < 100:
@@ -80,8 +81,10 @@ def _fast_image_filter(width: int, height: int, image_bytes: bytes, page_num: in
         return False
     # 颜色过滤：少于 3 种颜色的可能是单色图标
     try:
-        from PIL import Image
         import io
+
+        from PIL import Image
+
         img = Image.open(io.BytesIO(image_bytes))
         colors = img.convert("RGB").getcolors(maxcolors=10)
         if colors and len(colors) < 5:
@@ -91,40 +94,49 @@ def _fast_image_filter(width: int, height: int, image_bytes: bytes, page_num: in
     return True
 
 
+def _get_splitter(chunk_size: int | None = None, chunk_overlap: int | None = None):
+    """获取 LangChain RecursiveCharacterTextSplitter 单例。
+    分隔符优先级：中英文句号 → 换行 → 空格 → 字符级切分。
+    准备2(技术) §1545 建议递归切分是多数项目的默认选择。"""
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+    cs = chunk_size or CHUNK_SIZE
+    co = (
+        chunk_overlap
+        if chunk_overlap is not None
+        else min(200, max(50, int(cs * 0.15)))
+    )  # 15% overlap, capped
+    return RecursiveCharacterTextSplitter(
+        separators=[
+            "\n\n",
+            "\n",
+            "。",
+            "！",
+            "？",  # 段落 + 中文标点
+            ".",
+            "!",
+            "?",  # 英文标点
+            " ",
+            "",  # 空格 → 字符级兜底
+        ],
+        chunk_size=cs,
+        chunk_overlap=co,
+        length_function=len,
+        is_separator_regex=False,
+    )
+
+
 def chunk_text(text: str, chunk_size: int = CHUNK_SIZE) -> list[str]:
-    """简单滑窗分块，每块不超过 chunk_size 字符，100 字符重叠。"""
-    if len(text) <= chunk_size:
-        return [text] if text.strip() else []
-    chunks = []
-    start = 0
-    while start < len(text):
-        end = start + chunk_size
-        chunks.append(text[start:end])
-        start = end - 100
-    return chunks
+    """使用 LangChain RecursiveCharacterTextSplitter 进行递归语义切分。
+    按 准备2(技术) §364 建议：NLP 语义感知动态切分 + 15% token 重叠窗口。"""
+    if not text or not text.strip():
+        return []
+    splitter = _get_splitter(chunk_size)
+    return splitter.split_text(text)
 
 
 def semantic_chunk_text(
     text: str, max_chars: int = 1024, overlap: int = 2
 ) -> list[str]:
-    """按句子边界切分，合并到接近 max_chars，带 overlap 句重叠。
-    更适合学术论文——不会把一句话切成两半。"""
-    import re
-
-    sentences = re.split(r"(?<=[。！？.!?])\s*", text)
-    sentences = [s.strip() for s in sentences if s.strip()]
-    if not sentences:
-        return []
-
-    chunks = []
-    i = 0
-    while i < len(sentences):
-        chunk = sentences[i]
-        j = i + 1
-        while j < len(sentences) and len(chunk) + len(sentences[j]) < max_chars:
-            chunk += " " + sentences[j]
-            j += 1
-        if len(chunk) > 50:  # 太短的不存
-            chunks.append(chunk)
-        i = max(i + 1, j - overlap)
-    return chunks if chunks else [text[:max_chars]]
+    """保留旧接口兼容性，内部委托给 chunk_text。"""
+    return chunk_text(text, chunk_size=max_chars)

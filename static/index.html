@@ -143,7 +143,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans SC',sans
     <span style="font-size:10px;color:var(--muted)" id="st"></span>
     <span style="margin-left:auto"></span>
     <span style="font-size:10px;color:var(--muted)">LLM:</span>
-    <select id="ms" onchange="S.m=this.value;localStorage.aia_m=this.value"><option value="deepseek-chat">DeepSeek V3</option><option value="deepseek-reasoner">DeepSeek R1</option></select>
+    <select id="ms" onchange="S.m=this.value;localStorage.aia_m=this.value"><option value="deepseek-v4-pro">DeepSeek V4 Pro</option><option value="deepseek-v4-flash">DeepSeek V4 Flash</option></select>
     <span style="font-size:10px;color:var(--muted)">视觉:</span>
     <select id="vs" onchange="S.v=this.value;localStorage.aia_v=this.value"><option value="qwen-vl-max">Qwen-VL-Max</option><option value="qwen-vl-plus">Qwen-VL-Plus</option><option value="glm-4v">GLM-4V</option><option value="">关闭</option></select>
     <button onclick="T()" title="暗色模式">🌓</button>
@@ -173,8 +173,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans SC',sans
 
 <script>
 const A='http://localhost:8001';
-let S={ts:[],tid:null,q:'',msgs:[],strategy:null,pps:[],up:false,ld:false,ps:false,pg:0,pi:null,m:'deepseek-chat',v:'qwen-vl-max',agent:false,agentSteps:[]};
-(function I(){S.m=localStorage.aia_m||'deepseek-chat';S.v=localStorage.aia_v||'qwen-vl-max';document.getElementById('ms').value=S.m;document.getElementById('vs').value=S.v;if(localStorage.aia_d==='1')document.documentElement.className='dark';L();let s=localStorage.aia_t;if(s)W(s);else Y()})();
+let S={ts:[],tid:null,q:'',msgs:[],strategy:null,pps:[],up:false,ld:false,ps:false,pg:0,pi:null,m:'deepseek-v4-pro',v:'qwen-vl-max',agent:false,agentSteps:[]};
+(function I(){S.m=localStorage.aia_m||'deepseek-v4-pro';S.v=localStorage.aia_v||'qwen-vl-max';document.getElementById('ms').value=S.m;document.getElementById('vs').value=S.v;if(localStorage.aia_d==='1')document.documentElement.className='dark';L();let s=localStorage.aia_t;if(s)W(s);else Y()})();
 function T(){let h=document.documentElement;h.className=h.className==='dark'?'light':'dark';localStorage.aia_d=h.className==='dark'?'1':'0'}
 async function L(){try{S.ts=await(await fetch(A+'/topics')).json();K()}catch(e){}}
 function Y(){S.msgs=[{r:'s',c:'# 📚 学术文献精读助手\n\n输入研究方向获取检索策略，一键下载论文自动建库，深度问答。\n\n试试：**人脸识别**·**量化交易**·**后疫情消费**'}];R()}

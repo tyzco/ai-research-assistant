@@ -9,7 +9,12 @@ import xml.etree.ElementTree as ET
 import httpx
 from openai import AsyncOpenAI
 
-from config import APIFY_API_KEY, DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, SEMANTIC_SCHOLAR_API_KEY
+from config import (
+    APIFY_API_KEY,
+    DEEPSEEK_API_KEY,
+    DEEPSEEK_BASE_URL,
+    SEMANTIC_SCHOLAR_API_KEY,
+)
 from models import PaperMeta
 
 logger = logging.getLogger(__name__)
@@ -62,7 +67,7 @@ STRATEGY_PROMPT = """你是图书情报学与学术检索专家。用户的研�
 async def generate_search_strategy(query: str) -> dict:
     client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
     response = await client.chat.completions.create(
-        model="deepseek-chat",
+        model=DEEPSEEK_MODEL,
         messages=[{"role": "user", "content": STRATEGY_PROMPT.format(query=query)}],
         temperature=0.3,
         response_format={"type": "json_object"},
@@ -209,7 +214,9 @@ async def search_papers_for_topic(
             continue
         # 中文论文必须与搜索关键词相关（前30篇严格，之后宽松）
         cn_count_done = sum(1 for pp in papers if _detect_cn(pp.title))
-        if _detect_cn(p.title) and not _cn_relevant(p.title, strict=(cn_count_done < 30)):
+        if _detect_cn(p.title) and not _cn_relevant(
+            p.title, strict=(cn_count_done < 30)
+        ):
             continue
         key = (p.title or "").lower().strip()[:60]
         if key and key not in seen:
@@ -220,7 +227,12 @@ async def search_papers_for_topic(
     cn_strict = sum(1 for p in papers if _detect_cn(p.title))
     if cn_strict < 20:
         for p in cn_papers:
-            if p not in papers and not _should_drop(p) and _detect_cn(p.title) and _cn_relevant(p.title, strict=False):
+            if (
+                p not in papers
+                and not _should_drop(p)
+                and _detect_cn(p.title)
+                and _cn_relevant(p.title, strict=False)
+            ):
                 key = (p.title or "").lower().strip()[:60]
                 if key not in seen:
                     seen.add(key)
@@ -468,10 +480,9 @@ async def _search_openalex_cn(keywords: list[str]) -> list[PaperMeta]:
     return papers
 
 
-
-
 # ---- Apify 谷歌学术搜索 ----
 APIFY_GS_URL = "https://api.apify.com/v2/acts/apify~google-scholar-scraper/runs"
+
 
 async def _search_google_scholar_apify(keywords: list[str]) -> list[PaperMeta]:
     """通过 Apify 调用谷歌学术搜索（需要 APIFY_API_KEY）。"""
@@ -493,15 +504,22 @@ async def _search_google_scholar_apify(keywords: list[str]) -> list[PaperMeta]:
                 data = resp.json()
                 for item in data.get("data", [])[:20]:
                     title = item.get("title", "")
-                    if not title: continue
+                    if not title:
+                        continue
                     pid = hashlib.md5(f"gs_apify:{title}".encode()).hexdigest()[:16]
-                    papers.append(PaperMeta(
-                        paper_id=pid, title=title, authors=item.get("authors", ""),
-                        year=int(item.get("year", 0)) if item.get("year") else None,
-                        abstract=(item.get("description") or "")[:200],
-                        pdf_url=item.get("pdfUrl"), is_oa=bool(item.get("pdfUrl")),
-                    ))
-            except Exception: pass
+                    papers.append(
+                        PaperMeta(
+                            paper_id=pid,
+                            title=title,
+                            authors=item.get("authors", ""),
+                            year=int(item.get("year", 0)) if item.get("year") else None,
+                            abstract=(item.get("description") or "")[:200],
+                            pdf_url=item.get("pdfUrl"),
+                            is_oa=bool(item.get("pdfUrl")),
+                        )
+                    )
+            except Exception:
+                pass
     logger.info(f"Google Scholar (Apify): {len(papers)} papers")
     return papers
 

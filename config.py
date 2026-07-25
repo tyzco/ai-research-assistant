@@ -11,7 +11,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 # ---- LLM (DeepSeek) ----
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
 
 # ---- Embedding (本地模型) ----
 EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "local")
@@ -41,5 +41,5 @@ CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "2048"))
 RETRIEVAL_TOP_K = int(os.getenv("RETRIEVAL_TOP_K", "5"))
 
 # ---- Model Options (前端可切换) ----
-AVAILABLE_LLM_MODELS = ["deepseek-chat", "deepseek-reasoner"]
+AVAILABLE_LLM_MODELS = ["deepseek-v4-pro", "deepseek-v4-flash"]
 AVAILABLE_VISION_MODELS = ["qwen-vl-max", "qwen-vl-plus", "glm-4v"]

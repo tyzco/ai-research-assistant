@@ -37,7 +37,7 @@ async def extract_entities_from_abstracts(abstracts: list[dict[str, str]]) -> di
     """用 DeepSeek 从论文摘要批量抽取实体关系。"""
     from openai import AsyncOpenAI
 
-    from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL
+    from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
     from monitor import safe_call
 
     if not abstracts:
@@ -51,7 +51,7 @@ async def extract_entities_from_abstracts(abstracts: list[dict[str, str]]) -> di
     try:
         resp = await safe_call(
             client.chat.completions.create,
-            model="deepseek-chat",
+            model=DEEPSEEK_MODEL,
             temperature=0.1,
             max_tokens=2000,
             messages=[

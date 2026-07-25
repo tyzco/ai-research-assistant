@@ -270,3 +270,172 @@ async def resume_langgraph_agent(thread_id: str, confirmed: bool = True) -> dict
             "steps": final.get("steps", 0),
         }
     return {"success": False, "result": "恢复执行失败"}
+
+
+# ===== 多Agent模式：Planner→Worker→Synthesizer =====
+# 准备2 §多智能体协同：编排者-执行者模式的分工逻辑
+
+PLANNER_PROMPT = """你是学术调研规划器。将调研任务拆解为2-4个独立子任务，每个子任务可用工具独立完成。
+直接返回JSON，不要解释。
+
+调研任务：{task}
+
+格式：{{"subtasks": [{{"id": 1, "description": "子任务描述", "tool": "agent_ask|search_papers|ask_knowledge_base"}}], "synthesis_notes": "汇总要点"}}"""
+
+SYNTHESIZER_PROMPT = """你是学术报告撰写器。根据以下子任务结果，整合为结构化的研究报告（Markdown）。
+
+{results}
+
+研究报告："""
+
+
+class MultiAgentGraph:
+    """轻量多Agent：Planner拆解→Worker并行执行→Synthesizer汇总。
+    不使用CrewAI等重型框架——LangGraph本身的状态管理已足够。"""
+
+    async def plan(self, task: str, client) -> dict:
+        try:
+            resp = await client.chat.completions.create(
+                model=DEEPSEEK_MODEL,
+                temperature=0.2,
+                max_tokens=500,
+                messages=[
+                    {"role": "user", "content": PLANNER_PROMPT.format(task=task)}
+                ],
+            )
+            return json.loads(resp.choices[0].message.content.strip())
+        except Exception:
+            return {
+                "subtasks": [{"id": 1, "description": task, "tool": "agent_ask"}],
+                "synthesis_notes": "",
+            }
+
+    async def execute_worker(self, subtask: dict, table_name: str) -> dict:
+        from agent.tool_registry import get_tool
+
+        tool = get_tool(subtask.get("tool", "agent_ask"))
+        if not tool:
+            return {"error": f"Unknown tool: {subtask.get('tool')}"}
+        try:
+            result = await tool.execute(
+                table_name=table_name
+                if "table" in tool.parameters.get("properties", {})
+                else None,
+                question=subtask["description"],
+                query=subtask["description"],
+            )
+            return {
+                "id": subtask["id"],
+                "description": subtask["description"],
+                "result": result[:2000],
+            }
+        except Exception as e:
+            return {"id": subtask["id"], "error": str(e)}
+
+    async def synthesize(self, worker_results: list[dict], client) -> str:
+        results_text = "\n---\n".join(
+            f"子任务 {r.get('id','?')}: {r.get('description','')}\n{r.get('result', r.get('error',''))}"
+            for r in worker_results
+        )
+        try:
+            resp = await client.chat.completions.create(
+                model=DEEPSEEK_MODEL,
+                temperature=0.3,
+                max_tokens=800,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": SYNTHESIZER_PROMPT.format(
+                            results=results_text[:4000]
+                        ),
+                    }
+                ],
+            )
+            return resp.choices[0].message.content.strip()
+        except Exception as e:
+            return f"汇总失败: {e}\n\n原始结果:\n{results_text}"
+
+
+async def run_multi_agent(task: str, table_name: str = "") -> dict:
+    """运行多Agent调研：Planner拆解 → 串行执行Workers → Synthesizer汇总。"""
+    from openai import AsyncOpenAI
+
+    from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL
+
+    client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+    ma = MultiAgentGraph()
+
+    # Step 1: Planner
+    plan = await ma.plan(task, client)
+    subtasks = plan.get(
+        "subtasks", [{"id": 1, "description": task, "tool": "agent_ask"}]
+    )
+    notes = plan.get("synthesis_notes", "")
+
+    # Step 2: Workers (串行——避免API并发限制)
+    worker_results = []
+    for st in subtasks:
+        result = await ma.execute_worker(st, table_name)
+        worker_results.append(result)
+
+    # Step 3: Synthesizer
+    report = await ma.synthesize(worker_results, client)
+
+    return {
+        "success": True,
+        "result": report,
+        "plan": {"subtasks": len(subtasks), "notes": notes},
+        "workers": [{"id": r["id"], "ok": "error" not in r} for r in worker_results],
+        "steps": len(subtasks) + 2,
+    }
+
+
+# ===== Agent 评估体系 =====
+# 准备2 §评估体系：任务成功率、平均推理步数、工具调用准确率、影子测试
+
+
+class AgentEvaluator:
+    """Agent 四维评估：成功率、步数、工具准确率、影子测试（与基线对照）。"""
+
+    def __init__(self):
+        self.results: list[dict] = []
+
+    def record(self, task: str, expected: str, actual: dict, shadow_baseline: str = ""):
+        self.results.append(
+            {
+                "task": task,
+                "expected": expected,
+                **actual,
+                "shadow_baseline": shadow_baseline,
+            }
+        )
+
+    def report(self) -> dict:
+        if not self.results:
+            return {}
+        n = len(self.results)
+        success = sum(1 for r in self.results if r.get("success"))
+        steps = [r.get("steps", 0) for r in self.results if r.get("steps", 0) > 0]
+        tool_ok = sum(1 for r in self.results if r.get("tool_errors", 0) == 0)
+        shadow_pass = sum(
+            1
+            for r in self.results
+            if r.get("shadow_baseline")
+            and len(r.get("result", "")) > len(r["shadow_baseline"]) * 0.8
+        )
+        return {
+            "task_success_rate": f"{success}/{n} ({success/n:.0%})",
+            "avg_inference_steps": round(sum(steps) / max(1, len(steps)), 1),
+            "tool_call_accuracy": f"{tool_ok}/{n}",
+            "shadow_test_pass": f"{shadow_pass}/{sum(1 for r in self.results if r.get('shadow_baseline'))}"
+            if any(r.get("shadow_baseline") for r in self.results)
+            else "N/A",
+            "details": self.results,
+        }
+
+
+_evaluator = AgentEvaluator()
+
+
+def get_agent_evaluator():
+    return _evaluator

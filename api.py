@@ -577,6 +577,25 @@ async def api_agent_langgraph(request: Request):
     return result
 
 
+@app.post("/agent/multi")
+async def api_agent_multi(request: Request):
+    """Planner->Workers->Synthesizer."""
+    req = await request.json()
+    task = req.get("task", "")
+    table = req.get("table", "")
+    if not task:
+        raise HTTPException(400, "需要 task 参数")
+    from agent.langgraph_workflow import run_multi_agent
+    return await run_multi_agent(task, table)
+
+
+@app.get("/agent/report")
+async def api_agent_report():
+    """Agent评估报告：成功率/推理步数/工具准确率/影子测试."""
+    from agent.langgraph_workflow import get_agent_evaluator
+    return get_agent_evaluator().report()
+
+
 @app.post("/ask/stream")
 async def api_ask_stream(request: Request):
     """流式 RAG 问答：SSE 逐 token 返回，用户即时看到生成内容。"""

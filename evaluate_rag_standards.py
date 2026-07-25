@@ -29,15 +29,24 @@ async def faithfulness(answer, contexts):
 
 忠实度分数（0-1）："""
     try:
+        from openai import AsyncOpenAI
+
+        from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
+
+        client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
         resp = await client.chat.completions.create(
             model=DEEPSEEK_MODEL,
             temperature=0,
             max_tokens=10,
             messages=[{"role": "user", "content": prompt}],
+            timeout=15,
         )
-        return float(resp.choices[0].message.content.strip())
-    except:
-        return 0.5
+        text = (resp.choices[0].message.content or "").strip()
+        if text:
+            return float(text.replace(",", "."))
+    except Exception:
+        pass
+    return 0.5  # default: uncertain
 
 
 def context_precision(contexts, ground_truth):

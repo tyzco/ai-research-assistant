@@ -99,22 +99,25 @@ def build_graph_from_kb(table_name: str) -> dict:
 
     try:
         tbl = db.open_table(table_name)
-        rows = (
-            tbl.to_lance()
-            .to_table(columns=["paper_id", "title", "year", "doi"])
-            .to_pylist()
-        )
-    except Exception:
+        # 查前 200 行构建节点
+        rows = tbl.search().limit(200).to_list()
+        # 按 paper_id 去重
+        seen = set()
+        deduped = []
+        for r in rows:
+            pid = r.get("paper_id", "")
+            if pid and pid not in seen:
+                seen.add(pid)
+                deduped.append(r)
+        rows = deduped
+    except Exception as e:
+        logger.warning(f"KG build failed for {table_name}: {e}")
         return _empty_graph()
 
-    # 构建节点（论文）和边（共享实体→手动抽取时再加 LLM）
-    seen = set()
+    # 构建节点
     nodes, edges = [], []
     for r in rows:
         pid = r.get("paper_id", "")
-        if pid in seen:
-            continue
-        seen.add(pid)
         title = (r.get("title") or pid)[:80]
         year = r.get("year", "")
         nodes.append(

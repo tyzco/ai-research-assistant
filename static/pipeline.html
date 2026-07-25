@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RAG Pipeline Trace</title>
+<style>
+:root{--bg:#0b1120;--card:#1e293b;--text:#e2e8f0;--muted:#64748b;--border:#334155;--blue:#3b82f6;--green:#22c55e;--purple:#a855f7;--amber:#f59e0b;--red:#ef4444}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans SC',monospace;background:var(--bg);color:var(--text);min-height:100vh;display:flex;flex-direction:column}
+header{padding:12px 20px;background:var(--card);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px}
+header h1{font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px}
+header h1 span{font-size:10px;color:var(--muted);font-weight:400}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.dot.pending{background:var(--muted)}.dot.active{background:var(--blue);animation:pulse 1s infinite}.dot.done{background:var(--green)}.dot.error{background:var(--red)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+main{flex:1;padding:24px;display:flex;flex-direction:column;gap:20px;overflow-y:auto}
+.query-bar{display:flex;gap:8px;max-width:800px}
+.query-bar input{flex:1;padding:10px 16px;background:var(--card);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:13px;outline:none}
+.query-bar input:focus{border-color:var(--blue)}
+.query-bar button{padding:10px 20px;background:var(--blue);color:#fff;border:none;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap}
+.query-bar button:hover{background:#2563eb}.query-bar button:disabled{opacity:.5}
+.tl{position:relative;padding-left:32px}
+.tl::before{content:'';position:absolute;left:15px;top:0;bottom:0;width:2px;background:var(--border)}
+.step{position:relative;margin-bottom:8px;padding:12px 16px;background:var(--card);border:1px solid var(--border);border-radius:10px;transition:all .3s}
+.step.active{border-color:var(--blue);box-shadow:0 0 20px rgba(59,130,246,.1)}
+.step.done{border-color:var(--green);opacity:.9}
+.step.error{border-color:var(--red)}
+.step::before{content:'';position:absolute;left:-25px;top:50%;transform:translateY(-50%);width:12px;height:12px;border-radius:50%;border:2px solid var(--border);background:var(--bg);z-index:1}
+.step.active::before{border-color:var(--blue);background:var(--blue);box-shadow:0 0 10px rgba(59,130,246,.5)}
+.step.done::before{border-color:var(--green);background:var(--green)}
+.step.error::before{border-color:var(--red);background:var(--red)}
+.step-header{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+.step-icon{font-size:16px}
+.step-name{font-size:12px;font-weight:600}
+.step-time{font-size:10px;color:var(--muted);margin-left:auto}
+.step-detail{font-size:11px;color:var(--muted);line-height:1.5;margin-top:4px}
+.step-detail b{color:var(--text)}
+.badge{display:inline-block;padding:2px 8px;border-radius:6px;font-size:10px;font-weight:600}
+.badge.green{background:rgba(34,197,94,.15);color:var(--green)}
+.badge.blue{background:rgba(59,130,246,.15);color:var(--blue)}
+.badge.purple{background:rgba(168,85,247,.15);color:var(--purple)}
+.badge.amber{background:rgba(245,158,11,.15);color:var(--amber)}
+.answer-box{margin-top:16px;padding:16px;background:var(--card);border:1px solid var(--green);border-radius:10px;font-size:13px;line-height:1.6}
+.answer-box h3{font-size:12px;color:var(--green);margin-bottom:8px}
+.stats-bar{display:flex;gap:16px;margin-bottom:20px;flex-wrap:wrap}
+.stat-card{flex:1;min-width:120px;padding:12px 16px;background:var(--card);border:1px solid var(--border);border-radius:10px;text-align:center}
+.stat-card .v{font-size:22px;font-weight:700;color:var(--blue)}
+.stat-card .l{font-size:10px;color:var(--muted);margin-top:2px}
+.stream{font-size:13px;line-height:1.7;padding:12px 0;white-space:pre-wrap}
+.cursor{display:inline-block;width:2px;height:16px;background:var(--blue);vertical-align:text-bottom;animation:pulse 1s infinite}
+</style>
+</head>
+<body>
+<header>
+  <h1>RAG Pipeline Trace <span>实时流水线可视化</span></h1>
+  <span style="margin-left:auto;font-size:10px;color:var(--muted)">面试演示用 · 展示检索→生成全链路</span>
+</header>
+<main>
+  <div class="query-bar">
+    <input type="text" id="qi" placeholder="输入问题（能看到每一步的处理过程）..." onkeydown="if(event.key==='Enter')R()">
+    <button id="qb" onclick="R()">追踪</button>
+  </div>
+  <div id="stats" class="stats-bar"></div>
+  <div id="tl" class="tl"></div>
+  <div id="answer"></div>
+</main>
+
+<script>
+var A='http://localhost:8001',streaming=false;
+var ICONS={rewrite_start:'',rewrite_done:'',rewrite_skip:'',vector_done:'',bm25_done:'',fusion_done:'',rerank_done:'',rerank_skip:'',generate_start:'',generate_done:'',done:''};
+var NAMES={rewrite_start:'查询改写',rewrite_done:'查询改写完成',rewrite_skip:'查询改写',vector_done:'向量语义检索',bm25_done:'BM25 关键词检索',fusion_done:'自适应 RRF 融合',rerank_done:'级联重排序',rerank_skip:'重排序',generate_start:'LLM 生成',generate_done:'生成完成',done:'流水线完成'};
+var steps=[];
+
+async function R(){
+  var q=document.getElementById('qi').value.trim();if(!q||streaming)return;
+  streaming=true;steps=[];document.getElementById('qb').disabled=true;
+  document.getElementById('answer').innerHTML='';document.getElementById('stats').innerHTML='';
+  document.getElementById('tl').innerHTML='';
+  try{
+    var r=await fetch(A+'/ask/trace',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q})});
+    var reader=r.body.getReader(),decoder=new TextDecoder(),buf='';
+    while(true){
+      var v=await reader.read();if(v.done)break;
+      buf+=decoder.decode(v.value,{stream:true});
+      var lines=buf.split('\n');buf=lines.pop()||'';
+      for(var i=0;i<lines.length;i++){
+        var l=lines[i];if(l.indexOf('data: ')===0){
+          try{var d=JSON.parse(l.slice(6));H(d)}catch(e){}
+        }
+      }
+    }
+  }catch(e){}
+  streaming=false;document.getElementById('qb').disabled=false;
+}
+
+function H(d){
+  if(d.token){
+    var a=document.getElementById('answer');
+    if(!a.querySelector('.stream'))a.innerHTML='<h3 style="font-size:12px;color:var(--green);margin-bottom:6px">' + String.fromCodePoint(0x1F4AC) + ' 生成结果</h3><div class="stream"></div><span class="cursor" id="cur"></span>';
+    var cur=document.getElementById('cur');
+    if(cur)cur.insertAdjacentText('beforebegin',d.token);
+    return;
+  }
+  if(d.step==='done'){renderStats();return}
+  if(d.step==='generate_start'){document.getElementById('answer').innerHTML='<h3 style="font-size:12px;color:var(--green);margin-bottom:6px">' + String.fromCodePoint(0x1F4AC) + ' 生成结果</h3><div class="stream"></div><span class="cursor" id="cur"></span>'}
+  U(d.step,d);
+}
+
+function U(step,data){
+  var cat=step.split('_')[0],name=NAMES[step]||step;
+  var idx=-1;
+  for(var i=0;i<steps.length;i++){if(steps[i].step===step){idx=i;break}}
+  if(idx>=0){steps[idx]={step:step,data:data,name:name,cat:cat};}else{steps.push({step:step,data:data,name:name,cat:cat,ts:Date.now()});}
+  for(var j=0;j<steps.length;j++){if(steps[j].step!==step&&steps[j].step!=='generate_start'&&steps[j].step!=='done')steps[j].done=true;}
+
+  var h='',activeFound=false;
+  for(var k=0;k<steps.length;k++){
+    var s=steps[k],cls=s.step===step&&!activeFound?'active':(s.done?'done':'');
+    if(s.step===step&&!activeFound)activeFound=true;
+    h+='<div class="step '+cls+'"><div class="step-header"><span class="step-icon">'+(ICONS[s.step]||'')+'</span><span class="step-name">'+s.name+'</span><span class="step-time">'+((s.data||{}).elapsed||'')+'</span></div>';
+    if(s.data){
+      var dt='';
+      if(s.step==='rewrite_done'&&s.data.changed)dt='<b>'+s.data.original+'</b> → <b>'+s.data.expanded+'</b>';
+      else if(s.step==='vector_done')dt='检索到 <b>'+s.data.results+'</b> 个候选 · 最高相似度 <b>'+s.data.top_score+'</b>';
+      else if(s.step==='bm25_done')dt='关键词命中 <b>'+s.data.results+'</b> 篇';
+      else if(s.step==='fusion_done')dt='<span class="badge '+(s.data.alpha_bm25>.6?'amber':'blue')+'">BM25: '+s.data.alpha_bm25+'</span> <span class="badge '+(s.data.alpha_bm25>.6?'blue':'amber')+'">向量: '+((s.data.alpha_vector)||(1-s.data.alpha_bm25).toFixed(3))+'</span> '+s.data.strategy;
+      else if(s.step==='rerank_done')dt='<b>'+s.data.before+'</b> → <b>'+s.data.after+'</b> 精排';
+      else if(s.step==='generate_start')dt='已有 <b>'+((s.data||{}).elapsed||'?')+'</b> 耗时，开始生成';
+      else if(s.step==='generate_done')dt='生成 <b>'+s.data.tokens+'</b> tokens · 总计 <b>'+s.data.total+'</b>';
+      h+='<div class="step-detail">'+dt+'</div>';
+    }
+    h+='</div>';
+  }
+  document.getElementById('tl').innerHTML=h;
+}
+
+function renderStats(){
+  var h='',g=null;
+  for(var i=0;i<steps.length;i++){if(steps[i].step==='generate_done'){g=steps[i];break}}
+  if(g&&g.data){
+    h+='<div class="stat-card"><div class="v">'+g.data.total+'</div><div class="l">总耗时</div></div>';
+    h+='<div class="stat-card"><div class="v">'+g.data.tokens+'</div><div class="l">生成 Tokens</div></div>';
+    var v=null;
+    for(var j=0;j<steps.length;j++){if(steps[j].step==='vector_done'){v=steps[j];break}}
+    if(v)h+='<div class="stat-card"><div class="v">'+(v.data.top_score*100).toFixed(0)+'%</div><div class="l">向量相似度</div></div>';
+    var f=null;
+    for(var k=0;k<steps.length;k++){if(steps[k].step==='fusion_done'){f=steps[k];break}}
+    if(f)h+='<div class="stat-card"><div class="v">'+f.data.fused_count+'</div><div class="l">融合结果</div></div>';
+  }
+  document.getElementById('stats').innerHTML=h;
+}
+</script>
+</body>
+</html>

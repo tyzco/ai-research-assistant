@@ -14,7 +14,8 @@ from fastapi.staticfiles import StaticFiles
 
 load_dotenv()
 
-from auth import create_token, get_current_user, login_user, register_user, require_user
+from auth import (create_token, get_current_user, login_user, register_user,
+                  require_user)
 from config import ENABLE_VISION, IMAGE_DIR, PROJECT_ROOT
 from downloader import chunk_text, parse_pdf
 from knowledge_base import build_knowledge_base, store_image_descriptions
@@ -112,6 +113,87 @@ async def api_kg_data(table: str = ""):
     except Exception:
         tables = []
     best, best_n = "", 0
+    for t in tables:
+        try:
+            n = db.open_table(t).count_rows()
+            if n > best_n:
+                best, best_n = t, n
+        except Exception:
+            pass
+    if not best:
+        return {"nodes": [], "links": []}
+    return build_graph_from_kb(str(best))
+
+
+@app.post("/kg/build")
+async def api_kg_build(request: Request):
+    """LLM 实体抽取 + 图谱构建：从 KB 论文摘要中提取方法/数据集/指标和关系。
+    耗时约 10-30s（取决于论文数量）。"""
+    req = await request.json()
+    table = req.get("table", "")
+    if not table:
+        # 找最大 KB
+        import lancedb
+
+        from config import LANCEDB_DIR
+        db = lancedb.connect(str(LANCEDB_DIR))
+        raw = db.list_tables()
+        tables = raw.tables if hasattr(raw, "tables") else []
+        best, best_n = "", 0
+        for t in tables:
+            try:
+                n = db.open_table(t).count_rows()
+                if n > best_n:
+                    best, best_n = t, n
+            except: pass
+        table = str(best) if best else ""
+    if not table:
+        raise HTTPException(404, "无可用知识库")
+
+    from knowledge_graph import (build_graph_from_kb,
+                                 extract_entities_from_abstracts)
+
+    # 获取论文元数据
+    graph = build_graph_from_kb(table)
+    if not graph["nodes"]:
+        raise HTTPException(404, "知识库无数据")
+
+    # LLM 实体抽取
+    abstracts = [{"paper_id": n["id"], "title": n["label"], "abstract": ""} for n in graph["nodes"][:20]]
+    extracted = await extract_entities_from_abstracts(abstracts)
+
+    # 合并：论文节点 + 实体节点 + 关系边
+    entity_ids = set()
+    entities = []
+    for e in extracted.get("entities", []):
+        if e["id"] not in entity_ids:
+            entity_ids.add(e["id"])
+            entities.append(e)
+
+    links = []
+    for r in extracted.get("relations", []):
+        links.append({"source": r["source"], "target": r["target"], "type": r.get("relation", "related")})
+
+    # 论文-论文共享实体边
+    paper_methods = {}  # paper_id -> set of entity_ids
+    for r in extracted.get("relations", []):
+        src, tgt = r["source"], r["target"]
+        if src not in paper_methods:
+            paper_methods[src] = set()
+        paper_methods[src].add(tgt)
+
+    paper_ids = list(paper_methods.keys())
+    for i in range(len(paper_ids)):
+        for j in range(i+1, len(paper_ids)):
+            shared = paper_methods[paper_ids[i]] & paper_methods[paper_ids[j]]
+            if len(shared) >= 2:
+                links.append({"source": paper_ids[i], "target": paper_ids[j], "type": "shares_entity", "count": len(shared)})
+
+    return {
+        "nodes": graph["nodes"] + entities,
+        "links": links,
+        "stats": {"papers": len(graph["nodes"]), "entities": len(entities), "relations": len(links)}
+    }
     for t in tables:
         try:
             n = db.open_table(t).count_rows()
@@ -584,6 +666,148 @@ async def api_ask_stream(request: Request):
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.post("/ask/trace")
+async def api_ask_trace(request: Request):
+    """RAG 流水线追踪端点：SSE 流式返回每步耗时和中间结果，供 pipeline.html 可视化。
+    面试展示用——直观看到检索→改写→召回→重排→生成的完整链路。"""
+    import asyncio
+    import json
+    import time
+
+    from fastapi.responses import StreamingResponse
+
+    req = await request.json()
+    question = sanitize_input(req.get("question", ""))
+    topic_id = req.get("topic_id", "")
+    if not question:
+        raise HTTPException(400, "需要 question 参数")
+
+    state = active_topics.get(topic_id) if topic_id else None
+    if not state or not state.lancedb_table:
+        raise HTTPException(404, "Topic 不存在或知识库未就绪")
+
+    async def trace():
+        s = lambda step, data: f"data: {json.dumps({'step': step, **data}, ensure_ascii=False)}\n\n"
+
+        t0 = time.time()
+
+        # Step 1: 查询改写
+        yield s("rewrite_start", {"question": question, "ts": f"{time.time()-t0:.2f}s"})
+        from qa_engine import _expand_query, _is_complex_query
+        expanded = question
+        if len(question) >= 15 or any(kw in question for kw in ["对比","区别","优缺点","机制"]):
+            t1 = time.time()
+            expanded = await _expand_query(question)
+            dt = time.time() - t1
+            yield s("rewrite_done", {
+                "original": question, "expanded": expanded,
+                "changed": expanded != question, "elapsed": f"{dt:.2f}s"
+            })
+        else:
+            yield s("rewrite_skip", {"reason": "短问题跳过改写", "elapsed": "0s"})
+
+        # Step 2: 向量检索
+        import lancedb
+        import numpy as np
+
+        from knowledge_base import (LANCEDB_DIR, _cosine_search,
+                                    _embed_texts_sync)
+        t1 = time.time()
+        qv = _embed_texts_sync([expanded])[0]
+        db = lancedb.connect(str(LANCEDB_DIR))
+        tbl = db.open_table(state.lancedb_table)
+        vec_res = _cosine_search(tbl, qv, 5, "is_fulltext = true AND is_image = false")
+        dt_v = time.time() - t1
+        top_score = float(np.dot(np.array(qv), np.array(vec_res[0].get("vector",qv))) if vec_res else 0)
+        yield s("vector_done", {
+            "results": len(vec_res), "top_score": round(top_score, 4),
+            "top_titles": [r.get("title","")[:40] for r in (vec_res or [])[:3]],
+            "elapsed": f"{dt_v:.2f}s"
+        })
+
+        # Step 3: BM25 全文检索
+        t1 = time.time()
+        try:
+            bm25 = tbl.search(expanded, query_type="fts").limit(5).to_list()
+            dt_b = time.time() - t1
+            yield s("bm25_done", {
+                "results": len(bm25),
+                "top_titles": [r.get("title","")[:40] for r in (bm25 or [])[:3],
+                "elapsed": f"{dt_b:.2f}s"
+            })
+        except Exception:
+            bm25 = []
+            yield s("bm25_done", {"results": 0, "elapsed": "N/A", "note": "LanceDB FTS 不可用"})
+
+        # Step 4: RRF 融合 + 自适应权重
+        t1 = time.time()
+        try:
+            from hybrid_retriever import AdaptiveHybridRetriever
+            hr = AdaptiveHybridRetriever(state.lancedb_table)
+            alpha = hr._compute_adaptive_weight(expanded)
+            text_res, _ = hr.search(expanded, top_k=5, filter_expr="is_fulltext = true AND is_image = false")
+            dt_f = time.time() - t1
+            yield s("fusion_done", {
+                "alpha_bm25": round(alpha, 3),
+                "alpha_vector": round(1-alpha, 3),
+                "fused_count": len(text_res) if text_res else 0,
+                "strategy": "BM25偏向" if alpha > 0.6 else ("均衡" if alpha > 0.4 else "语义偏向"),
+                "elapsed": f"{dt_f:.2f}s"
+            })
+        except Exception:
+            text_res = vec_res
+            yield s("fusion_done", {"alpha_bm25": 0.5, "fused_count": len(text_res), "elapsed": "fallback"})
+
+        # Step 5: 级联重排
+        t1 = time.time()
+        from qa_engine import _rerank
+        if _is_complex_query(question) and len(text_res) > 3:
+            ranked = _rerank(expanded, text_res, top_k=5)
+            dt_r = time.time() - t1
+            yield s("rerank_done", {
+                "before": len(text_res), "after": len(ranked),
+                "reranked": True,
+                "top_titles": [r.get("title","")[:40] for r in (ranked or [])[:5],
+                "elapsed": f"{dt_r:.2f}s"
+            })
+            text_res = ranked
+        else:
+            yield s("rerank_skip", {"reason": "简单查询跳过重排"})
+
+        # Step 6: 生成
+        yield s("generate_start", {"elapsed": f"{time.time()-t0:.2f}s"})
+        from openai import AsyncOpenAI
+
+        from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
+        client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+        ctx = "\n".join([f"[{i+1}] {r.get('title','N/A')}\n{r.get('text','')[:800]}" for i, r in enumerate((text_res or [])[:3])])
+        prompt = f"基于上下文回答（100-300字）。信息不足请说明。\n上下文：{ctx}\n问题：{question}\n回答："
+
+        t_gen = time.time()
+        try:
+            stream = await client.chat.completions.create(
+                model=DEEPSEEK_MODEL, temperature=0.3, max_tokens=500,
+                messages=[{"role":"user","content":prompt}], stream=True)
+            tokens = []
+            async for chunk in stream:
+                c = chunk.choices[0].delta.content
+                if c:
+                    tokens.append(c)
+                    yield f"data: {json.dumps({'token': c}, ensure_ascii=False)}\n\n"
+            answer = "".join(tokens)
+            yield s("generate_done", {
+                "tokens": len(tokens),
+                "elapsed": f"{time.time()-t_gen:.2f}s",
+                "total": f"{time.time()-t0:.2f}s"
+            })
+        except Exception as e:
+            yield s("generate_done", {"error": str(e), "elapsed": "fail"})
+
+        yield s("done", {"total_elapsed": f"{time.time()-t0:.2f}s"})
+
+    return StreamingResponse(trace(), media_type="text/event-stream")
 
 
 @app.post("/flywheel")

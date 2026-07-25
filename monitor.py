@@ -79,8 +79,9 @@ class MetricsTracker:
         self.search_errors = 0
         self.llm_errors = 0
         self.start_time = time.time()
+        self.audit_log: list[dict] = []  # 操作审计
 
-    def record_request(self, tokens: int = 0, latency_ms: float = 0.0):
+    def record_request(self, tokens: int = 0, latency_ms: float = 0.0, model: str = ""):
         self.total_requests += 1
         self.total_tokens += tokens
         self.total_latency_ms += latency_ms
@@ -98,6 +99,26 @@ class MetricsTracker:
     def record_download(self):
         self.download_count += 1
 
+    def audit(self, tool_name: str, user: str, result: str, cost_tokens: int = 0):
+        """操作审计：记录每次工具调用的时间/用户/结果。准备2 §操作审计。"""
+        entry = {
+            "time": time.time(),
+            "tool": tool_name,
+            "user": user,
+            "result": str(result)[:200],
+            "tokens": cost_tokens,
+        }
+        self.audit_log.append(entry)
+        if len(self.audit_log) > 1000:
+            self.audit_log = self.audit_log[-500:]  # 只保留最近 500 条
+
+    def estimate_cost(self) -> dict:
+        """Token 成本估算：deepseek-v4-pro 约 $0.14/1M input, $0.28/1M output。"""
+        in_tokens = self.total_tokens // 2  # 粗略假设 50:50
+        out_tokens = self.total_tokens - in_tokens
+        est = in_tokens / 1e6 * 0.14 + out_tokens / 1e6 * 0.28
+        return {"total_tokens": self.total_tokens, "estimated_cost_usd": round(est, 4)}
+
     def to_dict(self) -> dict:
         uptime = max(1, time.time() - self.start_time)
         avg_latency = self.total_latency_ms / max(1, self.total_requests)
@@ -108,6 +129,7 @@ class MetricsTracker:
             "avg_latency_ms": round(avg_latency, 1),
             "error_rate": round(error_rate, 4),
             "total_tokens": self.total_tokens,
+            **self.estimate_cost(),
             "search_count": self.search_count,
             "download_count": self.download_count,
             "search_errors": self.search_errors,

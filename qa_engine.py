@@ -131,31 +131,30 @@ def _validate_expansion(original: str, expanded: str, threshold: float = 0.75) -
     return sim >= threshold
 
 
-def _is_complex_query(question: str) -> bool:
-    """策略路由：判断是否需要 Rerank 重排序。"""
-    complex_kw = [
-        "对比",
-        "区别",
-        "优缺点",
-        "最新",
-        "挑战",
-        "未来",
-        "趋势",
-        "vs",
-        "compare",
-        "深入",
-        "详细",
-        "机制",
-        "原理",
-        "为什么",
-        "how",
-        "why",
+def _classify_intent(question: str) -> str:
+    """意图路由：分类查询类型以选择最优检索策略。
+    准备2 §意图识别：定义/对比/实操/最新四类路由。"""
+    mapping = [
+        ("定义", ["什么是", "是什么", "定义", "概念", "define", "what is"]),
+        ("对比", ["对比", "区别", "优缺点", "比较", "vs", "compare", "哪个更好", "差异"]),
+        ("实操", ["如何", "怎么", "怎样", "方法", "步骤", "how to", "流程", "实现"]),
+        (
+            "最新",
+            ["最新", "前沿", "趋势", "2024", "2025", "2026", "recent", "latest", "突破", "进展"],
+        ),
+        ("原理", ["为什么", "原理", "机制", "原因", "why", "mechanism", "证明"]),
     ]
     q = (question or "").lower()
-    # 含复杂关键词或长度 > 15 字 → 复杂查询
-    if any(kw in q for kw in complex_kw):
-        return True
-    return len(question) > 15
+    for label, keywords in mapping:
+        if any(kw in q for kw in keywords):
+            return label
+    return "事实"  # default: simple fact retrieval
+
+
+def _is_complex_query(question: str) -> bool:
+    """策略路由：判断是否需要 Rerank 重排序。"""
+    intent = _classify_intent(question)
+    return intent in ("对比", "原理", "最新") or len(question) > 15
 
 
 # ---- Prompt ----

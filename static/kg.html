@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>论文知识图谱</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;overflow:hidden;height:100vh}
+svg{width:100vw;height:100vh}
+.panel{position:fixed;bottom:20px;left:20px;z-index:10;background:rgba(30,41,59,.95);border:1px solid #334155;border-radius:12px;padding:14px 18px;font-size:12px;max-width:300px;backdrop-filter:blur(10px)}
+.panel h3{font-size:13px;margin-bottom:8px;color:#60a5fa}
+.stat{display:flex;justify-content:space-between;margin:3px 0;color:#94a3b8}
+.search{position:fixed;top:16px;right:16px;z-index:10}
+.search input{padding:7px 14px;border:1px solid #334155;border-radius:8px;background:rgba(30,41,59,.95);color:#e2e8f0;font-size:12px;width:220px;outline:none}
+.search input:focus{border-color:#60a5fa}
+.tooltip{position:fixed;background:rgba(30,41,59,.98);border:1px solid #334155;border-radius:8px;padding:10px 14px;font-size:12px;max-width:340px;pointer-events:none;z-index:100;display:none;line-height:1.5}
+.tooltip .t{font-weight:600;color:#60a5fa;margin-bottom:4px}
+.tooltip .m{color:#94a3b8;font-size:10px}
+.nl{font-size:9px;fill:#94a3b8;text-anchor:middle;pointer-events:none}
+.lk{stroke:#334155;stroke-opacity:.3}
+.lk:hover{stroke:#60a5fa;stroke-opacity:.7}
+</style>
+</head>
+<body>
+<div class="panel"><h3>论文知识图谱</h3><div id="stats"></div></div>
+<div class="search"><input type="text" id="si" placeholder="搜索..."></div>
+<div class="tooltip" id="tt"></div>
+<script>
+var C=d3.scaleOrdinal().domain(['paper','method','dataset','metric']).range(['#3b82f6','#22c55e','#f59e0b','#ef4444']);
+var svg=d3.select('body').append('svg'),g=svg.append('g');
+var tt=d3.select('#tt'),sim=d3.forceSimulation().force('link',d3.forceLink().id(function(d){return d.id}).distance(80).strength(.5)).force('charge',d3.forceManyBody().strength(-200)).force('center',d3.forceCenter(window.innerWidth/2,window.innerHeight/2)).force('collide',d3.forceCollide(30));
+svg.call(d3.zoom().scaleExtent([.1,4]).on('zoom',function(e){g.attr('transform',e.transform)}));
+async function L(){try{var r=await fetch('http://localhost:8001/kg_data');var d=await r.json();document.getElementById('stats').innerHTML='<div class="stat">节点 <b>'+d.nodes.length+'</b></div><div class="stat">关系 <b>'+d.links.length+'</b></div>';if(!d.nodes.length){setTimeout(L,5000);return}R(d.nodes,d.links)}catch(e){setTimeout(L,5000)}}
+function R(nodes,links){
+  var lk=g.selectAll('.lk').data(links,function(d){return d.source.id+d.target.id});lk.exit().remove();lk=lk.enter().append('line').attr('class','lk').merge(lk);
+  var nd=g.selectAll('.nd').data(nodes,function(d){return d.id});nd.exit().remove();
+  var ne=nd.enter().append('g').attr('class','nd').call(d3.drag().on('start',function(e,d){if(!e.active)sim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y}).on('drag',function(e,d){d.fx=e.x;d.fy=e.y}).on('end',function(e,d){if(!e.active)sim.alphaTarget(0);d.fx=null;d.fy=null}));
+  ne.append('circle').attr('r',function(d){return d.group==='paper'?5:4}).attr('fill',function(d){return C(d.group)});
+  ne.append('text').attr('class','nl').attr('dy',function(d){return d.group==='paper'?14:11}).text(function(d){return(d.label||d.id).substring(0,18)});
+  nd=ne.merge(nd);
+  nd.on('mouseenter',function(e,d){tt.style('display','block').html('<div class="t">'+d.label+'</div><div class="m">类型:'+d.group+' | '+d.year+'</div>')}).on('mousemove',function(e){tt.style('left',(e.pageX+12)+'px').style('top',(e.pageY-10)+'px')}).on('mouseleave',function(){tt.style('display','none')});
+  sim.nodes(nodes).on('tick',function(){lk.attr('x1',function(d){return d.source.x}).attr('y1',function(d){return d.source.y}).attr('x2',function(d){return d.target.x}).attr('y2',function(d){return d.target.y});nd.attr('transform',function(d){return'translate('+d.x+','+d.y+')'})});
+  sim.force('link').links(links);sim.alpha(1).restart();
+}
+d3.select('#si').on('input',function(){var q=this.value.toLowerCase();g.selectAll('.nd').style('opacity',function(d){return(d.label||'').toLowerCase().includes(q)?1:.1})});
+L();
+</script>
+</body>
+</html>

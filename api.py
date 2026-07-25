@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 load_dotenv()
 
 from auth import create_token, get_current_user, login_user, register_user, require_user
-from config import ENABLE_VISION, IMAGE_DIR, PROJECT_ROOT
+from config import IMAGE_DIR, PROJECT_ROOT
 from downloader import chunk_text, parse_pdf
 from knowledge_base import build_knowledge_base, store_image_descriptions
 from models import AskRequest, CreateTopicRequest, PaperMeta, TopicStatus
@@ -23,7 +23,6 @@ from monitor import metrics, sanitize_input
 from qa_engine import ask_question
 from search import generate_search_strategy, search_papers_for_topic
 from topic_manager import active_topics, create_topic
-from vision import describe_images
 
 # 消息历史存储（按 topic_id）
 message_store: dict[str, list[dict]] = {}
@@ -431,25 +430,7 @@ async def api_download_bulk(request: Request):
             imported_papers = len(papers)
             imported_chunks = sum(len(v) for v in fulltext_chunks.values())
 
-        # 图片描述 + 存储
-        if all_images:
-            if ENABLE_VISION:
-                descs = await describe_images([img["image_path"] for img in all_images])
-            image_records = []
-            for img in all_images:
-                img_path = img["image_path"]
-                if img_path in descs:
-                    image_records.append(
-                        {
-                            "paper_id": img.get("paper_id", ""),
-                            "title": Path(img_path).stem,
-                            "text": descs[img_path],
-                            "image_path": img_path,
-                            "page_number": img.get("page_num", 0),
-                        }
-                    )
-            store_image_descriptions(table_name, image_records)
-            imported_images = len(image_records)
+        imported_images = len(all_images)
 
         state.lancedb_table = table_name
         state.uploaded_papers = imported_papers
@@ -506,30 +487,25 @@ async def api_upload_pdf(topic_id: str, files: list[UploadFile]):
 
     table_name = await build_knowledge_base(papers, fulltext_chunks, topic_id)
 
-    described_count = 0
     if all_images:
-        if ENABLE_VISION:
-            descs = await describe_images([img["image_path"] for img in all_images])
         image_records = []
         for img in all_images:
             img_path = img["image_path"]
-            if img_path in descs:
-                image_records.append(
-                    {
-                        "paper_id": img.get("paper_id", ""),
-                        "title": Path(img_path).stem,
-                        "text": descs[img_path],
-                        "image_path": img_path,
-                        "page_number": img.get("page_num", 0),
-                    }
-                )
+            image_records.append(
+                {
+                    "paper_id": img.get("paper_id", ""),
+                    "title": Path(img_path).stem,
+                    "text": "",
+                    "image_path": img_path,
+                    "page_number": img.get("page_num", 0),
+                }
+            )
         store_image_descriptions(table_name, image_records)
-        described_count = len(image_records)
 
     state.lancedb_table = table_name
     state.uploaded_papers = len(papers)
     state.total_papers = len(papers)
-    state.total_images = described_count
+    state.total_images = len(all_images)
     state.status = TopicStatus.READY
     state.step = "ready"
 
@@ -538,7 +514,6 @@ async def api_upload_pdf(topic_id: str, files: list[UploadFile]):
         "papers": len(papers),
         "chunks": sum(len(v) for v in fulltext_chunks.values()),
         "images": len(all_images),
-        "described": described_count,
     }
 
 
@@ -574,33 +549,6 @@ async def api_ask(req: AskRequest):
     msgs.append({"role": "user", "content": req.question})
     msgs.append({"role": "assistant", "content": result.answer})
     return result.model_dump()
-
-
-@app.post("/agent/run")
-async def api_agent_run(request: Request):
-    """Agent 端点（手写ReAct，保留兼容）"""
-    req = await request.json()
-    task = req.get("task", "")
-    topic_id = req.get("topic_id", f"agent_{uuid.uuid4().hex[:8]}")
-    max_steps = req.get("max_steps", 5)
-    if not task:
-        raise HTTPException(400, "需要 task 参数")
-    from agent.agent_core import ResearchAgent
-
-    agent = ResearchAgent(topic_id=topic_id, max_steps=max_steps)
-    result = await agent.run(task)
-    return {
-        "success": result.get("success", False),
-        "result": result.get("result", "")[:5000],
-        "steps": [
-            {
-                "step": s["step"],
-                "thought": s.get("thought", ""),
-                "tool_result": s.get("tool_result", ""),
-            }
-            for s in result.get("steps", [])
-        ],
-    }
 
 
 @app.post("/agent/langgraph")
@@ -878,18 +826,6 @@ async def api_ask_trace(request: Request):
         yield s("done", {"total_elapsed": f"{time.time()-t0:.2f}s"})
 
     return StreamingResponse(trace(), media_type="text/event-stream")
-
-
-@app.post("/flywheel")
-async def api_flywheel(request: Request):
-    """数据飞轮：运行机器人模拟用户 → 收集 BadCase → 生成分析报告。
-    准备2(技术) §51+§298: 数据飞轮 = 线上反馈 → BadCase 分析 → 反哺优化。"""
-    req = await request.json()
-    num = req.get("num_queries", 20)
-    from flywheel import simulate_user_session
-
-    report = await simulate_user_session(num)
-    return report
 
 
 @app.post("/agent/quick")

@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Agent 监控面板</title>
+<style>
+:root{--bg:#0b1120;--card:#1e293b;--text:#e2e8f0;--muted:#64748b;--border:#334155;--blue:#3b82f6;--green:#22c55e;--purple:#a855f7;--amber:#f59e0b;--red:#ef4444}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans SC',monospace;background:var(--bg);color:var(--text);height:100vh;display:flex;flex-direction:column}
+header{padding:10px 20px;background:var(--card);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px}
+header h1{font-size:13px;font-weight:600}header h1 span{color:var(--muted);font-size:10px;font-weight:400}
+main{flex:1;display:flex;overflow:hidden}
+.left{flex:1;padding:16px;overflow-y:auto;display:flex;flex-direction:column;gap:10px}
+.right{width:300px;background:var(--card);border-left:1px solid var(--border);padding:14px;overflow-y:auto;font-size:11px}
+.right h3{font-size:12px;color:var(--blue);margin-bottom:8px}
+.right .kv{display:flex;justify-content:space-between;margin:4px 0;color:var(--muted)}
+.right .kv span:last-child{color:var(--text)}
+.bar{height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin:8px 0}
+.bar .fill{height:100%;background:var(--green);border-radius:3px;transition:width .3s}
+.input-bar{display:flex;gap:8px;padding:10px 16px;background:var(--card);border-top:1px solid var(--border)}
+.input-bar input{flex:1;padding:8px 14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:12px;outline:none}
+.input-bar input:focus{border-color:var(--blue)}
+.input-bar button{padding:8px 18px;background:var(--blue);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer}
+.input-bar button:disabled{opacity:.5}
+.node-card{padding:10px 14px;background:var(--card);border:1px solid var(--border);border-radius:10px;transition:all .3s;animation:slideIn .3s ease-out}
+.node-card.agent{border-left:3px solid var(--blue)}.node-card.tools{border-left:3px solid var(--amber)}.node-card.reflect{border-left:3px solid var(--green)}.node-card.error{border-left:3px solid var(--red)}
+.node-card .nh{display:flex;align-items:center;gap:8px;font-size:11px}
+.node-card .nh .node-tag{padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600}
+.node-card .nh .node-tag.agent{background:rgba(59,130,246,.2);color:var(--blue)}.node-card .nh .node-tag.tools{background:rgba(245,158,11,.2);color:var(--amber)}.node-card .nh .node-tag.reflect{background:rgba(34,197,94,.2);color:var(--green)}
+.node-card .nh .node-time{color:var(--muted);margin-left:auto;font-size:10px}
+.node-card .nd{font-size:10px;color:var(--muted);margin-top:4px;line-height:1.4}
+@keyframes slideIn{from{opacity:0;transform:translateX(-10px)}to{opacity:1;transform:translateX(0)}}
+.loading{font-size:12px;color:var(--muted);animation:pulse 1.5s infinite}@keyframes pulse{0%,100%{opacity:.5}50%{opacity:1}}
+.graph-mini{width:100%;height:120px;margin-top:10px;background:var(--bg);border:1px solid var(--border);border-radius:8px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Agent 监控面板 <span>— LangGraph 实时状态机追踪</span></h1>
+  <span id="status" style="margin-left:auto;font-size:10px;color:var(--amber)">⚪ 就绪</span>
+</header>
+<main>
+  <div class="left" id="nodes"></div>
+  <div class="right" id="stats">
+    <h3>实时指标</h3>
+    <div class="kv"><span>状态机节点</span><span id="v_nodes">0</span></div>
+    <div class="kv"><span>总 Token</span><span id="v_tokens">0</span></div>
+    <div class="kv"><span>耗时</span><span id="v_time">0s</span></div>
+    <div class="kv"><span>当前节点</span><span id="v_current">—</span></div>
+    <div style="margin-top:10px"><b style="font-size:10px;color:var(--muted)">Token 消耗趋势</b></div>
+    <div class="bar"><div class="fill" id="token_bar" style="width:0%"></div></div>
+    <div style="margin-top:10px">
+      <b style="font-size:10px;color:var(--muted)">状态流转图</b>
+      <svg class="graph-mini" id="minigraph"></svg>
+    </div>
+  </div>
+</main>
+<div class="input-bar">
+  <input type="text" id="qi" placeholder="输入调研任务..." onkeydown="if(event.key==='Enter')R()">
+  <button id="qb" onclick="R()">执行</button>
+</div>
+
+<script>
+var A='http://localhost:8001',running=false,tokenHistory=[];
+var miniSvg=d3.select('#minigraph'),miniG=miniSvg.append('g');
+var miniNodes=[
+  {id:'agent',x:30,y:30,color:'#3b82f6'},
+  {id:'tools',x:150,y:30,color:'#f59e0b'},
+  {id:'reflect',x:270,y:30,color:'#22c55e'}
+];
+miniNodes.forEach(function(n){
+  miniG.append('circle').attr('cx',n.x).attr('cy',n.y).attr('r',8).attr('fill',n.color).attr('opacity',.3);
+  miniG.append('text').attr('x',n.x).attr('y',n.y+20).attr('fill','#64748b').attr('font-size','8').attr('text-anchor','middle').text(n.id);
+});
+miniG.append('line').attr('x1',38).attr('y1',30).attr('x2',142).attr('y2',30).attr('stroke','#334155').attr('stroke-width',1);
+miniG.append('line').attr('x1',158).attr('y1',30).attr('x2',262).attr('y2',30).attr('stroke','#334155').attr('stroke-width',1);
+miniG.append('defs').append('marker').attr('id','arrow').attr('viewBox','0 0 10 10').attr('refX',8).attr('refY',5).attr('markerWidth',6).attr('markerHeight',6).attr('orient','auto').append('path').attr('d','M0,0 L10,5 L0,10 Z').attr('fill','#334155');
+
+function hlNode(id){miniG.selectAll('circle').attr('opacity',function(d){return d.id===id?1:.3}).attr('r',function(d){return d.id===id?10:8})}
+
+async function R(){
+  var t=document.getElementById('qi').value.trim();if(!t||running)return;
+  running=true;tokenHistory=[];document.getElementById('qb').disabled=true;
+  document.getElementById('nodes').innerHTML='<div class="loading">Agent 启动中...</div>';
+  document.getElementById('status').innerHTML='<span style="color:#3b82f6">🟢 运行中</span>';
+  try{
+    var r=await fetch(A+'/agent/watch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({task:t})});
+    var reader=r.body.getReader(),decoder=new TextDecoder(),buf='';
+    while(true){
+      var v=await reader.read();if(v.done)break;
+      buf+=decoder.decode(v.value,{stream:true});
+      var lines=buf.split('\n');buf=lines.pop()||'';
+      for(var i=0;i<lines.length;i++){var l=lines[i];if(l.indexOf('data: ')!==0)continue;
+        try{var d=JSON.parse(l.slice(6));H(d)}catch(e){console.log('parse err',e)}
+      }
+    }
+  }catch(e){document.getElementById('nodes').innerHTML+='<div class="node-card error"><div class="nh">错误</div><div class="nd">'+e.message+'</div></div>'}
+  running=false;document.getElementById('qb').disabled=false;
+  document.getElementById('status').innerHTML='<span style="color:var(--muted)">' + String.fromCodePoint(0x26AA) + ' 就绪</span>';
+}
+
+function H(d){
+  var panel=document.getElementById('nodes');
+  if(d.event==='init'){
+    panel.innerHTML='<div class="node-card agent"><div class="nh"><span class="node-tag agent">AGENT</span><span>任务: '+d.task+'</span><span class="node-time">'+d.ts+'</span></div></div>';
+    return;
+  }
+  if(d.event==='error'){
+    panel.innerHTML+='<div class="node-card error"><div class="nh"><span class="node-tag agent">ERROR</span><span>'+d.error+'</span><span class="node-time">'+d.elapsed+'</span></div></div>';
+    return;
+  }
+  if(d.event==='done'){
+    panel.innerHTML+='<div class="node-card reflect"><div class="nh"><span class="node-tag reflect">DONE</span><span>'+d.steps+' 节点 · '+d.tokens+' tokens</span><span class="node-time">'+d.total_elapsed+'</span></div></div>';
+    updateStats(d.steps,d.tokens,d.total_elapsed,'完成');return;
+  }
+  if(d.event==='node_enter'){
+    var node=d.node,cls=node,icon='';
+    if(node==='agent'){icon=String.fromCodePoint(0x1F9E0);hlNode('agent')}
+    else if(node==='tools'){icon=String.fromCodePoint(0x1F527);hlNode('tools')}
+    else if(node==='reflect'){icon=String.fromCodePoint(0x1F4CB);hlNode('reflect')}
+    tokenHistory.push({step:d.step,tokens:d.tokens,time:d.elapsed});
+    // Keep last 4 token points
+    if(tokenHistory.length>10)tokenHistory=tokenHistory.slice(-10);
+    panel.innerHTML+='<div class="node-card '+cls+'"><div class="nh"><span class="node-tag '+cls+'">'+icon+' '+node.toUpperCase()+'</span><span>Step '+d.step+'</span><span class="node-time">'+d.elapsed+'</span></div>'+
+      '<div class="nd">Tokens: '+d.tokens+' | Tool: '+(d.tool_calls?'有':'无')+(d.result_preview?' | '+d.result_preview:'')+'</div></div>';
+    updateStats(d.step,d.tokens,d.elapsed,node);
+    // Token bar
+    var maxT=Math.max.apply(null,tokenHistory.map(function(x){return x.tokens}))||1;
+    var pct=Math.min(100,d.tokens/maxT*100);
+    document.getElementById('token_bar').style.width=pct+'%';
+  }
+  panel.scrollTop=panel.scrollHeight;
+}
+
+function updateStats(nodes,tokens,time,current){
+  document.getElementById('v_nodes').textContent=nodes||0;
+  document.getElementById('v_tokens').textContent=tokens||0;
+  document.getElementById('v_time').textContent=time||'0s';
+  document.getElementById('v_current').textContent=current||'—';
+}
+</script>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+</body>
+</html>

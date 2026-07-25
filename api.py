@@ -577,6 +577,125 @@ async def api_agent_langgraph(request: Request):
     return result
 
 
+@app.post("/agent/watch")
+async def api_agent_watch(request: Request):
+    """Agent 监控面板 SSE：实时展示状态机流转、工具调用、Token 消耗。"""
+    import json
+    import time
+
+    from fastapi.responses import StreamingResponse
+
+    req = await request.json()
+    task = req.get("task", "")
+    thread_id = req.get("thread_id", f"watch_{uuid.uuid4().hex[:6]}")
+    if not task:
+        raise HTTPException(400, "需要 task 参数")
+
+    async def stream():
+        s = (
+            lambda e, d: f"data: {json.dumps({'event': e, **d}, ensure_ascii=False)}\n\n"
+        )
+        t0 = time.time()
+        tokens_total = 0
+
+        yield s(
+            "init", {"task": task, "thread": thread_id, "ts": f"{time.time()-t0:.1f}s"}
+        )
+
+        # 用 LangGraph 流式执行
+        from agent.langgraph_workflow import get_agent_graph
+
+        graph = get_agent_graph()
+        config = {"configurable": {"thread_id": thread_id}}
+        initial = {
+            "messages": [{"role": "user", "content": f"调研任务：{task}"}],
+            "max_steps": 10,
+            "steps": 0,
+            "result": "",
+            "confirmed": False,
+            "need_confirm": None,
+        }
+
+        try:
+            node_count = 0
+            async for chunk in graph.astream(initial, config, stream_mode="updates"):
+                node_count += 1
+                elapsed = f"{time.time() - t0:.1f}s"
+                for node_name, node_output in chunk.items():
+                    # 估算 token
+                    est = (
+                        sum(len(str(v)) for v in node_output.values()) // 4
+                        if isinstance(node_output, dict)
+                        else len(str(node_output)) // 4
+                    )
+                    tokens_total += est
+
+                    if node_name == "agent":
+                        msgs = node_output.get("messages", [])
+                        last = msgs[-1] if msgs else {}
+                        has_tool = (
+                            hasattr(last, "tool_calls") and last.tool_calls
+                            if hasattr(last, "tool_calls")
+                            else False
+                        )
+                        yield s(
+                            "node_enter",
+                            {
+                                "node": "agent",
+                                "step": node_count,
+                                "tool_calls": bool(has_tool),
+                                "tokens": tokens_total,
+                                "elapsed": elapsed,
+                            },
+                        )
+                    elif node_name == "tools":
+                        yield s(
+                            "node_enter",
+                            {
+                                "node": "tools",
+                                "step": node_count,
+                                "tokens": tokens_total,
+                                "elapsed": elapsed,
+                            },
+                        )
+                    elif node_name == "reflect":
+                        result_text = str(node_output.get("result", ""))[:200]
+                        yield s(
+                            "node_enter",
+                            {
+                                "node": "reflect",
+                                "step": node_count,
+                                "tokens": tokens_total,
+                                "elapsed": elapsed,
+                                "result_preview": result_text,
+                            },
+                        )
+
+                    yield s(
+                        "node_done",
+                        {
+                            "node": node_name,
+                            "step": node_count,
+                            "tokens": tokens_total,
+                            "elapsed": elapsed,
+                        },
+                    )
+
+        except Exception as e:
+            yield s("error", {"error": str(e), "elapsed": f"{time.time()-t0:.1f}s"})
+
+        yield s(
+            "done",
+            {
+                "steps": node_count,
+                "tokens": tokens_total,
+                "total_elapsed": f"{time.time()-t0:.1f}s",
+            },
+        )
+
+    return StreamingResponse(stream(), media_type="text/event-stream")
+
+
 @app.post("/agent/multi")
 async def api_agent_multi(request: Request):
     """Planner->Workers->Synthesizer."""
@@ -586,6 +705,7 @@ async def api_agent_multi(request: Request):
     if not task:
         raise HTTPException(400, "需要 task 参数")
     from agent.langgraph_workflow import run_multi_agent
+
     return await run_multi_agent(task, table)
 
 
@@ -593,6 +713,7 @@ async def api_agent_multi(request: Request):
 async def api_agent_report():
     """Agent评估报告：成功率/推理步数/工具准确率/影子测试."""
     from agent.langgraph_workflow import get_agent_evaluator
+
     return get_agent_evaluator().report()
 
 

@@ -23,15 +23,15 @@ nohup python api.py > /tmp/api_server.log 2>&1 &
 ```
 User input (index.html) → FastAPI (api.py, port 8001)
   ├── /create_topic    → search.py → DeepSeek generates search strategy
-  ├── /search_papers   → search.py → 6-source parallel search (arXiv, OpenAlex, S2, Unpaywall, CNKI, Apify)
-  ├── /download_bulk   → downloader.py → PyMuPDF → semantic chunking → LanceDB
+  ├── /search_papers   → search.py → 6-source parallel search
   ├── /ask             → qa_engine.py → rewrite → hybrid retrieve → cascade rerank → generate
-  ├── /ask/stream      → SSE streaming version
+  ├── /ask/trace       → SSE pipeline trace (interview demo)
   ├── /agent/quick     → Direct KB retrieval + single DeepSeek call (<10s)
-  ├── /agent/run        → agent_core.py → ReAct loop with 8 tools (legacy)
-  ├── /agent/langgraph  → StateGraph Agent (LangGraph, with checkpoint/resume)
-  ├── /flywheel         → Data flywheel: simulate user sessions, collect BadCases
-  └── /kg_data          → Knowledge graph JSON for D3.js force-graph visualization
+  ├── /agent/langgraph → LangGraph StateGraph Agent (ReAct loop + checkpoint)
+  ├── /agent/multi     → Planner→Workers→Synthesizer (multi-agent)
+  ├── /agent/report    → Agent evaluation (success rate, steps, tool accuracy)
+  ├── /kg_data         → Knowledge graph JSON (D3.js force-graph)
+  └── /kg/build        → LLM entity extraction + graph construction
 ```
 
 **RAG Pipeline**: Query rewrite (long queries only, cos≥0.75 validation) → AdaptiveHybridRetriever (4-feature dynamic BM25/vector weight) → CascadeRerank (MiniLM pre-filter → bge-reranker refine) → DeepSeek generation with citation format

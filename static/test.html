@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>API 测试面板</title>
+<style>
+:root{--bg:#0b1120;--card:#1e293b;--text:#e2e8f0;--muted:#64748b;--border:#334155;--blue:#3b82f6;--green:#22c55e;--red:#ef4444;--amber:#f59e0b;--purple:#a855f7}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans SC',monospace;background:var(--bg);color:var(--text);min-height:100vh}
+header{padding:12px 20px;background:var(--card);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px}
+header h1{font-size:13px;font-weight:600}header span{font-size:10px;color:var(--muted)}
+main{max-width:1200px;margin:0 auto;padding:20px}
+.section{margin-bottom:24px}
+.section h2{font-size:14px;color:var(--blue);margin-bottom:12px;padding-bottom:4px;border-bottom:1px solid var(--border)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:10px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;transition:all .2s}
+.card:hover{border-color:var(--blue)}
+.card .h{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.card .h .method{font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px}
+.m-GET{background:rgba(34,197,94,.2);color:var(--green)}.m-POST{background:rgba(59,130,246,.2);color:var(--blue)}.m-SSE{background:rgba(168,85,247,.2);color:var(--purple)}
+.card .h .path{font-size:12px;font-weight:600;font-family:monospace;word-break:break-all}
+.card .desc{font-size:10px;color:var(--muted);margin-bottom:8px;line-height:1.4}
+.card .actions{display:flex;gap:6px;flex-wrap:wrap}
+.card .actions button{padding:5px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:10px;cursor:pointer;transition:all .15s;white-space:nowrap}
+.card .actions button:hover{border-color:var(--blue);background:rgba(59,130,246,.1)}
+.card .actions .go{background:var(--blue);color:#fff;border-color:var(--blue)}
+.card .actions .go:hover{background:#2563eb}
+.card .result{margin-top:10px;padding:8px 10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;font-size:10px;font-family:monospace;max-height:200px;overflow-y:auto;display:none;white-space:pre-wrap;line-height:1.4}
+.card .result.show{display:block}
+.card .result.ok{border-color:var(--green)}.card .result.err{border-color:var(--red)}
+.vis-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}
+.vis-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;text-align:center;cursor:pointer;transition:all .2s;text-decoration:none;color:var(--text);display:block}
+.vis-card:hover{border-color:var(--blue);box-shadow:0 0 20px rgba(59,130,246,.1)}
+.vis-card .icon{font-size:32px;margin-bottom:8px}
+.vis-card .name{font-size:13px;font-weight:600;margin-bottom:4px}
+.vis-card .url{font-size:10px;color:var(--muted)}
+.status{padding:4px 12px;border-radius:6px;font-size:10px;display:inline-block}
+.s-ok{background:rgba(34,197,94,.15);color:var(--green)}.s-err{background:rgba(239,68,68,.15);color:var(--red)}.s-idle{background:rgba(100,116,139,.15);color:var(--muted)}
+#global-status{font-size:11px;margin-left:auto;display:flex;align-items:center;gap:6px}
+.input-row{display:flex;gap:4px;width:100%}
+.input-row input{flex:1;min-width:80px;padding:4px 8px;font-size:10px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:monospace}
+</style>
+</head>
+<body>
+<header>
+  <h1>API 测试面板</h1>
+  <span>全部端点 + 可视化页面 + curl 导出</span>
+  <div id="global-status"><span class="status s-idle" id="gs">检测中...</span></div>
+</header>
+<main>
+
+<div class="section">
+  <h2>可视化页面入口</h2>
+  <div class="vis-grid" id="vispages"></div>
+</div>
+
+<div class="section">
+  <h2>API 端点（一键测试 + curl 复制）</h2>
+  <div class="grid" id="endpoints"></div>
+</div>
+
+</main>
+
+<script>
+var A='http://localhost:8001';
+// Pages
+var VISPAGES=[
+  {icon:'🏠',name:'主界面',url:'/',desc:'学术文献精读助手'},
+  {icon:'🔬',name:'RAG 流水线追踪',url:'/static/pipeline.html',desc:'6步检索链路可视化'},
+  {icon:'📊',name:'知识图谱',url:'/static/kg.html',desc:'力导向/树状双模式'},
+  {icon:'👁️',name:'Agent 监控面板',url:'/static/watch.html',desc:'状态机+Token实时'},
+  {icon:'🧪',name:'API 测试面板',url:'/static/test.html',desc:'本页'},
+  {icon:'📖',name:'Swagger 文档',url:'/docs',desc:'FastAPI 自动生成'},
+  {icon:'📄',name:'Agent 快速测试',url:'/static/agent_test.html',desc:'最小化 Agent 测试'},
+];
+// Endpoints
+var ENDPOINTS=[
+  // System
+  {method:'GET',path:'/health',desc:'存活检查',test:'/health'},
+  {method:'GET',path:'/metrics',desc:'系统指标 (延迟/Token/错误率/成本估算)',test:'/metrics'},
+  // Auth
+  {method:'POST',path:'/register',desc:'用户注册',test:'/register',body:'{"username":"test","password":"123456"}'},
+  {method:'POST',path:'/login',desc:'用户登录',test:'/login',body:'{"username":"test","password":"123456"}'},
+  {method:'GET',path:'/me',desc:'当前用户信息 (需 JWT)',test:'/me'},
+  // Topics
+  {method:'GET',path:'/topics',desc:'所有课题列表',test:'/topics'},
+  {method:'POST',path:'/create_topic',desc:'创建课题',test:'/create_topic',body:'{"query":"机器学习","model":"deepseek-v4-pro"}'},
+  // Search
+  {method:'POST',path:'/search_papers',desc:'多源论文搜索',test:'/search_papers',body:'{"query":"深度学习","keywords_en":["deep learning","neural network"],"keywords_cn":["深度学习","神经网络"]}'},
+  // RAG
+  {method:'POST',path:'/ask',desc:'RAG 问答',test:'/ask',body:'{"topic_id":"TOPIC_ID","question":"什么是深度学习"}'},
+  {method:'POST',path:'/ask/stream',desc:'SSE 流式 RAG',test:'/ask/stream',body:'{"topic_id":"TOPIC_ID","question":"解释一下Transformer"}'},
+  {method:'POST',path:'/ask/trace',desc:'Pipeline 追踪 (面试演示)',test:'/ask/trace',body:'{"question":"什么是深度学习"}'},
+  // Agent
+  {method:'POST',path:'/agent/quick',desc:'Agent 快速模式 (<10s)',test:'/agent/quick',body:'{"question":"什么是机器学习","model":"deepseek-v4-pro"}'},
+  {method:'POST',path:'/agent/langgraph',desc:'LangGraph ReAct Agent',test:'/agent/langgraph',body:'{"task":"调研LLM推理突破","max_steps":5}'},
+  {method:'POST',path:'/agent/multi',desc:'多Agent (Planner-Workers-Synthesizer)',test:'/agent/multi',body:'{"task":"对比ArcFace和FaceNet优缺点"}'},
+  {method:'POST',path:'/agent/watch',desc:'Agent 监控 SSE (状态机流转)',test:'/agent/watch',body:'{"task":"什么是深度学习"}'},
+  // Knowledge Graph
+  {method:'GET',path:'/kg_data',desc:'知识图谱 JSON 数据',test:'/kg_data'},
+  {method:'POST',path:'/kg/build',desc:'LLM 实体抽取构建图谱',test:'/kg/build',body:'{"table":""}'},
+  // Export
+  {method:'GET',path:'/export/{topic_id}',desc:'导出 Markdown',test:'/export/TOPIC_ID'},
+];
+
+(function init(){
+  var p='';
+  VISPAGES.forEach(function(v){
+    p+='<a class="vis-card" href="'+v.url+'" target="_blank"><div class="icon">'+v.icon+'</div><div class="name">'+v.name+'</div><div class="url">'+v.url+' ( '+v.desc+' )</div></a>';
+  });
+  document.getElementById('vispages').innerHTML=p;
+
+  var h='';
+  ENDPOINTS.forEach(function(e,i){
+    var cls=e.method==='POST'?'m-POST':(e.path.indexOf('stream')>=0||e.path.indexOf('watch')>=0||e.path.indexOf('trace')>=0?'m-SSE':'m-GET');
+    h+='<div class="card" id="ep'+i+'">';
+    h+='<div class="h"><span class="method '+cls+'">'+e.method+'</span><span class="path">'+e.path+'</span></div>';
+    h+='<div class="desc">'+e.desc+'</div>';
+    h+='<div class="actions"><div class="input-row">';
+    if(e.body){
+      h+='<input type="text" id="inp'+i+'" value="'+esc(e.body)+'" placeholder="JSON body">';
+    }else{
+      h+='<input type="text" id="inp'+i+'" placeholder="可选 JSON body" style="display:none">';
+    }
+    h+='<button class="go" id="btn'+i+'">运行</button>';
+    h+='<button id="curl'+i+'">curl</button>';
+    if(e.path.indexOf('{')===-1 && e.method==='GET')h+='<a href="'+A+e.path+'" target="_blank"><button>打开</button></a>';
+    h+='</div></div>';
+    h+='<div class="result" id="res'+i+'"></div>';
+    h+='</div>';
+  });
+  document.getElementById('endpoints').innerHTML=h;
+
+  // Bind events
+  ENDPOINTS.forEach(function(e,i){
+    document.getElementById('btn'+i).addEventListener('click',function(){testEndpoint(i,e.method,e.test)});
+    document.getElementById('curl'+i).addEventListener('click',function(){copyCurl(i,e.method,e.path,e.body)});
+  });
+
+  // Health check
+  fetch(A+'/health').then(function(r){return r.json()}).then(function(d){
+    var ok=d.status==='ok';
+    document.getElementById('gs').textContent=ok?' API OK (127.0.0.1:8001)':' API DOWN';
+    document.getElementById('gs').className='status '+(ok?'s-ok':'s-err');
+  }).catch(function(){
+    document.getElementById('gs').textContent=' API 未启动';
+    document.getElementById('gs').className='status s-err';
+  });
+})();
+
+function testEndpoint(i,method,path){
+  var res=document.getElementById('res'+i);
+  var inp=document.getElementById('inp'+i);
+  var body=null;
+  if(inp&&inp.value.trim()){
+    try{body=JSON.parse(inp.value)}catch(e){res.textContent='JSON 格式错误: '+e.message;res.className='result show err';return}
+  }
+  res.textContent='请求中...';res.className='result show';
+  var opts={method:method,headers:{'Content-Type':'application/json'}};
+  if(method==='POST'&&body)opts.body=JSON.stringify(body);
+  var t0=Date.now();
+  fetch(A+path,opts).then(function(r){
+    var elapsed=Date.now()-t0;
+    return r.text().then(function(t){return{ok:r.ok,status:r.status,text:t,elapsed:elapsed}});
+  }).then(function(r){
+    var preview=r.text.substring(0,3000);if(r.text.length>3000)preview+='\n\n... (截断)';
+    res.textContent=method+' '+path+' '+String.fromCharCode(8594)+' '+r.status+' ('+r.elapsed+'ms)\n\n'+preview;
+    res.className='result show '+(r.ok?'ok':'err');
+  }).catch(function(e){
+    res.textContent='请求失败: '+e.message;res.className='result show err';
+  });
+}
+
+function copyCurl(i,method,path,body){
+  var cmd='curl';
+  if(method==='POST')cmd+=' -X POST';
+  cmd+=' \''+A+path+'\'';
+  if(method==='POST')cmd+=' -H "Content-Type: application/json"';
+  if(body)cmd+=" -d '"+body+"'";
+  var el=document.createElement('textarea');el.value=cmd;el.style.position='fixed';
+  document.body.appendChild(el);el.select();document.execCommand('copy');document.body.removeChild(el);
+  var res=document.getElementById('res'+i);res.textContent='已复制到剪贴板:\n\n'+cmd;res.className='result show ok';
+}
+
+function esc(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+</script>
+</body>
+</html>

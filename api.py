@@ -263,6 +263,7 @@ async def api_delete_topic(topic_id: str):
         raise HTTPException(404, "Topic not found")
     del active_topics[topic_id]
     from topic_manager import _save_topics
+
     _save_topics()
     return {"ok": True}
 
@@ -367,7 +368,7 @@ async def api_search_papers_stream(request: Request):
         preview = dl = None
         if p.doi:
             preview = f"https://api.semanticscholar.org/DOI:{p.doi}"
-            dl = p.pdf_url or f"https://sci-hub.se/{p.doi}"
+            dl = p.pdf_url
         elif p.arxiv_id:
             preview = f"https://arxiv.org/abs/{p.arxiv_id}"
             dl = f"https://arxiv.org/pdf/{p.arxiv_id}.pdf"
@@ -387,6 +388,7 @@ async def api_search_papers_stream(request: Request):
             "doi_url": f"https://doi.org/{p.doi}" if p.doi else None,
             "cnki_url": _cnki_search_url(p.title) if p.title else None,
             "google_scholar_url": _gs_search_url(p.title) if p.title else None,
+            "scihub_url": f"https://sci-hub.se/{p.doi}" if p.doi else None,
         }
 
     async def generate():
@@ -491,7 +493,7 @@ async def api_search_papers(request: Request):
         dl = None
         if p.doi:
             preview = f"https://api.semanticscholar.org/DOI:{p.doi}"
-            dl = p.pdf_url or f"https://sci-hub.se/{p.doi}"
+            dl = p.pdf_url
         elif p.arxiv_id:
             preview = f"https://arxiv.org/abs/{p.arxiv_id}"
             dl = f"https://arxiv.org/pdf/{p.arxiv_id}.pdf"
@@ -511,6 +513,7 @@ async def api_search_papers(request: Request):
                 "pdf_url": p.pdf_url,
                 "preview_url": _paper_preview(p)[0],
                 "download_url": _paper_preview(p)[1],
+                "scihub_url": f"https://sci-hub.se/{p.doi}" if p.doi else None,
                 "source": _paper_source(p),
                 "doi_url": f"https://doi.org/{p.doi}" if p.doi else None,
                 "cnki_url": _cnki_search_url(p.title) if p.title else None,

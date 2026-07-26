@@ -73,6 +73,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans SC',sans
 .tag.gray{background:var(--hover);color:var(--muted);cursor:pointer}
 .tag.gray:hover{background:var(--border)}
 .tag.purple{background:#f0e6ff;color:#7c3aed;text-decoration:none}.dark .tag.purple{background:#2d1b69;color:#a78bfa}
+.tag.amber{background:#fef3c7;color:#92400e;cursor:pointer}.dark .tag.amber{background:#451a03;color:#fcd34d}
 /* Progress bar */
 .progress{position:fixed;bottom:20px;right:20px;z-index:100;width:300px;background:var(--card);border:2px solid var(--brand);border-radius:14px;padding:16px;box-shadow:0 8px 30px rgba(0,0,0,.12);display:none}
 .progress .bar{width:100%;height:8px;background:var(--hover);border-radius:4px;overflow:hidden;margin:10px 0}
@@ -224,7 +225,17 @@ function R(){
   if(S.pps.length){
     let cn=S.pps.filter(p=>isCN(p.title)||(p.title||'').startsWith('[知网]')),en=S.pps.filter(p=>!isCN(p.title)&&!(p.title||'').startsWith('[知网]'));
     let sh=Math.min((S.pg+1)*10,S.pps.length),oa=S.pps.filter(p=>p.is_oa&&p.pdf_url).length;
-    h+='<div class="msg card" style="animation-delay:.15s"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="font-size:11px;color:var(--muted);font-weight:600">📄 '+S.pps.length+'篇, '+oa+'可下载</span><span style="display:flex;gap:6px"><button class="tag green" style="cursor:pointer;font-size:11px;padding:5px 10px" onclick="B()">⬇📥 一键下载并构建</button><button class="tag gray" style="cursor:pointer;font-size:11px;padding:5px 10px" onclick="KGBatch()">📊 加入图谱</button></span></div>';
+    h+='<div class="msg card" style="animation-delay:.15s"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="font-size:11px;color:var(--muted);font-weight:600">📄 '+S.pps.length+'篇, '+oa+'可下载</span><span style="display:flex;gap:6px"><button class="tag green" style="cursor:pointer;font-size:11px;padding:5px 10px" onclick="B()">⬇📥 一键下载并构建</button><button class="tag gray" style="cursor:pointer;font-size:11px;padding:5px 10px" onclick="KGBatch()">📊 加入图谱</button><button class="tag amber" style="cursor:pointer;font-size:11px;padding:5px 10px" onclick="copyDOIs()">📋 批量复制DOI</button></span></div>';
+    // Download guide: show after papers are loaded
+    h+='<div style="font-size:10px;color:var(--muted);background:var(--hover);border-radius:8px;padding:10px 12px;margin-bottom:8px;line-height:1.6"><b>📥 获取PDF方式:</b> ';
+    h+='<a href="https://sci-hub.se" target="_blank" style="color:var(--brand)">Sci-Hub</a> &middot; ';
+    h+='<a href="https://sci-hub.st" target="_blank" style="color:var(--brand)">镜像1</a> &middot; ';
+    h+='<a href="https://sci-hub.ru" target="_blank" style="color:var(--brand)">镜像2</a> &middot; ';
+    h+='<a href="https://sci-hub.ee" target="_blank" style="color:var(--brand)">镜像3</a> &middot; ';
+    h+='<a href="https://scholar.google.com" target="_blank" style="color:var(--brand)">Google Scholar</a> &middot; ';
+    h+='学校图书馆VPN &middot; ';
+    h+='<span style="cursor:pointer;color:var(--brand)" onclick="copyDOIs()">📋 复制全部DOI</span> → 粘贴到Sci-Hub搜索框批量下载 → ';
+    h+='<b>拖拽PDF到本页上传区即构建知识库+知识图谱</b></div>';
     if(cn.length){h+='<div class="cn-header">🇨🇳 中文论文 <span class="badge">'+cn.length+'篇</span></div>';cn.slice(0,Math.min(sh,cn.length)).forEach(p=>h+=PR(p));}
     if(en.length){let se=Math.max(0,sh-(cn.length?Math.min(sh,cn.length):0));h+='<div class="en-header">🌐 英文论文 <span class="badge">'+en.length+'篇</span></div>';en.slice(0,se).forEach(p=>h+=PR(p));}
     if(S.pps.length>sh)h+='<div style="text-align:center;margin-top:6px"><button class="tag gray" onclick="S.pg++;R()" style="cursor:pointer;font-size:11px;padding:5px 14px">加载更多 (剩余'+(S.pps.length-sh)+'篇)</button></div>';
@@ -260,6 +271,7 @@ async function KGBatch(){let ids=[];S.pps.forEach(p=>{let el=document.getElement
 function K(){var el=document.getElementById('tl');if(!S.ts.length){el.innerHTML='<div style="text-align:center;color:var(--muted);font-size:10px;padding:16px">No topics</div>';return}var h='';for(var i=0;i<S.ts.length;i++){var t=S.ts[i];var st=(t.status==='ready'||t.papers>0)?(t.papers||'')+' papers':'new';h+='<div class="topic-item'+(t.topic_id===S.tid?' active':'')+'"><div onclick="W(\''+t.topic_id+'\')" style="flex:1;cursor:pointer;display:flex;flex-direction:column"><div class="tname">'+esc(t.query||'New')+'</div><div class="tmeta">'+st+'</div></div><button onclick="event.stopPropagation();D(\''+t.topic_id+'\')" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:16px;padding:0 6px" title="Delete">x</button></div>'}el.innerHTML=h}
 function md(t){if(!t)return'';let h=esc(t);h=h.replace(/^### (.+)$/gm,'<h3>$1</h3>');h=h.replace(/^## (.+)$/gm,'<h2>$1</h2>');h=h.replace(/^# (.+)$/gm,'<h1>$1</h1>');h=h.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');h=h.replace(/```([\s\S]*?)```/g,'<pre>$1</pre>');h=h.replace(/`([^`]+)`/g,'<code>$1</code>');h=h.replace(/^> (.+)$/gm,'<blockquote>$1</blockquote>');h=h.replace(/\[([^\]]+)\]\(([^)]+)\)/g,'<a href="$2" target="_blank">$1</a>');h=h.replace(/\n\n/g,'</p><p>');h=h.replace(/\n/g,'<br>');return'<p>'+h+'</p>'}
 async function D(id){if(!confirm('Delete topic?'))return;try{await fetch(A+'/topic/'+id,{method:'DELETE'});S.ts=S.ts.filter(function(t){return t.topic_id!==id});if(S.tid===id)N();K()}catch(e){}}
+async function copyDOIs(){var dois=S.pps.filter(function(p){return p.doi}).map(function(p){return p.doi});if(!dois.length)return alert('没有DOI可复制');navigator.clipboard.writeText(dois.join('\\n'));alert('已复制 '+dois.length+' 个DOI到剪贴板\\n粘贴到Sci-Hub搜索框批量下载')}
 function esc(s){let d=document.createElement('div');d.textContent=s||'';return d.innerHTML}
 function escA(s){return(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'\\"')}
 function isCN(t){t=t||'';for(let i=0;i<t.length;i++){let c=t.charCodeAt(i);if(c>=19968&&c<=40869)return true}return false}

@@ -6,7 +6,7 @@ import logging
 import uuid
 from pathlib import Path
 
-from models import TopicState
+from models import TopicState, TopicStatus
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,6 @@ active_topics: dict[str, TopicState] = {}
 
 
 def _save_topics():
-    """持久化课题列表到 JSON。"""
     data = {}
     for tid, state in active_topics.items():
         data[tid] = {
@@ -34,7 +33,6 @@ def _save_topics():
 
 
 def _load_topics():
-    """从磁盘恢复课题列表。"""
     if not TOPICS_FILE.exists():
         return
     try:
@@ -47,14 +45,10 @@ def _load_topics():
                 total_papers=d.get("total_papers", 0),
                 created_at=d.get("created_at", ""),
             )
-            # 恢复状态
             status_str = d.get("status", "building")
-            if status_str == "ready":
-                state.status = (
-                    state.__class__.status.__class__.READY
-                    if hasattr(state.status, "__class__")
-                    else "ready"
-                )
+            state.status = (
+                TopicStatus.READY if status_str == "ready" else TopicStatus.BUILDING
+            )
             active_topics[tid] = state
         logger.info(f"Loaded {len(data)} topics from disk")
     except Exception as e:
@@ -70,10 +64,8 @@ def create_topic(query: str) -> TopicState:
 
 
 def save_topic_state(topic_id: str):
-    """手动触发持久化（KB 构建完成时调用）。"""
     if topic_id in active_topics:
         _save_topics()
 
 
-# 启动时自动加载
 _load_topics()

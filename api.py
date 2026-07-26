@@ -403,7 +403,7 @@ async def api_search_papers_stream(request: Request):
         kw_cn = keywords_cn[:1] if keywords_cn else [query]
 
         # Batch 1: arXiv (fastest, ~6s)
-        batch1 = await _safe(_search_arxiv, kw_en, to=6)
+        batch1 = await _safe(_search_arxiv, kw_en, to=10)
         batch1 = [p for p in batch1 if not _should_drop(p)]
         yield s(
             "batch",

@@ -161,12 +161,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans SC',sans
 <script>
 const A='http://localhost:8001';
 let S={ts:[],tid:null,q:'',msgs:[],strategy:null,pps:[],ppv:null,up:false,ld:false,ps:false,pg:0,pi:null,agent:false,agentSteps:[]};
-(function I(){if(localStorage.aia_d==='1')document.documentElement.className='dark';L();let s=localStorage.aia_t;if(s)W(s);else Y()})();
+(function I(){if(localStorage.aia_d==='1')document.documentElement.className='dark';L();let s=localStorage.aia_t;if(s){try{W(s)}catch(e){localStorage.removeItem('aia_t');Y()}}else Y()})();
 function T(){let h=document.documentElement;h.className=h.className==='dark'?'light':'dark';localStorage.aia_d=h.className==='dark'?'1':'0'}
 async function L(){try{S.ts=await(await fetch(A+'/topics')).json();K()}catch(e){}}
 function Y(){S.msgs=[{r:'s',c:'# 📚 学术文献精读助手\n\n输入研究方向获取检索策略，一键下载论文自动建库，深度问答。\n\n试试：**人脸识别**·**量化交易**·**后疫情消费**'}];R()}
 function N(){clearInterval(S.pi);S.tid=null;S.q='';S.msgs=[];S.strategy=null;S.pps=[];S.up=false;S.ps=false;S.pg=0;localStorage.removeItem('aia_t');document.getElementById('uz').style.display='none';document.getElementById('pg').style.display='none';Y()}
-async function W(id){S.tid=id;localStorage.aia_t=id;let t=S.ts.find(x=>x.topic_id===id);S.q=t?.q||'';S.msgs=[{r:'s',c:'加载中…'}];R();try{let r=await fetch(A+'/create_topic',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:S.q})});let d=await r.json();S.strategy=d.strategy;S.msgs=[{r:'s',c:'# '+S.q+'\n\n检索策略已加载。'}];S.up=true;document.getElementById('uz').style.display='block';R();SR(S.q,d.strategy.keywords_en,d.strategy.keywords_cn);S.ps=false;R()}catch(e){Ae('s','❌ '+e.message)}R()}
+async function W(id){S.tid=id;localStorage.aia_t=id;let t=S.ts.find(x=>x.topic_id===id);S.q=t?.q||'';S.msgs=[{r:'s',c:'加载中…'}];R();try{let r=await fetch(A+'/create_topic',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:S.q})});let d=await r.json();S.strategy=d.strategy;S.msgs=[{r:'s',c:'# '+S.q+'\n\n检索策略已加载。'}];S.up=true;document.getElementById('uz').style.display='block';R();if(d.strategy.keywords_en&&d.strategy.keywords_en.length)SR(S.q,d.strategy.keywords_en,d.strategy.keywords_cn);S.ps=false;R()}catch(e){Ae('s','❌ '+e.message)}R()}
 async function SR(q,ke,kc){
   S.pps=[];S.ps=true;R();
   try{

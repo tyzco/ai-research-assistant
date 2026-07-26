@@ -257,6 +257,16 @@ async def api_list_topics(user_id: str = Depends(get_current_user)):
     ]
 
 
+@app.delete("/topic/{topic_id}")
+async def api_delete_topic(topic_id: str):
+    if topic_id not in active_topics:
+        raise HTTPException(404, "Topic not found")
+    del active_topics[topic_id]
+    from topic_manager import _save_topics
+    _save_topics()
+    return {"ok": True}
+
+
 @app.get("/export/{topic_id}")
 async def api_export_topic(topic_id: str):
     from fastapi.responses import Response

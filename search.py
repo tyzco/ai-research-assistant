@@ -225,6 +225,8 @@ async def search_papers_for_topic(
         _safe(_search_core, kw_en, timeout_s=8),
         _safe(_search_crossref, kw_en, timeout_s=8),
         _safe(_search_doaj, kw_en, timeout_s=8),
+        _safe(_search_epmc, kw_en, timeout_s=8),
+        _safe(_search_epmc, kw_en, timeout_s=8),
         _safe(_search_pubmed, kw_en, timeout_s=8),  # PubMed — 36M biomedical+CS
         _safe(_search_pwc, kw_en, timeout_s=8),  # PapersWithCode — CS+code
         _safe(_search_google_scholar_apify, kw_en, timeout_s=3),
@@ -237,10 +239,11 @@ async def search_papers_for_topic(
     core_papers = results[4] if not isinstance(results[4], BaseException) else []
     crossref_papers = results[5] if not isinstance(results[5], BaseException) else []
     doaj_papers = results[6] if not isinstance(results[6], BaseException) else []
-    pubmed_papers = results[7] if not isinstance(results[7], BaseException) else []
-    pwc_papers = results[8] if not isinstance(results[8], BaseException) else []
-    gs_papers = results[9] if not isinstance(results[9], BaseException) else []
-    cnki_papers = results[10] if not isinstance(results[10], BaseException) else []
+    epmc_papers = results[7] if not isinstance(results[7], BaseException) else []
+    pubmed_papers = results[8] if not isinstance(results[8], BaseException) else []
+    pwc_papers = results[9] if not isinstance(results[9], BaseException) else []
+    gs_papers = results[10] if not isinstance(results[10], BaseException) else []
+    cnki_papers = results[11] if not isinstance(results[11], BaseException) else []
 
     # 合并去重 + 屏蔽过滤 + 语言检测 + CN 相关性过滤
     cn_kw_set = set((keywords_cn or [query]) + [query])
@@ -266,7 +269,7 @@ async def search_papers_for_topic(
         + arxiv_papers
         + core_papers
         + crossref_papers
-        + doaj_papers + pubmed_papers + pwc_papers
+        + doaj_papers + epmc_papers + pubmed_papers + pwc_papers
     )
     for p in all_papers:
         if _should_drop(p):
@@ -864,4 +867,33 @@ async def _search_pwc(keywords: list[str]) -> list[PaperMeta]:
                     )
             except Exception:
                 pass
+    return papers
+
+# ---- Europe PMC (free, 41M+ life sciences, richer metadata than PubMed) ----
+EPMC_URL = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+
+async def _search_epmc(keywords: list[str]) -> list[PaperMeta]:
+    """Europe PMC — 41M+ life science papers, free API. OA标志+PDF链接。"""
+    papers: list[PaperMeta] = []
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        for kw in keywords[:1]:
+            try:
+                resp = await client.get(
+                    EPMC_URL,
+                    params={"query": kw, "resultType": "core", "pageSize": 20, "format": "json"},
+                )
+                if resp.status_code != 200: continue
+                for item in resp.json().get("resultList", {}).get("result", []):
+                    doi = item.get("doi")
+                    pdfl = item.get("hasPDF") if item.get("hasPDF") == "Y" else None
+                    papers.append(PaperMeta(
+                        paper_id=f"epmc:{item.get('id','')}",
+                        title=item.get("title", "Unknown"),
+                        authors=item.get("authorString", ""),
+                        year=int(item.get("pubYear", 0)) if item.get("pubYear") else None,
+                        abstract=(item.get("abstractText") or "")[:300],
+                        doi=doi, is_oa=item.get("isOpenAccess") == "Y",
+                        pdf_url=f"https://europepmc.org/articles/{item.get('pmcid')}/pdf" if item.get("pmcid") and pdfl else None,
+                    ))
+            except Exception: pass
     return papers

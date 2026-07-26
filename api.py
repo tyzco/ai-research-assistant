@@ -337,9 +337,138 @@ async def api_create_topic(req: CreateTopicRequest):
     return {"topic_id": state.topic_id, "strategy": strategy}
 
 
+@app.post("/search_papers/stream")
+async def api_search_papers_stream(request: Request):
+    """SSE流式论文搜索: 每批5篇渐进加载, 用户即刻看到结果。"""
+    import asyncio
+    import json as _json
+    import time
+
+    from fastapi.responses import StreamingResponse
+
+    req = await request.json()
+    query = req.get("query", "")
+    keywords_en = req.get("keywords_en")
+    keywords_cn = req.get("keywords_cn")
+    if not query:
+        raise HTTPException(400, "需要 query 参数")
+
+    def _fmt(p):
+        preview = dl = None
+        if p.doi:
+            preview = f"https://api.semanticscholar.org/DOI:{p.doi}"
+            dl = p.pdf_url or f"https://sci-hub.se/{p.doi}"
+        elif p.arxiv_id:
+            preview = f"https://arxiv.org/abs/{p.arxiv_id}"
+            dl = f"https://arxiv.org/pdf/{p.arxiv_id}.pdf"
+        return {
+            "paper_id": p.paper_id,
+            "title": p.title,
+            "authors": p.authors,
+            "year": p.year,
+            "abstract": (p.abstract or "")[:500],
+            "doi": p.doi,
+            "arxiv_id": p.arxiv_id,
+            "is_oa": p.is_oa,
+            "pdf_url": p.pdf_url,
+            "preview_url": preview,
+            "download_url": dl,
+            "source": _paper_source(p),
+            "doi_url": f"https://doi.org/{p.doi}" if p.doi else None,
+            "cnki_url": _cnki_search_url(p.title) if p.title else None,
+            "google_scholar_url": _gs_search_url(p.title) if p.title else None,
+        }
+
+    async def generate():
+        s = (
+            lambda e, d: f"data: {_json.dumps({'event': e, **d}, ensure_ascii=False)}\n\n"
+        )
+        t0 = time.time()
+
+        # Step 1: 快速返回第一批 (arXiv前5篇, 3s超时)
+        from search import (
+            _search_arxiv,
+            _search_openalex,
+            _search_openalex_cn,
+            _should_drop,
+        )
+
+        async def _safe(fn, *a, to=5, **kw):
+            try:
+                return await asyncio.wait_for(fn(*a, **kw), timeout=to)
+            except:
+                return []
+
+        kw_en = keywords_en[:1] if keywords_en else [query]
+        kw_cn = keywords_cn[:1] if keywords_cn else [query]
+
+        # Batch 1: arXiv (fastest, ~6s)
+        batch1 = await _safe(_search_arxiv, kw_en, to=6)
+        batch1 = [p for p in batch1 if not _should_drop(p)]
+        yield s(
+            "batch",
+            {
+                "source": "arxiv",
+                "count": len(batch1),
+                "papers": [_fmt(p) for p in batch1[:8]],
+            },
+        )
+
+        # Batch 2: OpenAlex EN + CN (并行, ~8s)
+        batch2 = await asyncio.gather(
+            _safe(_search_openalex, kw_en, to=8),
+            _safe(_search_openalex_cn, kw_cn, to=8),
+        )
+        oa_papers = [p for p in (batch2[0] or []) if not _should_drop(p)]
+        cn_papers = [p for p in (batch2[1] or []) if not _should_drop(p)]
+        # Filter CN relevance
+        cn_filtered = [
+            p
+            for p in cn_papers
+            if any(kw in (p.title or "") for kw in kw_cn if len(kw) >= 2)
+        ]
+        yield s(
+            "batch",
+            {
+                "source": "openalex",
+                "count": len(oa_papers) + len(cn_filtered),
+                "papers": [_fmt(p) for p in (oa_papers + cn_filtered)[:12]],
+            },
+        )
+
+        # Batch 3: 慢源 (S2 + CNKI, 不阻塞)
+        from search import _make_cnki_async, _search_s2
+
+        batch3 = await asyncio.gather(
+            _safe(_search_s2, kw_en, to=3),
+            _safe(_make_cnki_async, query, kw_cn, to=2),
+        )
+        s2_papers = [p for p in (batch3[0] or []) if not _should_drop(p)]
+        cnki_papers = batch3[1] or []
+        yield s(
+            "batch",
+            {
+                "source": "s2+cnki",
+                "count": len(s2_papers) + len(cnki_papers),
+                "papers": [_fmt(p) for p in s2_papers[:5] + cnki_papers],
+            },
+        )
+
+        total = (
+            len(batch1)
+            + len(oa_papers)
+            + len(cn_filtered)
+            + len(s2_papers)
+            + len(cnki_papers)
+        )
+        yield s("done", {"total": total, "elapsed": f"{time.time()-t0:.1f}s"})
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
 @app.post("/search_papers")
 async def api_search_papers(request: Request):
-    """搜索论文。接收 {query, keywords_en (可选)}，传 keywords 可跳过重复 LLM 调用提速。"""
+    """搜索论文（兼容旧接口）。推荐使用 /search_papers/stream 流式分批返回。"""
     req = await request.json()
     query = req.get("query", "")
     keywords_en = req.get("keywords_en")

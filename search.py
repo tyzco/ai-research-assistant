@@ -221,10 +221,12 @@ async def search_papers_for_topic(
         _safe(_search_arxiv, kw_en, timeout_s=10),
         _safe(_search_openalex, kw_en, timeout_s=10),
         _safe(_search_openalex_cn, kw_cn, timeout_s=10),
-        _safe(_search_s2, kw_en, timeout_s=5),  # S2 now tries without key
-        _safe(_search_core, kw_en, timeout_s=8),  # CORE — 30M OA
-        _safe(_search_crossref, kw_en, timeout_s=8),  # Crossref — DOI metadata
-        _safe(_search_doaj, kw_en, timeout_s=8),  # DOAJ — OA journals
+        _safe(_search_s2, kw_en, timeout_s=5),
+        _safe(_search_core, kw_en, timeout_s=8),
+        _safe(_search_crossref, kw_en, timeout_s=8),
+        _safe(_search_doaj, kw_en, timeout_s=8),
+        _safe(_search_pubmed, kw_en, timeout_s=8),  # PubMed — 36M biomedical+CS
+        _safe(_search_pwc, kw_en, timeout_s=8),  # PapersWithCode — CS+code
         _safe(_search_google_scholar_apify, kw_en, timeout_s=3),
         _safe(_make_cnki_async, query, kw_cn, timeout_s=2),
     )
@@ -235,8 +237,10 @@ async def search_papers_for_topic(
     core_papers = results[4] if not isinstance(results[4], BaseException) else []
     crossref_papers = results[5] if not isinstance(results[5], BaseException) else []
     doaj_papers = results[6] if not isinstance(results[6], BaseException) else []
-    gs_papers = results[7] if not isinstance(results[7], BaseException) else []
-    cnki_papers = results[8] if not isinstance(results[8], BaseException) else []
+    pubmed_papers = results[7] if not isinstance(results[7], BaseException) else []
+    pwc_papers = results[8] if not isinstance(results[8], BaseException) else []
+    gs_papers = results[9] if not isinstance(results[9], BaseException) else []
+    cnki_papers = results[10] if not isinstance(results[10], BaseException) else []
 
     # 合并去重 + 屏蔽过滤 + 语言检测 + CN 相关性过滤
     cn_kw_set = set((keywords_cn or [query]) + [query])
@@ -262,7 +266,7 @@ async def search_papers_for_topic(
         + arxiv_papers
         + core_papers
         + crossref_papers
-        + doaj_papers
+        + doaj_papers + pubmed_papers + pwc_papers
     )
     for p in all_papers:
         if _should_drop(p):
@@ -756,6 +760,106 @@ async def _search_doaj(keywords: list[str]) -> list[PaperMeta]:
                                 ),
                                 None,
                             ),
+                        )
+                    )
+            except Exception:
+                pass
+    return papers
+
+
+# ---- PubMed (NCBI E-utilities, free, no key, 36M+ biomedical + CS) ----
+PUBMED_SEARCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
+PUBMED_SUMMARY_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
+
+
+async def _search_pubmed(keywords: list[str]) -> list[PaperMeta]:
+    """PubMed — free API, 36M+ biomedical + interdisciplinary CS papers."""
+    papers: list[PaperMeta] = []
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        for kw in keywords[:1]:
+            try:
+                # Step 1: search IDs
+                resp = await client.get(
+                    PUBMED_SEARCH_URL,
+                    params={
+                        "db": "pubmed",
+                        "term": kw,
+                        "retmax": 15,
+                        "retmode": "json",
+                    },
+                )
+                if resp.status_code != 200:
+                    continue
+                ids = resp.json().get("esearchresult", {}).get("idlist", [])
+                if not ids:
+                    continue
+
+                # Step 2: fetch summaries
+                resp2 = await client.get(
+                    PUBMED_SUMMARY_URL,
+                    params={"db": "pubmed", "id": ",".join(ids), "retmode": "json"},
+                )
+                if resp2.status_code != 200:
+                    continue
+                results = resp2.json().get("result", {})
+                for uid in ids:
+                    item = results.get(uid, {})
+                    if not item:
+                        continue
+                    doi = None
+                    for aid in item.get("articleids", []):
+                        if aid.get("idtype") == "doi":
+                            doi = aid.get("value")
+                    papers.append(
+                        PaperMeta(
+                            paper_id=f"pubmed:{uid}",
+                            title=item.get("title", "Unknown"),
+                            authors=", ".join(
+                                a.get("name", "") for a in item.get("authors", [])
+                            ),
+                            year=int(str(item.get("pubdate", ""))[:4])
+                            if item.get("pubdate")
+                            else None,
+                            abstract="",  # PubMed summary doesn't include full abstract
+                            doi=doi,
+                            is_oa=False,
+                        )
+                    )
+            except Exception:
+                pass
+            await asyncio.sleep(0.35)  # NCBI rate limit: 3/sec without key
+    return papers
+
+
+# ---- Papers With Code (free API, CS papers with code links) ----
+PWC_URL = "https://paperswithcode.com/api/v1/papers/"
+
+
+async def _search_pwc(keywords: list[str]) -> list[PaperMeta]:
+    """Papers With Code — free API, CS papers with implementation links."""
+    papers: list[PaperMeta] = []
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        for kw in keywords[:1]:
+            try:
+                resp = await client.get(
+                    PWC_URL,
+                    params={"q": kw, "items_per_page": 15},
+                )
+                if resp.status_code != 200:
+                    continue
+                for item in resp.json().get("results", []):
+                    pid = f"pwc:{item.get('id','')}"
+                    papers.append(
+                        PaperMeta(
+                            paper_id=pid,
+                            title=item.get("title", "Unknown"),
+                            authors="",  # PWC basic API doesn't return authors
+                            year=item.get("published"),  # YYYY-MM-DD format
+                            abstract=item.get("abstract", "")[:300],
+                            doi=None,
+                            is_oa=False,
+                            # Note: paper_url is the PWC page with code links
+                            pdf_url=item.get("url_abs"),
                         )
                     )
             except Exception:

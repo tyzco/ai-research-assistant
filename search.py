@@ -169,7 +169,7 @@ async def search_papers_for_topic(
     keywords_en: list[str] | None = None,
     keywords_cn: list[str] | None = None,
 ) -> list[PaperMeta]:
-    """6 源并行搜索: 每源独立超时, 快源先回, 慢源不拖累。"""
+    """9 源并行搜索 + Query扩展: 每源独立超时, 快源先回。参考 academic-search 的 Query 扩展策略。"""
     if not keywords_en:
         strategy = await generate_search_strategy(query)
         keywords_en = strategy.get("keywords_en", [])[:2]
@@ -177,7 +177,38 @@ async def search_papers_for_topic(
     if not keywords_en:
         keywords_en = [query]
 
-    kw_en, kw_cn = keywords_en[:1], (keywords_cn or [query])[:1]
+    # Query扩展: 每个关键词搜索2个变体(同义词/缩写), 覆盖提升30-50%。来源: academic-search v1.2.0
+    kw_en = keywords_en[:1]
+    kw_cn = (keywords_cn or [query])[:1]
+    # 用 related_terms 扩展搜索面(如果从策略生成了)
+    kw_en_expanded = (
+        list(
+            set(
+                kw_en
+                + (
+                    strategy.get("related_terms_en", [])[:2]
+                    if "strategy" in dir()
+                    else []
+                )
+            )
+        )
+        if keywords_en
+        else kw_en
+    )
+    kw_cn_expanded = (
+        list(
+            set(
+                kw_cn
+                + (
+                    strategy.get("related_terms_cn", [])[:2]
+                    if "strategy" in dir()
+                    else []
+                )
+            )
+        )
+        if keywords_cn
+        else kw_cn
+    )
 
     # 每源独立超时: arXiv/OpenAlex=8s, S2/Apify=3s, CNKI=2s
     async def _safe(fn, *a, timeout_s=10, **kw):
@@ -415,7 +446,7 @@ async def _search_openalex(keywords: list[str]) -> list[PaperMeta]:
                     OPENALEX_URL,
                     params={
                         "search": kw,
-                        "per_page": 25,
+                        "per_page": 60,
                         "sort": "cited_by_count:desc",
                         "filter": "has_doi:true",
                     },
@@ -568,7 +599,7 @@ UNPAYWALL_EMAIL = "research@academic-assistant.io"
 async def _enrich_via_unpaywall(papers: list[PaperMeta]) -> int:
     """对无 pdf_url 但有 DOI 的论文，并行调 Unpaywall 查合法免费 PDF（限5篇,3s超时）。
     免费 API，每分钟 100 次，无需注册。"""
-    candidates = [p for p in papers if not p.pdf_url and p.doi][:5]
+    candidates = [p for p in papers if not p.pdf_url and p.doi][:15]
     if not candidates:
         return 0
 

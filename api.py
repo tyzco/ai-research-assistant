@@ -21,7 +21,7 @@ from knowledge_base import build_knowledge_base, store_image_descriptions
 from models import AskRequest, CreateTopicRequest, PaperMeta, TopicStatus
 from monitor import metrics, sanitize_input
 from qa_engine import ask_question
-from search import generate_search_strategy, search_papers_for_topic
+from search import search_papers_for_topic
 from topic_manager import active_topics, create_topic
 
 # 消息历史存储（按 topic_id）
@@ -292,10 +292,45 @@ async def api_export_topic(topic_id: str):
     )
 
 
+def _quick_keywords(query: str) -> dict:
+    """Fast keyword extraction: local split, no LLM. Returns strategy-compatible dict."""
+    import re
+
+    words = [w.strip() for w in re.split(r"[，,、\s]+", query) if w.strip()]
+    cn = [w for w in words if any("一" <= c <= "鿿" for c in w)]
+    en = [w.lower() for w in words if w.isascii() and len(w) >= 2]
+    # Generate boolean queries from keywords
+    bq = []
+    if cn:
+        bq.append(
+            {
+                "database": "知网",
+                "query": " OR ".join(f"主题='{k}'" for k in cn[:3]),
+                "note": "中文核心关键词",
+            }
+        )
+    if en:
+        bq.append(
+            {"database": "arXiv", "query": " OR ".join(en[:3]), "note": "英文核心关键词"}
+        )
+    return {
+        "keywords_cn": cn or [query],
+        "keywords_en": en or [query],
+        "domain_tags": [],
+        "related_terms_cn": [],
+        "related_terms_en": [],
+        "boolean_queries": bq,
+        "recommended_databases": ["知网", "arXiv"] if cn else ["arXiv"],
+        "top_authors": [],
+        "search_tips": "",
+    }
+
+
 @app.post("/create_topic")
 async def api_create_topic(req: CreateTopicRequest):
+    """创建课题（快速模式：本地关键词提取，不调LLM，<0.1s）。"""
     state = create_topic(sanitize_input(req.query))
-    strategy = await generate_search_strategy(req.query)
+    strategy = _quick_keywords(req.query)
     state.search_strategy = strategy
     message_store[state.topic_id] = [
         {"role": "system", "content": f"研究方向: {req.query}"}
@@ -540,8 +575,35 @@ async def api_topic_status(topic_id: str):
 @app.post("/ask")
 async def api_ask(req: AskRequest):
     state = active_topics.get(req.topic_id)
-    if not state or not state.lancedb_table:
-        raise HTTPException(404, "Topic not found or not ready")
+    if not state:
+        raise HTTPException(404, "Topic not found")
+    if not state.lancedb_table:
+        # KB not built yet — fallback to agent/quick (search existing KBs)
+        question = sanitize_input(req.question)
+        import lancedb
+
+        from config import LANCEDB_DIR
+
+        db = lancedb.connect(str(LANCEDB_DIR))
+        raw = db.list_tables()
+        tables = raw.tables if hasattr(raw, "tables") else []
+        best, best_n = "", 0
+        for t in tables:
+            try:
+                n = db.open_table(t).count_rows()
+                if n > best_n:
+                    best, best_n = t, n
+            except:
+                pass
+        if best and best_n > 5:
+            result = await ask_question(str(best), question, model=req.model)
+            msgs = message_store.setdefault(req.topic_id, [])
+            msgs.append({"role": "user", "content": question})
+            msgs.append({"role": "assistant", "content": result.answer})
+            return result.model_dump()
+        raise HTTPException(
+            400, {"error": "no_kb", "message": "请先上传PDF或一键下载构建知识库，或使用已有知识库"}
+        )
     result = await ask_question(
         state.lancedb_table, sanitize_input(req.question), model=req.model
     )
@@ -753,7 +815,7 @@ async def api_ask_stream(request: Request):
                 model=DEEPSEEK_MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
-                max_tokens=600,
+                max_tokens=500,
                 stream=True,
             )
             async for chunk in stream:
@@ -1025,7 +1087,7 @@ async def api_agent_quick(request: Request):
     resp = await client.chat.completions.create(
         model=model,
         temperature=0.3,
-        max_tokens=600,
+        max_tokens=500,
         messages=[{"role": "user", "content": prompt}],
     )
     answer = resp.choices[0].message.content.strip()

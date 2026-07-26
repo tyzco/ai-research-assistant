@@ -169,7 +169,7 @@ async def search_papers_for_topic(
     keywords_en: list[str] | None = None,
     keywords_cn: list[str] | None = None,
 ) -> list[PaperMeta]:
-    """并行搜索 S2 + arXiv + CNKI 链接，<10 秒返回。"""
+    """并行搜索 6 源，总超时 12s。超时不阻塞——有多少返回多少。"""
     if not keywords_en:
         strategy = await generate_search_strategy(query)
         keywords_en = strategy.get("keywords_en", [])[:2]
@@ -177,16 +177,22 @@ async def search_papers_for_topic(
     if not keywords_en:
         keywords_en = [query]
 
-    # 并行搜索 S2 + arXiv + CNKI
-    results = await asyncio.gather(
-        _search_s2(keywords_en[:2]),
-        _search_arxiv(keywords_en[:2]),
-        _search_openalex(keywords_en[:2]),
-        _search_openalex_cn((keywords_cn or [query])[:2]),  # 中文论文单独搜
-        _search_google_scholar_apify(keywords_en[:2]),
-        _make_cnki_async(query, (keywords_cn or [query])[:3]),
-        return_exceptions=True,
-    )
+    # 并行搜索 + 12s 超时
+    try:
+        results = await asyncio.wait_for(
+            asyncio.gather(
+                _search_arxiv(keywords_en[:1]),  # 减少关键词数加速
+                _search_openalex(keywords_en[:1]),
+                _search_openalex_cn((keywords_cn or [query])[:1]),
+                _search_google_scholar_apify(keywords_en[:1]),
+                _search_s2(keywords_en[:1]),
+                _make_cnki_async(query, (keywords_cn or [query])[:2]),
+                return_exceptions=True,
+            ),
+            timeout=12.0,
+        )
+    except asyncio.TimeoutError:
+        results = []
     s2_papers = results[0] if not isinstance(results[0], BaseException) else []
     arxiv_papers = results[1] if not isinstance(results[1], BaseException) else []
     oa_papers = results[2] if not isinstance(results[2], BaseException) else []

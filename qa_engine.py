@@ -320,7 +320,7 @@ async def ask_question(
             temperature=0.3,
             max_tokens=800,
             max_retries=2,
-            timeout=30.0,
+            timeout=20.0,
             source="llm",
         )
         if resp is None:

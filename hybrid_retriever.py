@@ -30,11 +30,14 @@ class AdaptiveHybridRetriever:
         self.table = db.open_table(table_name)
         self.table_name = table_name
 
-        # Stage1: 轻量相似度模型（用于快速预筛）
-        self._stage1 = SentenceTransformer("all-MiniLM-L6-v2")
-
-        # Stage2: 精排 CrossEncoder（延迟加载）
+        # 模型延迟加载（Stage1+Stage2），避免每次实例化都连 HF
+        self._stage1 = None
         self._stage2 = None
+
+    def _get_stage1(self):
+        if self._stage1 is None:
+            self._stage1 = SentenceTransformer("all-MiniLM-L6-v2")
+        return self._stage1
 
     def _get_stage2(self):
         if self._stage2 is None:
@@ -119,14 +122,18 @@ class AdaptiveHybridRetriever:
             return chunks
 
         # Stage 1: 轻量语义相似度预筛 (top-20 → top-15)
-        texts = [c.get("text", "")[:512] for c in chunks]
-        q_emb = self._stage1.encode([query])[0]
-        c_embs = self._stage1.encode(texts)
-        scores = np.dot(c_embs, q_emb)  # cosine similarity
-        stage1_indices = sorted(
-            range(len(scores)), key=lambda i: scores[i], reverse=True
-        )[:15]
-        stage1_chunks = [chunks[i] for i in stage1_indices]
+        try:
+            stage1 = self._get_stage1()
+            texts = [c.get("text", "")[:512] for c in chunks]
+            q_emb = stage1.encode([query])[0]
+            c_embs = stage1.encode(texts)
+            scores = np.dot(c_embs, q_emb)
+            stage1_indices = sorted(
+                range(len(scores)), key=lambda i: scores[i], reverse=True
+            )[:15]
+            stage1_chunks = [chunks[i] for i in stage1_indices]
+        except Exception:
+            return chunks[:top_k]  # Stage1 fail → truncate
 
         # Stage 2: CrossEncoder 精排 (top-15 → top_k)
         try:

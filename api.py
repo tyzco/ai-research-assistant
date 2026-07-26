@@ -815,7 +815,7 @@ async def api_ask_stream(request: Request):
                 model=DEEPSEEK_MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
-                max_tokens=500,
+                max_tokens=300,
                 stream=True,
             )
             async for chunk in stream:
@@ -1003,7 +1003,7 @@ async def api_ask_trace(request: Request):
             stream = await client.chat.completions.create(
                 model=DEEPSEEK_MODEL,
                 temperature=0.3,
-                max_tokens=500,
+                max_tokens=300,
                 messages=[{"role": "user", "content": prompt}],
                 stream=True,
             )
@@ -1087,7 +1087,7 @@ async def api_agent_quick(request: Request):
     resp = await client.chat.completions.create(
         model=model,
         temperature=0.3,
-        max_tokens=500,
+        max_tokens=300,
         messages=[{"role": "user", "content": prompt}],
     )
     answer = resp.choices[0].message.content.strip()

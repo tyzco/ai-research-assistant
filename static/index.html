@@ -161,7 +161,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans SC',sans
 <script>
 const A='http://localhost:8001';
 let S={ts:[],tid:null,q:'',msgs:[],strategy:null,pps:[],ppv:null,up:false,ld:false,ps:false,pg:0,pi:null,agent:false,agentSteps:[]};
-(function I(){if(localStorage.aia_d==='1')document.documentElement.className='dark';L();let s=localStorage.aia_t;if(s){try{W(s)}catch(e){localStorage.removeItem('aia_t');Y()}}else Y()})();
+(function I(){if(localStorage.aia_d==='1')document.documentElement.className='dark';L();let s=localStorage.aia_t;if(s){var found=S.ts.find(function(x){return x.topic_id===s});if(found){try{W(s)}catch(e){localStorage.removeItem('aia_t');Y()}}else{Y()}}else Y()})();
 function T(){let h=document.documentElement;h.className=h.className==='dark'?'light':'dark';localStorage.aia_d=h.className==='dark'?'1':'0'}
 async function L(){try{S.ts=await(await fetch(A+'/topics')).json();K()}catch(e){}}
 function Y(){S.msgs=[{r:'s',c:'# 📚 学术文献精读助手\n\n输入研究方向获取检索策略，一键下载论文自动建库，深度问答。\n\n试试：**人脸识别**·**量化交易**·**后疫情消费**'}];R()}

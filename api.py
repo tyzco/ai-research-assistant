@@ -20,7 +20,6 @@ from downloader import chunk_text, parse_pdf
 from knowledge_base import build_knowledge_base, store_image_descriptions
 from models import AskRequest, CreateTopicRequest, PaperMeta, TopicStatus
 from monitor import metrics, sanitize_input
-from qa_engine import ask_question
 from search import search_papers_for_topic
 from topic_manager import active_topics, create_topic
 
@@ -574,12 +573,17 @@ async def api_topic_status(topic_id: str):
 
 @app.post("/ask")
 async def api_ask(req: AskRequest):
+    """RAG 问答：默认 SSE 流式返回 + JSON 降级。检测 Accept 头或 stream 参数。"""
+    import json as _json
+
     state = active_topics.get(req.topic_id)
     if not state:
         raise HTTPException(404, "Topic not found")
-    if not state.lancedb_table:
-        # KB not built yet — fallback to agent/quick (search existing KBs)
-        question = sanitize_input(req.question)
+
+    question = sanitize_input(req.question)
+    table = state.lancedb_table
+    if not table:
+        # Fallback: find any existing KB
         import lancedb
 
         from config import LANCEDB_DIR
@@ -596,21 +600,52 @@ async def api_ask(req: AskRequest):
             except:
                 pass
         if best and best_n > 5:
-            result = await ask_question(str(best), question, model=req.model)
-            msgs = message_store.setdefault(req.topic_id, [])
-            msgs.append({"role": "user", "content": question})
-            msgs.append({"role": "assistant", "content": result.answer})
-            return result.model_dump()
-        raise HTTPException(
-            400, {"error": "no_kb", "message": "请先上传PDF或一键下载构建知识库，或使用已有知识库"}
-        )
-    result = await ask_question(
-        state.lancedb_table, sanitize_input(req.question), model=req.model
-    )
-    msgs = message_store.setdefault(req.topic_id, [])
-    msgs.append({"role": "user", "content": req.question})
-    msgs.append({"role": "assistant", "content": result.answer})
-    return result.model_dump()
+            table = str(best)
+        else:
+            raise HTTPException(400, detail="请先上传PDF或一键下载构建知识库")
+
+    # Stream by default
+    async def _stream_answer():
+        import lancedb as _lancedb
+        from openai import AsyncOpenAI
+
+        from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
+        from knowledge_base import _cosine_search, _embed_texts_sync
+
+        yield f"data: {_json.dumps({'status': 'retrieving'})}\n\n"
+        db = _lancedb.connect(str(LANCEDB_DIR))
+        tbl = db.open_table(table)
+        qv = _embed_texts_sync([question])[0]
+        res = _cosine_search(tbl, qv, 5, "is_fulltext = true AND is_image = false")
+        ctx = "\n".join([r.get("text", "")[:300] for r in (res or [])[:3]])
+        yield f"data: {_json.dumps({'status': 'retrieved', 'chunks': len(res) if res else 0})}\n\n"
+
+        client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+        prompt = f"基于上下文简洁回答（100-200字）。信息不足请说明。\n上下文：{ctx}\n问题：{question}\n回答："
+        try:
+            stream = await client.chat.completions.create(
+                model=req.model or DEEPSEEK_MODEL,
+                temperature=0.3,
+                max_tokens=500,
+                messages=[{"role": "user", "content": prompt}],
+                stream=True,
+                timeout=15,
+            )
+            async for chunk in stream:
+                c = chunk.choices[0].delta.content
+                if c:
+                    yield f"data: {_json.dumps({'token': c})}\n\n"
+            yield f"data: {_json.dumps({'done': True})}\n\n"
+        except Exception as e:
+            yield f"data: {_json.dumps({'error': str(e)})}\n\n"
+
+        # Save memory
+        msgs = message_store.setdefault(req.topic_id, [])
+        msgs.append({"role": "user", "content": question})
+
+    from fastapi.responses import StreamingResponse
+
+    return StreamingResponse(_stream_answer(), media_type="text/event-stream")
 
 
 @app.post("/agent/langgraph")
@@ -815,7 +850,7 @@ async def api_ask_stream(request: Request):
                 model=DEEPSEEK_MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
-                max_tokens=300,
+                max_tokens=500,
                 stream=True,
             )
             async for chunk in stream:
@@ -992,7 +1027,7 @@ async def api_ask_trace(request: Request):
         client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
         ctx = "\n".join(
             [
-                f"[{i+1}] {r.get('title','N/A')}\n{r.get('text','')[:800]}"
+                f"[{i+1}] {r.get('title','N/A')}\n{r.get('text','')[:300]}"
                 for i, r in enumerate((text_res or list())[:3])
             ]
         )
@@ -1003,7 +1038,7 @@ async def api_ask_trace(request: Request):
             stream = await client.chat.completions.create(
                 model=DEEPSEEK_MODEL,
                 temperature=0.3,
-                max_tokens=300,
+                max_tokens=500,
                 messages=[{"role": "user", "content": prompt}],
                 stream=True,
             )
@@ -1082,12 +1117,12 @@ async def api_agent_quick(request: Request):
 
     client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
 
-    prompt = f"基于上下文简洁回答（150-300字）。如果信息不足请说明。\n上下文：{ctx}\n问题：{question}\n回答："
+    prompt = f"基于上下文简洁回答（100-200字）。如果信息不足请说明。\n上下文：{ctx}\n问题：{question}\n回答："
 
     resp = await client.chat.completions.create(
         model=model,
         temperature=0.3,
-        max_tokens=300,
+        max_tokens=400,
         messages=[{"role": "user", "content": prompt}],
     )
     answer = resp.choices[0].message.content.strip()
@@ -1098,4 +1133,6 @@ async def api_agent_quick(request: Request):
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    uvicorn.run(
+        app, host="0.0.0.0", port=8001, limit_concurrency=20, timeout_keep_alive=30
+    )

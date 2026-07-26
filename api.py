@@ -471,6 +471,7 @@ async def api_download_bulk(request: Request):
         state.total_papers = imported_papers
         state.total_images = imported_images
         state.status = TopicStatus.READY
+        save_topic_state(topic_id)
         state.step = "ready"
 
     # 打包 ZIP
@@ -541,6 +542,7 @@ async def api_upload_pdf(topic_id: str, files: list[UploadFile]):
     state.total_papers = len(papers)
     state.total_images = len(all_images)
     state.status = TopicStatus.READY
+    save_topic_state(topic_id)
     state.step = "ready"
 
     return {

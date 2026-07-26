@@ -190,16 +190,22 @@ async def search_papers_for_topic(
         _safe(_search_arxiv, kw_en, timeout_s=10),
         _safe(_search_openalex, kw_en, timeout_s=10),
         _safe(_search_openalex_cn, kw_cn, timeout_s=10),
+        _safe(_search_s2, kw_en, timeout_s=5),  # S2 now tries without key
+        _safe(_search_core, kw_en, timeout_s=8),  # CORE — 30M OA
+        _safe(_search_crossref, kw_en, timeout_s=8),  # Crossref — DOI metadata
+        _safe(_search_doaj, kw_en, timeout_s=8),  # DOAJ — OA journals
         _safe(_search_google_scholar_apify, kw_en, timeout_s=3),
-        _safe(_search_s2, kw_en, timeout_s=3),
         _safe(_make_cnki_async, query, kw_cn, timeout_s=2),
     )
     arxiv_papers = results[0] if not isinstance(results[0], BaseException) else []
     oa_papers = results[1] if not isinstance(results[1], BaseException) else []
     cn_papers = results[2] if not isinstance(results[2], BaseException) else []
-    gs_papers = results[3] if not isinstance(results[3], BaseException) else []
-    s2_papers = results[4] if not isinstance(results[4], BaseException) else []
-    cnki_papers = results[5] if not isinstance(results[5], BaseException) else []
+    s2_papers = results[3] if not isinstance(results[3], BaseException) else []
+    core_papers = results[4] if not isinstance(results[4], BaseException) else []
+    crossref_papers = results[5] if not isinstance(results[5], BaseException) else []
+    doaj_papers = results[6] if not isinstance(results[6], BaseException) else []
+    gs_papers = results[7] if not isinstance(results[7], BaseException) else []
+    cnki_papers = results[8] if not isinstance(results[8], BaseException) else []
 
     # 合并去重 + 屏蔽过滤 + 语言检测 + CN 相关性过滤
     cn_kw_set = set((keywords_cn or [query]) + [query])
@@ -216,7 +222,18 @@ async def search_papers_for_topic(
 
     seen: set[str] = set()
     papers: list[PaperMeta] = []
-    for p in cnki_papers + gs_papers + cn_papers + oa_papers + s2_papers + arxiv_papers:
+    all_papers = (
+        cnki_papers
+        + gs_papers
+        + cn_papers
+        + oa_papers
+        + s2_papers
+        + arxiv_papers
+        + core_papers
+        + crossref_papers
+        + doaj_papers
+    )
+    for p in all_papers:
         if _should_drop(p):
             continue
         # 中文论文必须与搜索关键词相关（前30篇严格，之后宽松）
@@ -268,54 +285,51 @@ async def search_papers_for_topic(
 
 
 async def _search_s2(keywords: list[str]) -> list[PaperMeta]:
-    """Semantic Scholar 搜索。有 Key 快搜，无 Key 加延迟避免 429。"""
+    """Semantic Scholar — always try, rate limit is 1/s without key. 题目+摘要质量最高。"""
     papers: list[PaperMeta] = []
     headers = {}
     if SEMANTIC_SCHOLAR_API_KEY:
         headers["x-api-key"] = SEMANTIC_SCHOLAR_API_KEY
-    else:
-        return []  # 无 Key 直接跳过 S2
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        for kw in keywords[:2]:
-            for attempt in range(2):
-                try:
-                    resp = await client.get(
-                        S2_URL,
-                        params={"query": kw, "limit": 15, "fields": S2_FIELDS},
-                        headers=headers,
-                    )
-                    if resp.status_code == 429:
-                        if not SEMANTIC_SCHOLAR_API_KEY:
-                            break  # 无 Key 429 直接放弃这个关键词
-                        await asyncio.sleep(2)
+    async with httpx.AsyncClient(timeout=12.0) as client:
+        for kw in keywords[:1]:  # only 1 kw, S2 is rich enough
+            try:
+                resp = await client.get(
+                    S2_URL,
+                    params={"query": kw, "limit": 20, "fields": S2_FIELDS},
+                    headers=headers,
+                )
+                if resp.status_code == 429:
+                    if not SEMANTIC_SCHOLAR_API_KEY:
+                        logger.debug("S2 rate limited (no key)")
+                        return papers
+                    await asyncio.sleep(2)
+                    continue
+                if resp.status_code != 200:
+                    continue
+                for item in resp.json().get("data", []):
+                    pid = item.get("paperId", "")
+                    if not pid:
                         continue
-                    resp.raise_for_status()
-                    for item in resp.json().get("data", []):
-                        pid = item.get("paperId", "")
-                        if not pid:
-                            continue
-                        ext = item.get("externalIds") or {}
-                        oa = item.get("openAccessPdf") or {}
-                        papers.append(
-                            PaperMeta(
-                                paper_id=pid,
-                                title=item.get("title", "Unknown"),
-                                authors=", ".join(
-                                    a.get("name", "")
-                                    for a in (item.get("authors") or [])
-                                ),
-                                year=item.get("year"),
-                                abstract=(item.get("abstract") or "")[:200],
-                                doi=ext.get("DOI"),
-                                arxiv_id=ext.get("ArXiv"),
-                                pdf_url=oa.get("url"),
-                                is_oa=bool(oa.get("url")),
-                            )
+                    ext = item.get("externalIds") or {}
+                    oa = item.get("openAccessPdf") or {}
+                    papers.append(
+                        PaperMeta(
+                            paper_id=pid,
+                            title=item.get("title", "Unknown"),
+                            authors=", ".join(
+                                a.get("name", "") for a in (item.get("authors") or [])
+                            ),
+                            year=item.get("year"),
+                            abstract=(item.get("abstract") or "")[:300],
+                            doi=ext.get("DOI"),
+                            arxiv_id=ext.get("ArXiv"),
+                            pdf_url=oa.get("url"),
+                            is_oa=bool(oa.get("url")),
                         )
-                    break
-                except Exception:
-                    if attempt == 1:
-                        logger.debug(f"S2 failed for '{kw}'")
+                    )
+                break
+            except Exception:
+                logger.debug(f"S2 failed for '{kw}'")
     return papers
 
 
@@ -584,3 +598,135 @@ async def _enrich_via_unpaywall(papers: list[PaperMeta]) -> int:
         enriched = sum(r for r in results if isinstance(r, int))
     return enriched
     return enriched
+
+
+# ---- CORE API (free, 30M+ OA papers) ----
+CORE_URL = "https://api.core.ac.uk/v3/search/works"
+
+
+async def _search_core(keywords: list[str]) -> list[PaperMeta]:
+    """CORE.ac.uk — 30M+ OA论文聚合器。免费API, 30s超时。"""
+    papers: list[PaperMeta] = []
+    async with httpx.AsyncClient(timeout=12.0) as client:
+        for kw in keywords[:1]:
+            try:
+                resp = await client.get(
+                    CORE_URL,
+                    params={"q": kw, "limit": 15, "scroll": "false"},
+                    headers={"User-Agent": "AI-Research-Assistant/1.0"},
+                )
+                if resp.status_code != 200:
+                    continue
+                for item in resp.json().get("results", []):
+                    pid = f"core:{item.get('id','')}"
+                    papers.append(
+                        PaperMeta(
+                            paper_id=pid,
+                            title=item.get("title", "Unknown"),
+                            authors=", ".join(
+                                a.get("name", "") for a in (item.get("authors") or [])
+                            ),
+                            year=item.get("yearPublished"),
+                            abstract=(item.get("abstract") or "")[:300],
+                            doi=item.get("doi"),
+                            is_oa=True,
+                            pdf_url=item.get("downloadUrl")
+                            or item.get("sourceFulltextUrls", [None])[0],
+                        )
+                    )
+            except Exception:
+                pass
+    return papers
+
+
+# ---- Crossref API (free, 140M+ DOI metadata) ----
+CROSSREF_URL = "https://api.crossref.org/works"
+
+
+async def _search_crossref(keywords: list[str]) -> list[PaperMeta]:
+    """Crossref — 140M+ DOI元数据。免费API, 礼貌使用。"""
+    papers: list[PaperMeta] = []
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        for kw in keywords[:1]:
+            try:
+                resp = await client.get(
+                    CROSSREF_URL,
+                    params={"query": kw, "rows": 15, "filter": "type:journal-article"},
+                    headers={
+                        "User-Agent": "AI-Research-Assistant/1.0 (mailto:research@example.com)"
+                    },
+                )
+                if resp.status_code != 200:
+                    continue
+                for item in resp.json().get("message", {}).get("items", []):
+                    pid = f"crossref:{item.get('DOI','')}"
+                    authors = item.get("author", [])
+                    yr = (
+                        item.get("published-print", {}).get("date-parts", [[None]])[0][
+                            0
+                        ]
+                        or item.get("created", {}).get("date-parts", [[None]])[0][0]
+                    )
+                    papers.append(
+                        PaperMeta(
+                            paper_id=pid,
+                            title=(item.get("title") or ["Unknown"])[0],
+                            authors=", ".join(
+                                (a.get("family", "") or "") for a in authors
+                            ),
+                            year=yr,
+                            abstract=item.get("abstract", "")[:300],
+                            doi=item.get("DOI"),
+                            is_oa=(item.get("license") or [{}])[0]
+                            .get("URL", "")
+                            .find("creativecommons")
+                            >= 0,
+                        )
+                    )
+            except Exception:
+                pass
+    return papers
+
+
+# ---- DOAJ API (free, all OA journals) ----
+DOAJ_URL = "https://doaj.org/api/search/articles"
+
+
+async def _search_doaj(keywords: list[str]) -> list[PaperMeta]:
+    """DOAJ — Directory of Open Access Journals。全部免费。"""
+    papers: list[PaperMeta] = []
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        for kw in keywords[:1]:
+            try:
+                resp = await client.get(
+                    DOAJ_URL,
+                    params={"q": kw, "pageSize": 15},
+                )
+                if resp.status_code != 200:
+                    continue
+                for item in resp.json().get("results", []):
+                    bib = item.get("bibjson", {})
+                    pid = f"doaj:{item.get('id','')}"
+                    papers.append(
+                        PaperMeta(
+                            paper_id=pid,
+                            title=bib.get("title", "Unknown"),
+                            authors=", ".join(
+                                a.get("name", "") for a in bib.get("author", [])
+                            ),
+                            year=int(bib.get("year", 0)) if bib.get("year") else None,
+                            abstract=bib.get("abstract", "")[:300],
+                            is_oa=True,
+                            pdf_url=next(
+                                (
+                                    lnk["url"]
+                                    for lnk in bib.get("link", [])
+                                    if lnk.get("type") == "fulltext"
+                                ),
+                                None,
+                            ),
+                        )
+                    )
+            except Exception:
+                pass
+    return papers

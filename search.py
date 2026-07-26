@@ -169,7 +169,7 @@ async def search_papers_for_topic(
     keywords_en: list[str] | None = None,
     keywords_cn: list[str] | None = None,
 ) -> list[PaperMeta]:
-    """并行搜索 6 源，总超时 12s。超时不阻塞——有多少返回多少。"""
+    """6 源并行搜索: 每源独立超时, 快源先回, 慢源不拖累。"""
     if not keywords_en:
         strategy = await generate_search_strategy(query)
         keywords_en = strategy.get("keywords_en", [])[:2]
@@ -177,27 +177,28 @@ async def search_papers_for_topic(
     if not keywords_en:
         keywords_en = [query]
 
-    # 并行搜索 + 12s 超时
-    try:
-        results = await asyncio.wait_for(
-            asyncio.gather(
-                _search_arxiv(keywords_en[:1]),  # 减少关键词数加速
-                _search_openalex(keywords_en[:1]),
-                _search_openalex_cn((keywords_cn or [query])[:1]),
-                _search_google_scholar_apify(keywords_en[:1]),
-                _search_s2(keywords_en[:1]),
-                _make_cnki_async(query, (keywords_cn or [query])[:2]),
-                return_exceptions=True,
-            ),
-            timeout=12.0,
-        )
-    except asyncio.TimeoutError:
-        results = []
-    s2_papers = results[0] if not isinstance(results[0], BaseException) else []
-    arxiv_papers = results[1] if not isinstance(results[1], BaseException) else []
-    oa_papers = results[2] if not isinstance(results[2], BaseException) else []
-    cn_papers = results[3] if not isinstance(results[3], BaseException) else []
-    gs_papers = results[4] if not isinstance(results[4], BaseException) else []
+    kw_en, kw_cn = keywords_en[:1], (keywords_cn or [query])[:1]
+
+    # 每源独立超时: arXiv/OpenAlex=8s, S2/Apify=3s, CNKI=2s
+    async def _safe(fn, *a, timeout_s=10, **kw):
+        try:
+            return await asyncio.wait_for(fn(*a, **kw), timeout=timeout_s)
+        except:
+            return []
+
+    results = await asyncio.gather(
+        _safe(_search_arxiv, kw_en, timeout_s=10),
+        _safe(_search_openalex, kw_en, timeout_s=10),
+        _safe(_search_openalex_cn, kw_cn, timeout_s=10),
+        _safe(_search_google_scholar_apify, kw_en, timeout_s=3),
+        _safe(_search_s2, kw_en, timeout_s=3),
+        _safe(_make_cnki_async, query, kw_cn, timeout_s=2),
+    )
+    arxiv_papers = results[0] if not isinstance(results[0], BaseException) else []
+    oa_papers = results[1] if not isinstance(results[1], BaseException) else []
+    cn_papers = results[2] if not isinstance(results[2], BaseException) else []
+    gs_papers = results[3] if not isinstance(results[3], BaseException) else []
+    s2_papers = results[4] if not isinstance(results[4], BaseException) else []
     cnki_papers = results[5] if not isinstance(results[5], BaseException) else []
 
     # 合并去重 + 屏蔽过滤 + 语言检测 + CN 相关性过滤
@@ -382,7 +383,7 @@ async def _search_arxiv(keywords: list[str]) -> list[PaperMeta]:
                     )
             except Exception:
                 pass
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.05)
     return papers
 
 
@@ -434,7 +435,7 @@ async def _search_openalex(keywords: list[str]) -> list[PaperMeta]:
                     )
             except Exception:
                 pass
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.1)
     return papers
 
 
@@ -482,7 +483,7 @@ async def _search_openalex_cn(keywords: list[str]) -> list[PaperMeta]:
                     )
             except Exception:
                 pass
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.1)
     return papers
 
 
@@ -551,29 +552,35 @@ UNPAYWALL_EMAIL = "research@academic-assistant.io"
 
 
 async def _enrich_via_unpaywall(papers: list[PaperMeta]) -> int:
-    """对无 pdf_url 但有 DOI 的论文，调 Unpaywall 查合法免费 PDF。
+    """对无 pdf_url 但有 DOI 的论文，并行调 Unpaywall 查合法免费 PDF（限5篇,3s超时）。
     免费 API，每分钟 100 次，无需注册。"""
-    enriched = 0
-    candidates = [p for p in papers if not p.pdf_url and p.doi]
+    candidates = [p for p in papers if not p.pdf_url and p.doi][:5]
     if not candidates:
         return 0
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        for p in candidates[:20]:  # 最多查 20 篇，避免太慢
+    async with httpx.AsyncClient(timeout=5.0) as client:
+
+        async def _one(p):
             try:
                 resp = await client.get(
                     f"https://api.unpaywall.org/v2/{p.doi}",
                     params={"email": UNPAYWALL_EMAIL},
                 )
-                if resp.status_code != 200:
-                    continue
-                data = resp.json()
-                best = data.get("best_oa_location") or {}
-                pdf_url = best.get("url_for_pdf") or best.get("url")
-                if pdf_url:
-                    p.pdf_url = pdf_url
-                    p.is_oa = True
-                    enriched += 1
+                if resp.status_code == 200:
+                    data = resp.json()
+                    best = data.get("best_oa_location") or {}
+                    u = best.get("url_for_pdf") or best.get("url")
+                    if u:
+                        p.pdf_url = u
+                        p.is_oa = True
+                        return 1
             except Exception:
                 pass
+            return 0
+
+        results = await asyncio.gather(
+            *[_one(p) for p in candidates], return_exceptions=True
+        )
+        enriched = sum(r for r in results if isinstance(r, int))
+    return enriched
     return enriched

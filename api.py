@@ -345,6 +345,19 @@ async def api_search_papers(request: Request):
     keywords_en = req.get("keywords_en")
     keywords_cn = req.get("keywords_cn")
     papers = await search_papers_for_topic(query, keywords_en, keywords_cn)
+
+    def _paper_preview(p):
+        """Generate preview + download links for every paper."""
+        preview = None
+        dl = None
+        if p.doi:
+            preview = f"https://api.semanticscholar.org/DOI:{p.doi}"
+            dl = p.pdf_url or f"https://sci-hub.se/{p.doi}"
+        elif p.arxiv_id:
+            preview = f"https://arxiv.org/abs/{p.arxiv_id}"
+            dl = f"https://arxiv.org/pdf/{p.arxiv_id}.pdf"
+        return preview, dl
+
     return {
         "papers": [
             {
@@ -352,21 +365,30 @@ async def api_search_papers(request: Request):
                 "title": p.title,
                 "authors": p.authors,
                 "year": p.year,
-                "abstract": (p.abstract or "")[:300],
+                "abstract": (p.abstract or "")[:500],
                 "doi": p.doi,
                 "arxiv_id": p.arxiv_id,
                 "is_oa": p.is_oa,
                 "pdf_url": p.pdf_url,
+                "preview_url": _paper_preview(p)[0],
+                "download_url": _paper_preview(p)[1],
                 "source": _paper_source(p),
                 "doi_url": f"https://doi.org/{p.doi}" if p.doi else None,
-                "cnki_url": _cnki_search_url(p.title) if not p.is_oa else None,
-                "google_scholar_url": _gs_search_url(p.title) if not p.is_oa else None,
-                "semantic_scholar_url": f"https://api.semanticscholar.org/CorpusID:{p.paper_id}"
-                if p.paper_id
-                else None,
+                "cnki_url": _cnki_search_url(p.title) if p.title else None,
+                "google_scholar_url": _gs_search_url(p.title) if p.title else None,
+                "semantic_scholar_url": (
+                    f"https://api.semanticscholar.org/CorpusID:{p.paper_id}"
+                    if p.paper_id
+                    else None
+                ),
             }
             for p in papers
-        ]
+        ],
+        "counts": {
+            "total": len(papers),
+            "oa_downloadable": sum(1 for p in papers if p.is_oa and p.pdf_url),
+            "has_preview": sum(1 for p in papers if p.doi or p.arxiv_id),
+        },
     }
 
 

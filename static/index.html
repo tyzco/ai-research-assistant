@@ -241,17 +241,9 @@ function R(){
     h+='<div class="strat-grid">';(S.strategy.boolean_queries||[]).slice(0,4).forEach(bq=>{h+='<div class="strat-card"><div class="db">'+esc(bq.database||'')+'</div><pre>'+esc(bq.query||'')+'</pre></div>';});h+='</div></div>';
   }
   if(S.agentSteps.length){h+='<div class="msg card" style="animation-delay:.05s"><div style="font-weight:600;font-size:13px;margin-bottom:8px;color:var(--brand)">🤖 Agent 执行过程</div>';S.agentSteps.forEach((s,i)=>{let icon=s.tool_result?'✅':'🧠';let label=s.tool_result?'工具返回':'思考分析';let cls=s.tool_result?'':'shimmer-text';h+='<div class="agent-step" style="animation-delay:'+(i*.1)+'s"><div class="label">'+icon+' Step '+s.step+': '+label+'</div>';if(s.tool_result){try{let tr=JSON.parse(s.tool_result);if(tr.total)h+='<div class="detail">📄 搜索到 '+tr.total+' 篇论文</div>';if(tr.best_kb)h+='<div class="detail">📚 推荐知识库: '+tr.best_kb+'</div>';if(tr.answer)h+='<div class="detail">💬 '+tr.answer.substring(0,100)+'...</div>'}catch(e){h+='<div class="detail">'+esc(String(s.tool_result).substring(0,120))+'</div>'}}else{h+='<div class="detail '+cls+'">'+esc(s.thought||'分析中…')+'</div>'}h+='</div>'});h+='</div>'}if(S.phase==='searching'&&!S.pps.length){h+='<div class="loading" style="animation-delay:.2s"><div class="status">🔍 正在多源搜索论文…</div><div class="skeleton w80"></div><div class="skeleton w100"></div><div class="skeleton w60"></div></div>'}
-  if(S.pps.length){
-    let cn=S.pps.filter(p=>isCN(p.title)||(p.title||'').startsWith('[知网]')),en=S.pps.filter(p=>!isCN(p.title)&&!(p.title||'').startsWith('[知网]'));
-    let sh=Math.min((S.pg+1)*10,S.pps.length),oa=S.pps.filter(p=>p.is_oa&&p.pdf_url).length;
-    h+='<div class="msg card" style="animation-delay:.15s"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="font-size:11px;color:var(--muted);font-weight:600">📄 <span class="count-pop" style="display:inline-block">'+S.pps.length+'</span>篇, '+oa+'可下载</span><span style="display:flex;gap:6px"><button class="tag green" style="cursor:pointer;font-size:11px;padding:5px 10px" onclick="B()">⬇📥 一键下载并构建</button><button class="tag gray" style="cursor:pointer;font-size:11px;padding:5px 10px" onclick="KGBatch()">📊 加入图谱</button></span></div>';
-    if(cn.length){h+='<div class="cn-header">🇨🇳 中文论文 <span class="badge">'+cn.length+'篇</span></div>';cn.slice(0,Math.min(sh,cn.length)).forEach(p=>h+=PR(p));}
-    if(en.length){let se=Math.max(0,sh-(cn.length?Math.min(sh,cn.length):0));h+='<div class="en-header">🌐 英文论文 <span class="badge">'+en.length+'篇</span></div>';en.slice(0,se).forEach(p=>h+=PR(p));}
-    if(S.pps.length>sh)h+='<div style="text-align:center;margin-top:6px"><button class="tag gray" onclick="S.pg++;R()" style="cursor:pointer;font-size:11px;padding:5px 14px">加载更多 (剩余'+(S.pps.length-sh)+'篇)</button></div>';
-    h+='</div>';
-    h+='<div style="font-size:10px;color:var(--muted);background:var(--hover);border-radius:8px;padding:10px 14px;margin-top:8px;line-height:1.7"><b>📥 获取 PDF：</b>复制 DOI 到 <a href="https://sci-hub.se" target="_blank" style="color:var(--brand)">Sci-Hub</a> · <a href="https://sci-hub.st" target="_blank" style="color:var(--brand)">镜像</a> · <a href="https://scholar.google.com" target="_blank" style="color:var(--brand)">谷歌学术</a> · 学校图书馆 → 拖拽 PDF 到本页上传构建知识库</div>';
-  }
+  if(S.pps.length){h+='<div class="msg card" style="animation-delay:.1s;font-size:11px">📄 '+S.pps.length+' papers · <span style="cursor:pointer;color:var(--brand);text-decoration:underline" onclick="togglePapers()">Toggle panel</span></div>'}
   document.getElementById('cc').innerHTML=h;
+  renderPapers();
   // Preview panel
   document.getElementById('ht').textContent=S.q||'PaperLink';
   var el=document.getElementById('st');var txt=PHASES[S.phase]||S.phase;if(el.textContent!==txt){el.innerHTML='<span class=\"count-pop\" style=\"display:inline-block\">'+txt+'</span>';setTimeout(function(){el.textContent=txt},350)}else{el.textContent=txt};
@@ -293,6 +285,31 @@ function K(){var el=document.getElementById('tl');if(!S.ts.length){el.innerHTML=
 // Event delegation: click any .topic-item -> call W()
 (function(){var tl=document.getElementById('tl');tl.addEventListener('click',function(e){if(e.target.tagName==='BUTTON')return;var item=e.target.closest('.topic-item');if(item){var tid=item.getAttribute('data-tid');if(tid)W(tid)}},true)})()
 function md(t){if(!t)return'';let h=esc(t);h=h.replace(/^### (.+)$/gm,'<h3>$1</h3>');h=h.replace(/^## (.+)$/gm,'<h2>$1</h2>');h=h.replace(/^# (.+)$/gm,'<h1>$1</h1>');h=h.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');h=h.replace(/```([\s\S]*?)```/g,'<pre>$1</pre>');h=h.replace(/`([^`]+)`/g,'<code>$1</code>');h=h.replace(/^> (.+)$/gm,'<blockquote>$1</blockquote>');h=h.replace(/\[([^\]]+)\]\(([^)]+)\)/g,'<a href="$2" target="_blank">$1</a>');h=h.replace(/\n\n/g,'</p><p>');h=h.replace(/\n/g,'<br>');return'<p>'+h+'</p>'}
+var _papersVisible = false;
+function togglePapers(){_papersVisible = !_papersVisible; renderPapers()}
+function renderPapers(){
+  var el = document.getElementById('papers-panel');
+  if (!S.pps.length) { if(el) el.remove(); return }
+  if (!_papersVisible) { if(el) el.remove(); return }
+  if (!el) {
+    el = document.createElement('div'); el.id = 'papers-panel';
+    el.style.cssText = 'position:fixed;top:0;right:0;width:420px;height:100vh;background:var(--card);border-left:1px solid var(--border);padding:16px;overflow-y:auto;z-index:49;box-shadow:-4px 0 20px rgba(0,0,0,.3)';
+    document.body.appendChild(el);
+  }
+  var oa = S.pps.filter(function(p){return p.is_oa&&p.pdf_url}).length;
+  var cn = S.pps.filter(function(p){return isCN(p.title)||(p.title||'').startsWith('[CNKI]')});
+  var en = S.pps.filter(function(p){return !isCN(p.title)&&!(p.title||'').startsWith('[CNKI]')});
+  var sh = Math.min((S.pg+1)*10, S.pps.length);
+  var h = '<button onclick="_papersVisible=false;var e=document.getElementById(\'papers-panel\');if(e)e.remove()" style="float:right;background:none;border:none;color:var(--muted);cursor:pointer;font-size:20px">&times;</button>';
+  h += '<div style="font-weight:600;font-size:13px;margin-bottom:8px">'+S.pps.length+' papers ('+oa+' OA downloadable)</div>';
+  h += '<div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap"><button class="tag green" onclick="B()" style="cursor:pointer;font-size:11px;padding:5px 10px">Download & Build</button><button class="tag gray" onclick="KGBatch()" style="cursor:pointer;font-size:11px;padding:5px 10px">Add to Graph</button><button class="tag gray" onclick="copyDOIs()" style="cursor:pointer;font-size:11px;padding:5px 10px">Copy DOIs</button></div>';
+  h += '<div style="font-size:10px;color:var(--muted);background:var(--hover);border-radius:6px;padding:8px 10px;margin-bottom:10px;line-height:1.6"><b>Get PDFs:</b> <a href="https://sci-hub.se" target="_blank">Sci-Hub</a> · <a href="https://sci-hub.st" target="_blank">Mirror</a> · <a href="https://scholar.google.com" target="_blank">GS</a> · university proxy &rarr; drag PDF to upload</div>';
+  if (cn.length) { h += '<div class="cn-header">Chinese <span class="badge">'+cn.length+'</span></div>'; for(var i=0;i<Math.min(sh,cn.length);i++) h+=PR(cn[i]) }
+  if (en.length) { var se = Math.max(0,sh-(cn.length?Math.min(sh,cn.length):0)); h += '<div class="en-header">English <span class="badge">'+en.length+'</span></div>'; for(var j=0;j<se;j++) h+=PR(en[j]) }
+  if (S.pps.length>sh) h += '<div style="text-align:center;margin-top:6px"><button class="tag gray" onclick="S.pg++;renderPapers()" style="cursor:pointer;font-size:11px;padding:5px 14px">Load more ('+(S.pps.length-sh)+')</button></div>';
+  el.innerHTML = h;
+}
+
 async function D(id){if(!confirm('Delete topic?'))return;try{await fetch(A+'/topic/'+id,{method:'DELETE'});S.ts=S.ts.filter(function(t){return t.topic_id!==id});if(S.tid===id)N();K()}catch(e){}}
 async function copyDOIs(){var ds=S.pps.filter(function(p){return p.doi}).map(function(p){return p.doi});if(!ds.length)return;navigator.clipboard.writeText(ds.join("\n"));alert("已复制 "+ds.length+" 个DOI")}
 function esc(s){let d=document.createElement('div');d.textContent=s||'';return d.innerHTML}

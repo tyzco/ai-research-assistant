@@ -872,6 +872,54 @@ async def api_ask(req: AskRequest):
 
     state = active_topics.get(req.topic_id)
     if not state:
+        # Topic not in memory — use agent/quick fallback (auto-finds KB)
+        question = sanitize_input(req.question)
+        try:
+            import lancedb as _lancedb
+            from openai import AsyncOpenAI
+
+            from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
+            from knowledge_base import _cosine_search, _embed_texts_sync
+
+            db = _lancedb.connect(str(LANCEDB_DIR))
+            raw = db.list_tables()
+            all_t = raw.tables if hasattr(raw, "tables") else []
+            best, best_n = "", 0
+            for t in all_t:
+                try:
+                    n = db.open_table(t).count_rows()
+                except:
+                    continue
+                if n > best_n:
+                    best, best_n = t, n
+            if best and best_n > 5:
+                qv = _embed_texts_sync([question])[0]
+                res = _cosine_search(
+                    db.open_table(best), qv, 5, "is_fulltext=true AND is_image=false"
+                )
+                ctx = "\n".join([r.get("text", "")[:500] for r in (res or [])[:3]])
+                client = AsyncOpenAI(
+                    api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL
+                )
+                resp = await client.chat.completions.create(
+                    model=DEEPSEEK_MODEL,
+                    temperature=0.3,
+                    max_tokens=400,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": f"基于上下文简洁回答（100-200字）。如果信息不足请说明。\n上下文：{ctx}\n问题：{question}\n回答：",
+                        }
+                    ],
+                )
+                return {
+                    "answer": resp.choices[0].message.content.strip(),
+                    "references": [],
+                    "supplement": [],
+                    "images": [],
+                }
+        except:
+            pass
         raise HTTPException(404, "Topic not found")
 
     question = sanitize_input(req.question)

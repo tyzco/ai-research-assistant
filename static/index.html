@@ -2,7 +2,7 @@
 <html lang="zh-CN" class="light">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>学术文献精读助手 v2</title>
+<title>PaperLink &mdash; 直达论文</title>
 <style>
 :root,.light{--bg:#f8fafc;--card:#fff;--text:#1e293b;--muted:#64748b;--border:#e2e8f0;--brand:#2563eb;--brand-light:#3b82f6;--green:#16a34a;--hover:#f1f5f9;--input-bg:#fff;--shadow:0 1px 3px rgba(0,0,0,.04);--red:#dc2626}
 .dark{--bg:#0f172a;--card:#1e293b;--text:#e2e8f0;--muted:#94a3b8;--border:#334155;--brand:#3b82f6;--brand-light:#60a5fa;--green:#22c55e;--hover:#334155;--input-bg:#1e293b;--shadow:0 1px 3px rgba(0,0,0,.2);--red:#ef4444}
@@ -131,7 +131,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans SC',sans
 <div id="fbar" style="position:fixed;top:0;left:0;right:0;height:2px;z-index:200;display:none;background:linear-gradient(90deg,transparent,var(--brand),transparent);background-size:60px 100%;animation:shimmer 1s linear infinite"></div>
 
 <aside class="sidebar">
-  <h2><i>A</i>学术精读助手</h2>
+  <h2><i>P</i>PaperLink</h2>
   <div style="padding:0 10px"><button class="btn-new" onclick="N()">+ 新建课题</button></div>
   <nav class="topic-list" id="tl"></nav>
   <div class="footnote">
@@ -142,7 +142,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans SC',sans
 
 <main class="main">
   <div class="topbar">
-    <span style="font-weight:600" id="ht">学术文献精读助手</span>
+    <span style="font-weight:600" id="ht">PaperLink</span>
     <span style="font-size:10px;color:var(--muted)" id="st"></span><span class="dot live" id="ldot" style="display:none"></span>
     <span style="margin-left:auto"></span>
     <button onclick="T()" title="暗色模式">🌓</button>
@@ -176,9 +176,9 @@ let S={ts:[],tid:null,q:'',msgs:[],strategy:null,pps:[],ppv:null,up:false,ld:fal
 (function I(){if(localStorage.aia_d==='1')document.documentElement.className='dark';L();let s=localStorage.aia_t;if(s){var found=S.ts.find(function(x){return x.topic_id===s});if(found){try{W(s)}catch(e){localStorage.removeItem('aia_t');Y()}}else{Y()}}else Y()})();
 function T(){let h=document.documentElement;h.className=h.className==='dark'?'light':'dark';localStorage.aia_d=h.className==='dark'?'1':'0'}
 async function L(){try{S.ts=await(await fetch(A+'/topics')).json();K()}catch(e){}}
-function Y(){S.msgs=[{r:'s',c:'# 📚 学术文献精读助手\n\n输入研究方向获取检索策略，一键下载论文自动建库，深度问答。\n\n试试：**人脸识别**·**量化交易**·**后疫情消费**'}];R()}
+function Y(){S.msgs=[{r:'s',c:'# PaperLink\n\n输入研究方向 / 提问 / 上传论文\n\n搜索 12 个学术数据库 · 自动构建知识库 · 深度问答'}];R()}
 function N(){clearInterval(S.pi);S.tid=null;S.q='';S.msgs=[];S.strategy=null;S.pps=[];S.up=false;S.ps=false;S.pg=0;localStorage.removeItem('aia_t');document.getElementById('uz').style.display='none';document.getElementById('pg').style.display='none';Y()}
-async function W(id){S.tid=id;localStorage.aia_t=id;let t=S.ts.find(x=>x.topic_id===id);S.q=t?.q||'';S.msgs=[{r:'s',c:'加载中…'}];R();try{let r=await fetch(A+'/create_topic',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:S.q})});let d=await r.json();S.strategy=d.strategy;S.msgs=[{r:'s',c:'# '+S.q+'\n\n检索策略已加载。'}];S.up=true;document.getElementById('uz').style.display='block';R();if(d.strategy.keywords_en&&d.strategy.keywords_en.length)SR(S.q,d.strategy.keywords_en,d.strategy.keywords_cn);S.ps=false;R()}catch(e){Ae('s','❌ '+e.message)}R()}
+async function W(id){S.tid=id;localStorage.aia_t=id;let t=S.ts.find(x=>x.topic_id===id);S.q=t?.q||'';S.msgs=[{r:'s',c:'加载中…'}];R();try{let r=await fetch(A+'/create_topic',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:S.q})});let d=await r.json();S.strategy=d.strategy;let sc='# '+S.q+'\n\n检索策略 &middot; '+(d.strategy.keywords_cn||[]).slice(0,4).join(' &middot; ')+'\n\n输入问题开始深度问答，或拖拽论文 PDF 上传。';Ae('s',sc);S.up=true;document.getElementById('uz').style.display='block';await L();R()}catch(e){Ae('s','❌ '+e.message);R()}}
 async function SR(q,ke,kc){
   S.pps=[];S.ps=true;document.getElementById('ldot').style.display='inline-block';document.getElementById('fbar').style.display='block';document.getElementById('ldot').className='dot live';R();
   try{
@@ -245,7 +245,7 @@ function R(){
   }
   document.getElementById('cc').innerHTML=h;
   // Preview panel
-  document.getElementById('ht').textContent=S.q||'学术文献精读助手';
+  document.getElementById('ht').textContent=S.q||'PaperLink';
   var el=document.getElementById('st');var txt=S.ld?'处理中…':(S.ps?'搜索论文中…':(S.up?'请上传/一键导入':(S.pps.length?S.pps.length+'篇':'')));if(el.textContent!==txt){el.innerHTML='<span class="count-pop" style="display:inline-block">'+txt+'</span>';setTimeout(function(){el.textContent=txt},350)}else{el.textContent=txt};
   document.getElementById('cc').scrollTop=document.getElementById('cc').scrollHeight;
 }

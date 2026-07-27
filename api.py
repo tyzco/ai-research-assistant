@@ -89,33 +89,43 @@ async def api_metrics():
 
 @app.get("/kg_data")
 async def api_kg_data(table: str = ""):
-    """知识图谱数据端点（D3.js 力导向图使用）。"""
-    from knowledge_graph import build_graph_from_kb
-
-    if table:
-        return build_graph_from_kb(table)
-    # 找最大 KB
+    """知识图谱数据端点。table 可以是 topic_id 或 LanceDB table 名。"""
     import lancedb
 
     from config import LANCEDB_DIR
+    from knowledge_graph import build_graph_from_kb
 
     db = lancedb.connect(str(LANCEDB_DIR))
-    try:
-        raw = db.list_tables()
-        tables = (
-            list(raw.tables)
-            if hasattr(raw, "tables")
-            else (list(raw[0]) if isinstance(raw, tuple) else list(raw))
-        )
-    except Exception:
-        tables = []
+    raw = db.list_tables()
+    all_tables = (
+        list(raw.tables)
+        if hasattr(raw, "tables")
+        else (list(raw[0]) if isinstance(raw, tuple) else list(raw))
+    )
+
+    # If table is a topic_id (12-char hex), resolve to lancedb table
+    lancedb_table = table
+    if table and len(table) == 12:
+        state = active_topics.get(table)
+        if state and state.lancedb_table:
+            lancedb_table = state.lancedb_table
+        elif table in all_tables:
+            lancedb_table = table  # happens to be a table name too
+        else:
+            # fallback: find largest table
+            pass
+
+    if lancedb_table and lancedb_table in all_tables:
+        return build_graph_from_kb(str(lancedb_table))
+
+    # Fallback: find largest KB
     best, best_n = "", 0
-    for t in tables:
+    for t in all_tables:
         try:
             n = db.open_table(t).count_rows()
             if n > best_n:
                 best, best_n = t, n
-        except Exception:
+        except:
             pass
     if not best:
         return {"nodes": [], "links": []}
@@ -303,13 +313,80 @@ async def api_export_topic(topic_id: str):
 
 
 def _quick_keywords(query: str) -> dict:
-    """Fast keyword extraction: local split, no LLM. Returns strategy-compatible dict."""
+    """Fast CN→EN keyword extraction, no LLM. Maps common academic terms."""
     import re
+
+    # 常用学术术语CN→EN映射
+    CN2EN = {
+        "计算机视觉": "computer vision",
+        "机器学习": "machine learning",
+        "深度学习": "deep learning",
+        "自然语言处理": "natural language processing",
+        "强化学习": "reinforcement learning",
+        "图像识别": "image recognition",
+        "目标检测": "object detection",
+        "语义分割": "semantic segmentation",
+        "人脸识别": "face recognition",
+        "语音识别": "speech recognition",
+        "知识图谱": "knowledge graph",
+        "迁移学习": "transfer learning",
+        "联邦学习": "federated learning",
+        "图神经网络": "graph neural network",
+        "注意力机制": "attention mechanism",
+        "生成对抗网络": "generative adversarial network",
+        "自监督学习": "self-supervised learning",
+        "对比学习": "contrastive learning",
+        "推荐系统": "recommender system",
+        "异常检测": "anomaly detection",
+        "时间序列": "time series",
+        "自动驾驶": "autonomous driving",
+        "情感分析": "sentiment analysis",
+        "文本分类": "text classification",
+        "命名实体识别": "named entity recognition",
+        "机器翻译": "machine translation",
+        "问答系统": "question answering",
+        "数据挖掘": "data mining",
+        "知识蒸馏": "knowledge distillation",
+        "模型压缩": "model compression",
+        "神经网络": "neural network",
+        "卷积神经网络": "convolutional neural network",
+        "循环神经网络": "recurrent neural network",
+        "人工智能": "artificial intelligence",
+        "大语言模型": "large language model",
+        "扩散模型": "diffusion model",
+        "多模态": "multimodal",
+        "视觉": "vision",
+        "图像": "image",
+        "视频": "video",
+        "机器人": "robot",
+        "优化": "optimization",
+        "推理": "reasoning",
+        "训练": "training",
+        "检测": "detection",
+        "分割": "segmentation",
+        "识别": "recognition",
+        "分类": "classification",
+        "预测": "prediction",
+        "生成": "generation",
+    }
 
     words = [w.strip() for w in re.split(r"[，,、\s]+", query) if w.strip()]
     cn = [w for w in words if any("一" <= c <= "鿿" for c in w)]
     en = [w.lower() for w in words if w.isascii() and len(w) >= 2]
-    # Generate boolean queries from keywords
+
+    # 中文关键词→英文翻译
+    en_translated = []
+    for kw in cn:
+        if kw in CN2EN:
+            en_translated.append(CN2EN[kw])
+    # 也尝试组合术语 (如"计算机视觉" 在cn列表中作为一个词)
+    query_stripped = re.sub(r"\s+", "", query)
+    if query_stripped in CN2EN and CN2EN[query_stripped] not in en_translated:
+        en_translated.insert(0, CN2EN[query_stripped])
+
+    keywords_en = en + en_translated if (en or en_translated) else [query]
+    keywords_cn = cn or [query]
+
     bq = []
     if cn:
         bq.append(
@@ -319,13 +396,18 @@ def _quick_keywords(query: str) -> dict:
                 "note": "中文核心关键词",
             }
         )
-    if en:
+    if keywords_en:
         bq.append(
-            {"database": "arXiv", "query": " OR ".join(en[:3]), "note": "英文核心关键词"}
+            {
+                "database": "arXiv",
+                "query": " OR ".join(keywords_en[:3]),
+                "note": "英文核心关键词",
+            }
         )
+
     return {
-        "keywords_cn": cn or [query],
-        "keywords_en": en or [query],
+        "keywords_cn": keywords_cn,
+        "keywords_en": keywords_en,
         "domain_tags": [],
         "related_terms_cn": [],
         "related_terms_en": [],

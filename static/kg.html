@@ -2,33 +2,29 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>论文知识图谱</title>
+<title>PaperLink Graph</title>
 <script src="https://d3js.org/d3.v7.min.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0b1120;color:#e2e8f0;overflow:hidden;height:100vh;display:flex}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans SC',sans-serif;background:#0b1120;color:#e2e8f0;overflow:hidden;height:100vh;display:flex}
 #graph{flex:1;position:relative}
 svg{width:100%;height:100%}
 #detail{width:340px;background:#1e293b;border-left:1px solid #334155;padding:16px;overflow-y:auto;display:none;flex-shrink:0}
 #detail.show{display:block}
 #detail h3{font-size:14px;color:#60a5fa;margin-bottom:8px;word-break:break-all}
 #detail .meta{font-size:11px;color:#94a3b8;margin-bottom:6px}
-#detail .meta span{margin-right:12px}
 #detail .links{margin-top:10px;border-top:1px solid #334155;padding-top:10px}
 #detail .links a{display:block;font-size:11px;color:#f59e0b;text-decoration:none;margin:4px 0}
 #detail .links a:hover{color:#60a5fa}
-#detail .abstract{font-size:11px;color:#94a3b8;margin-top:8px;line-height:1.5;max-height:120px;overflow-y:auto}
 #search{position:fixed;top:16px;right:368px;z-index:10}
 #search input{padding:7px 14px;border:1px solid #334155;border-radius:8px;background:rgba(30,41,59,.95);color:#e2e8f0;font-size:12px;width:200px;outline:none}
 #search input:focus{border-color:#60a5fa}
-#mode{position:fixed;top:16px;left:16px;z-index:10;display:flex;gap:6px}
-#mode button{padding:5px 12px;border:1px solid #334155;border-radius:6px;background:#1e293b;color:#94a3b8;font-size:11px;cursor:pointer}
-#mode button.on{background:#3b82f6;color:#fff;border-color:#3b82f6}
 #stats{position:fixed;bottom:16px;left:16px;z-index:10;background:rgba(30,41,59,.95);border:1px solid #334155;border-radius:10px;padding:10px 14px;font-size:11px}
 #stats span{margin:0 8px;color:#94a3b8}
 #stats b{color:#e2e8f0}
+#refreshBtn{position:fixed;top:16px;left:16px;z-index:10;padding:5px 14px;border:1px solid #334155;border-radius:6px;background:#1e293b;color:#94a3b8;font-size:11px;cursor:pointer}
+#refreshBtn:hover{color:#60a5fa;border-color:#60a5fa}
 .tt{position:fixed;background:rgba(30,41,59,.98);border:1px solid #334155;border-radius:8px;padding:8px 12px;font-size:11px;max-width:280px;pointer-events:none;z-index:100;display:none}
-.edge-label{font-size:8px;fill:#64748b;text-anchor:middle}
 .nl{font-size:8px;fill:#94a3b8;text-anchor:middle;pointer-events:none}
 .lk{stroke:#334155;stroke-opacity:.4}
 .lk.highlight{stroke:#f59e0b;stroke-opacity:.9;stroke-width:2}
@@ -37,11 +33,8 @@ svg{width:100%;height:100%}
 <body>
 <div id="graph"></div>
 <div id="detail"><div id="dcontent"></div></div>
-<div id="mode">
-  <button class="on" onclick="setMode('force')">力导向</button>
-  <button onclick="setMode('tree')">树状</button>
-</div>
-<div id="search"><input type="text" id="si" placeholder="搜索方法/数据集…"></div>
+<button id="refreshBtn" onclick="L()">Refresh</button>
+<div id="search"><input type="text" id="si" placeholder="Search..."></div>
 <div id="stats"></div>
 <div class="tt" id="tt"></div>
 
@@ -49,29 +42,20 @@ svg{width:100%;height:100%}
 var C=d3.scaleOrdinal().domain(['paper','method','dataset','metric']).range(['#3b82f6','#22c55e','#f59e0b','#ef4444']);
 var W=window.innerWidth-340,H=window.innerHeight;
 var svg=d3.select('#graph').append('svg').attr('width',W).attr('height',H),g=svg.append('g');
-var tt=d3.select('#tt'),selectedNode=null,mode='force';
-
+var tt=d3.select('#tt'),selectedNode=null;
 var sim=d3.forceSimulation()
   .force('link',d3.forceLink().id(function(d){return d.id}).distance(90).strength(.4))
   .force('charge',d3.forceManyBody().strength(-250))
   .force('center',d3.forceCenter(W/2,H/2))
   .force('collide',d3.forceCollide(35));
-
 svg.call(d3.zoom().scaleExtent([.1,5]).on('zoom',function(e){g.attr('transform',e.transform)}));
-
-function setMode(m){
-  mode=m;
-  d3.selectAll('#mode button').classed('on',false);
-  event.target.classList.add('on');
-  d3.selectAll('.nd').each(function(d){d.fx=null;d.fy=null});
-  sim.alpha(1).restart();
-}
 
 async function L(){
   try{
-    var r=await fetch('http://localhost:8001/kg_data');
-    var d=await r.json();
-    d3.select('#stats').html('<span>节点 <b>'+d.nodes.length+'</b></span><span>关系 <b>'+d.links.length+'</b></span><span>👆点击节点查看详情</span>');
+    var topic = localStorage.getItem('aia_t') || '';
+    var r = await fetch('http://localhost:8001/kg_data?table='+topic);
+    var d = await r.json();
+    d3.select('#stats').html('<span>Nodes <b>'+d.nodes.length+'</b></span><span>Edges <b>'+d.links.length+'</b></span><span>Click node for details</span>');
     if(!d.nodes.length){setTimeout(L,5000);return}
     R(d.nodes,d.links)
   }catch(e){setTimeout(L,5000)}
@@ -79,30 +63,21 @@ async function L(){
 
 function R(nodes,links){
   g.selectAll('.lk').remove();g.selectAll('.nd').remove();g.selectAll('.edge-label').remove();
-  if(mode==='tree'){renderTree(nodes,links);return}
-
   var lk=g.selectAll('.lk').data(links).enter().append('line').attr('class','lk');
   var nd=g.selectAll('.nd').data(nodes).enter().append('g').attr('class','nd')
     .call(d3.drag().on('start',function(e,d){if(!e.active)sim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y})
       .on('drag',function(e,d){d.fx=e.x;d.fy=e.y})
-      .on('end',function(e,d){if(!e.active)sim.alphaTarget(0);if(mode==='tree'){d.fx=null;d.fy=null}}));
-
+      .on('end',function(e,d){if(!e.active)sim.alphaTarget(0);d.fx=null;d.fy=null}));
   nd.append('circle').attr('r',function(d){return d.group==='paper'?7:5}).attr('fill',function(d){return C(d.group)})
     .attr('stroke',function(d){return d.group==='paper'?'rgba(59,130,246,.3)':'none'}).attr('stroke-width',2);
   nd.append('text').attr('class','nl').attr('dy',function(d){return d.group==='paper'?16:12})
     .text(function(d){return(d.label||d.id).substring(0,20)});
-
   nd.on('click',function(e,d){showDetail(d,nodes,links);e.stopPropagation()})
-    .on('mouseenter',function(e,d){
-      tt.style('display','block').html('<b>'+d.label+'</b><br><span style="color:#94a3b8">类型:'+d.group+' 年份:'+(d.year||'?')+'</span>');
-    })
+    .on('mouseenter',function(e,d){tt.style('display','block').html('<b>'+d.label+'</b><br><span style="color:#94a3b8">Type: '+d.group+' Year: '+(d.year||'?')+'</span>')})
     .on('mousemove',function(e){tt.style('left',(e.pageX+12)+'px').style('top',(e.pageY-10)+'px')})
     .on('mouseleave',function(){tt.style('display','none')});
-
-  // Edge labels
   g.selectAll('.edge-label').data(links.filter(function(l){return l.type})).enter()
-    .append('text').attr('class','edge-label').text(function(d){return d.type||''});
-
+    .append('text').attr('class','edge-label').attr('font-size','8px').attr('fill','#64748b').attr('text-anchor','middle').text(function(d){return d.type||''});
   sim.nodes(nodes).on('tick',function(){
     lk.attr('x1',function(d){return d.source.x}).attr('y1',function(d){return d.source.y})
       .attr('x2',function(d){return d.target.x}).attr('y2',function(d){return d.target.y});
@@ -112,68 +87,12 @@ function R(nodes,links){
   sim.force('link').links(links);sim.alpha(1).restart();
 }
 
-function renderTree(nodes,links){
-  // Build adjacency
-  var adj={};
-  nodes.forEach(function(n){adj[n.id]=[]});
-  links.forEach(function(l){
-    var sid=typeof l.source==='object'?l.source.id:l.source;
-    var tid=typeof l.target==='object'?l.target.id:l.target;
-    if(adj[sid])adj[sid].push(tid);
-    if(adj[tid])adj[tid].push(sid);
-  });
-  // Pick root: node with most connections
-  var rootId=nodes[0].id,maxDeg=0;
-  nodes.forEach(function(n){if((adj[n.id]||[]).length>maxDeg){maxDeg=adj[n.id].length;rootId=n.id}});
-  var root=nodes.find(function(n){return n.id===rootId});
-
-  // Simple radial tree layout
-  var cx=W/2,cy=H/2,radius=Math.min(W,H)/3;
-  var visited={};visited[rootId]=true;
-  var queue=[{id:rootId,x:cx,y:cy,r:radius,angle:0,span:2*Math.PI}];
-
-  while(queue.length){
-    var p=queue.shift();
-    var children=(adj[p.id]||[]).filter(function(c){return !visited[c]});
-    children.forEach(function(c,i){visited[c]=true});
-    if(!children.length)continue;
-    var step=p.span/children.length;
-    children.forEach(function(c,i){
-      var a=p.angle-step*(children.length-1)/2+step*i;
-      var nr=p.r*0.6;
-      var x=p.x+nr*Math.cos(a-Math.PI/2),y=p.y+nr*Math.sin(a-Math.PI/2);
-      queue.push({id:c,x:x,y:y,r:nr,angle:a,span:step});
-      var cn=nodes.find(function(n){return n.id===c});
-      if(cn){cn.fx=x;cn.fy=y}
-    });
-  }
-
-  // Re-render with force
-  var lk=g.selectAll('.lk').data(links).enter().append('line').attr('class','lk');
-  var nd=g.selectAll('.nd').data(nodes).enter().append('g').attr('class','nd');
-
-  nd.append('circle').attr('r',function(d){return d.id===rootId?10:5}).attr('fill',function(d){return C(d.group)})
-    .attr('stroke',function(d){return d.id===rootId?'#f59e0b':'none'}).attr('stroke-width',function(d){return d.id===rootId?3:0});
-  nd.append('text').attr('class','nl').attr('dy',function(d){return d.id===rootId?16:12})
-    .text(function(d){return d.id===rootId?'★ '+(d.label||'').substring(0,16):(d.label||d.id).substring(0,14)});
-
-  nd.on('click',function(e,d){showDetail(d,nodes,links);e.stopPropagation()});
-
-  sim.nodes(nodes).alpha(1).on('tick',function(){
-    lk.attr('x1',function(d){return d.source.x}).attr('y1',function(d){return d.source.y})
-      .attr('x2',function(d){return d.target.x}).attr('y2',function(d){return d.target.y});
-    nd.attr('transform',function(d){return'translate('+d.x+','+d.y+')'});
-  });
-  sim.force('link').links(links);
-}
-
 function showDetail(d,nodes,links){
   selectedNode=d;
-  var panel=d3.select('#detail');
-  panel.classed('show',true).select('#dcontent').html(
+  d3.select('#detail').classed('show',true).select('#dcontent').html(
     '<h3>'+d.label+'</h3>'+
-    '<div class="meta"><span>类型: '+d.group+'</span><span>年份: '+(d.year||'?')+'</span></div>'+
-    '<div class="links"><b>关联:</b>'+
+    '<div class="meta"><span>Type: '+d.group+'</span><span>Year: '+(d.year||'?')+'</span></div>'+
+    '<div class="links"><b>Connections:</b>'+
     links.filter(function(l){
       var s=typeof l.source==='object'?l.source.id:l.source;
       var t=typeof l.target==='object'?l.target.id:l.target;
@@ -187,10 +106,8 @@ function showDetail(d,nodes,links){
       return '<a href="#" onclick="event.preventDefault();jumpTo(\''+other+'\')">'+label+' → '+(otherNode?otherNode.label.substring(0,40):other)+'</a>';
     }).join('')+
     '</div>'+
-    '<div class="abstract" style="margin-top:12px"><button onclick="event.preventDefault();window.open(\'http://localhost:8001/kg/build\',\'_blank\')" style="padding:6px 12px;background:#7c3aed;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer">🔄 构建增强图谱 (LLM实体抽取)</button></div>'
+    '<div style="margin-top:12px"><button onclick="event.preventDefault();window.open(\'http://localhost:8001/kg/build\',\'_blank\')" style="padding:6px 12px;background:#7c3aed;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer">Rebuild with LLM entities</button></div>'
   );
-
-  // Highlight connected edges
   g.selectAll('.lk').classed('highlight',function(l){
     var s=typeof l.source==='object'?l.source.id:l.source;
     var t=typeof l.target==='object'?l.target.id:l.target;
@@ -203,7 +120,6 @@ function jumpTo(nodeId){
   if(!nd.empty()){
     var d=nd.datum();
     showDetail(d,g.selectAll('.nd').data(),g.selectAll('.lk').data());
-    // Fly to node
     var transform=d3.zoomIdentity.translate(W/2-d.x,H/2-d.y).scale(2);
     svg.transition().duration(750).call(d3.zoom().transform,transform);
   }
@@ -215,7 +131,6 @@ d3.select('#si').on('input',function(){
   g.selectAll('.nd').style('opacity',function(d){return(d.label||'').toLowerCase().includes(q)?1:.15});
   g.selectAll('.lk').style('opacity',0.1);
 });
-
 L();
 </script>
 </body>

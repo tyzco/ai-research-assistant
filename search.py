@@ -269,7 +269,10 @@ async def search_papers_for_topic(
         + arxiv_papers
         + core_papers
         + crossref_papers
-        + doaj_papers + epmc_papers + pubmed_papers + pwc_papers
+        + doaj_papers
+        + epmc_papers
+        + pubmed_papers
+        + pwc_papers
     )
     for p in all_papers:
         if _should_drop(p):
@@ -313,11 +316,12 @@ async def search_papers_for_topic(
             -(p.year or 0),  # 年份降序
         )
     )
-    # Unpaywall 补充 PDF 直链（对无 pdf_url 但有 DOI 的论文）
+    # Unpaywall 补充 PDF 直链
     enriched = await _enrich_via_unpaywall(papers)
+    # 摘要补全：对无摘要论文，通过 Crossref/OpenAlex 补全
+    abs_enriched = await _enrich_abstracts(papers)
     logger.info(
-        f"Search: {len(papers)} papers (CNKI:{len(cnki_papers)} GS:{len(gs_papers)} CN:{len(cn_papers)} OA:{len(oa_papers)} S2:{len(s2_papers)} arXiv:{len(arxiv_papers)}), "
-        f"{enriched} enriched via Unpaywall"
+        f"Search: {len(papers)} papers, {enriched} PDFs via Unpaywall, {abs_enriched} abstracts filled"
     )
     return papers
 
@@ -603,6 +607,46 @@ async def _make_cnki_async(query: str, keywords_cn: list[str]) -> list[PaperMeta
 UNPAYWALL_EMAIL = "research@academic-assistant.io"
 
 
+async def _enrich_abstracts(papers: list[PaperMeta]) -> int:
+    """对无摘要论文, 并行通过 Crossref 补全摘要 (限 10 篇, 3s 超时)."""
+    candidates = [
+        p for p in papers if (not p.abstract or len(p.abstract) < 30) and p.doi
+    ][:10]
+    if not candidates:
+        return 0
+
+    filled = 0
+    async with httpx.AsyncClient(timeout=5.0) as client:
+
+        async def _one(p):
+            try:
+                resp = await client.get(
+                    f"https://api.crossref.org/works/{p.doi}",
+                    headers={
+                        "User-Agent": "AI-Research-Assistant/1.0 (mailto:research@example.com)"
+                    },
+                )
+                if resp.status_code == 200:
+                    msg = resp.json().get("message", {})
+                    abstract = msg.get("abstract", "")
+                    if abstract and len(abstract) > 30:
+                        # Strip HTML tags from Crossref abstract
+                        import re
+
+                        abstract = re.sub(r"<[^>]+>", "", abstract)[:500]
+                        p.abstract = abstract
+                        return 1
+            except Exception:
+                pass
+            return 0
+
+        results = await asyncio.gather(
+            *[_one(p) for p in candidates], return_exceptions=True
+        )
+        filled = sum(r for r in results if isinstance(r, int))
+    return filled
+
+
 async def _enrich_via_unpaywall(papers: list[PaperMeta]) -> int:
     """对无 pdf_url 但有 DOI 的论文，并行调 Unpaywall 查合法免费 PDF（限5篇,3s超时）。
     免费 API，每分钟 100 次，无需注册。"""
@@ -869,8 +913,10 @@ async def _search_pwc(keywords: list[str]) -> list[PaperMeta]:
                 pass
     return papers
 
+
 # ---- Europe PMC (free, 41M+ life sciences, richer metadata than PubMed) ----
 EPMC_URL = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+
 
 async def _search_epmc(keywords: list[str]) -> list[PaperMeta]:
     """Europe PMC — 41M+ life science papers, free API. OA标志+PDF链接。"""
@@ -880,20 +926,34 @@ async def _search_epmc(keywords: list[str]) -> list[PaperMeta]:
             try:
                 resp = await client.get(
                     EPMC_URL,
-                    params={"query": kw, "resultType": "core", "pageSize": 20, "format": "json"},
+                    params={
+                        "query": kw,
+                        "resultType": "core",
+                        "pageSize": 20,
+                        "format": "json",
+                    },
                 )
-                if resp.status_code != 200: continue
+                if resp.status_code != 200:
+                    continue
                 for item in resp.json().get("resultList", {}).get("result", []):
                     doi = item.get("doi")
                     pdfl = item.get("hasPDF") if item.get("hasPDF") == "Y" else None
-                    papers.append(PaperMeta(
-                        paper_id=f"epmc:{item.get('id','')}",
-                        title=item.get("title", "Unknown"),
-                        authors=item.get("authorString", ""),
-                        year=int(item.get("pubYear", 0)) if item.get("pubYear") else None,
-                        abstract=(item.get("abstractText") or "")[:300],
-                        doi=doi, is_oa=item.get("isOpenAccess") == "Y",
-                        pdf_url=f"https://europepmc.org/articles/{item.get('pmcid')}/pdf" if item.get("pmcid") and pdfl else None,
-                    ))
-            except Exception: pass
+                    papers.append(
+                        PaperMeta(
+                            paper_id=f"epmc:{item.get('id','')}",
+                            title=item.get("title", "Unknown"),
+                            authors=item.get("authorString", ""),
+                            year=int(item.get("pubYear", 0))
+                            if item.get("pubYear")
+                            else None,
+                            abstract=(item.get("abstractText") or "")[:300],
+                            doi=doi,
+                            is_oa=item.get("isOpenAccess") == "Y",
+                            pdf_url=f"https://europepmc.org/articles/{item.get('pmcid')}/pdf"
+                            if item.get("pmcid") and pdfl
+                            else None,
+                        )
+                    )
+            except Exception:
+                pass
     return papers

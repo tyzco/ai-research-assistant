@@ -175,7 +175,7 @@ const A='http://localhost:8001';
 let S={ts:[],tid:null,q:'',msgs:[],strategy:null,pps:[],ppv:null,phase:'welcome',pg:0,pi:null,agent:false,agentSteps:[]};
 var PHASES={welcome:'等待输入',strategy:'策略就绪',searching:'搜索中',papers_loaded:'论文已加载',building:'构建知识库',ready:'可以提问',thinking:'生成中'};
 function setPhase(p){var prev=S.phase;S.phase=p;console.log('Phase: '+prev+' → '+p);R()}
-(async function I(){if(localStorage.aia_d==='1')document.documentElement.className='dark';await L();let s=localStorage.aia_t;if(s){var found=S.ts.find(function(x){return x.topic_id===s});if(found){try{await W(s)}catch(e){localStorage.removeItem('aia_t');Y()}}else{Y()}}else Y()})();
+(function I(){if(localStorage.aia_d==='1')document.documentElement.className='dark';L();var s=localStorage.aia_t;if(s){setTimeout(function(){var found=S.ts.find(function(x){return x.topic_id===s});if(found){W(s).catch(function(){localStorage.removeItem('aia_t');Y()})}else{Y()}},800)}else Y()})();
 function T(){let h=document.documentElement;h.className=h.className==='dark'?'light':'dark';localStorage.aia_d=h.className==='dark'?'1':'0'}
 async function L(){try{S.ts=await(await fetch(A+'/topics')).json();K()}catch(e){}}
 function Y(){S.msgs=[{r:'s',c:'# PaperLink\n\n输入研究方向 / 提问 / 上传论文\n\n搜索 12 个学术数据库 · 自动构建知识库 · 深度问答'}];R()}

@@ -312,88 +312,88 @@ async def api_export_topic(topic_id: str):
     )
 
 
-def _quick_keywords(query: str) -> dict:
-    """Fast CN→EN keyword extraction, no LLM. Maps common academic terms."""
+async def _translate_cn_query(query: str) -> str:
     import re
 
-    # 常用学术术语CN→EN映射
-    CN2EN = {
-        "计算机视觉": "computer vision",
-        "机器学习": "machine learning",
-        "深度学习": "deep learning",
-        "自然语言处理": "natural language processing",
-        "强化学习": "reinforcement learning",
-        "图像识别": "image recognition",
-        "目标检测": "object detection",
-        "语义分割": "semantic segmentation",
-        "人脸识别": "face recognition",
-        "语音识别": "speech recognition",
-        "知识图谱": "knowledge graph",
-        "迁移学习": "transfer learning",
-        "联邦学习": "federated learning",
-        "图神经网络": "graph neural network",
-        "注意力机制": "attention mechanism",
-        "生成对抗网络": "generative adversarial network",
-        "自监督学习": "self-supervised learning",
-        "对比学习": "contrastive learning",
-        "推荐系统": "recommender system",
-        "异常检测": "anomaly detection",
-        "时间序列": "time series",
-        "自动驾驶": "autonomous driving",
-        "情感分析": "sentiment analysis",
-        "文本分类": "text classification",
-        "命名实体识别": "named entity recognition",
-        "机器翻译": "machine translation",
-        "问答系统": "question answering",
-        "数据挖掘": "data mining",
-        "知识蒸馏": "knowledge distillation",
-        "模型压缩": "model compression",
-        "神经网络": "neural network",
-        "卷积神经网络": "convolutional neural network",
-        "循环神经网络": "recurrent neural network",
-        "人工智能": "artificial intelligence",
-        "大语言模型": "large language model",
-        "扩散模型": "diffusion model",
-        "多模态": "multimodal",
-        "视觉": "vision",
-        "图像": "image",
-        "视频": "video",
-        "机器人": "robot",
-        "优化": "optimization",
-        "推理": "reasoning",
-        "训练": "training",
-        "检测": "detection",
-        "分割": "segmentation",
-        "识别": "recognition",
-        "分类": "classification",
-        "预测": "prediction",
-        "生成": "generation",
-    }
+    if not any(19968 <= ord(c) <= 40869 for c in query):
+        return ""
+    try:
+        from openai import AsyncOpenAI
+
+        from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
+
+        client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+        resp = await client.chat.completions.create(
+            model=DEEPSEEK_MODEL,
+            temperature=0,
+            max_tokens=50,
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"将以下中文学术术语翻译为英文检索关键词，只返回英文逗号分隔，不要解释：{query}",
+                }
+            ],
+            timeout=6,
+        )
+        text = (resp.choices[0].message.content or "").strip()
+        return re.sub(r"[^a-zA-Z0-9,\- ]", "", text)[:100]
+    except Exception:
+        import traceback
+
+        traceback.print_exc()
+        return ""
+
+
+_CN2EN_FALLBACK = {
+    "计算机视觉": "computer vision",
+    "机器学习": "machine learning",
+    "深度学习": "deep learning",
+    "自然语言处理": "natural language processing",
+    "强化学习": "reinforcement learning",
+    "图像识别": "image recognition",
+    "目标检测": "object detection",
+    "语义分割": "semantic segmentation",
+    "人脸识别": "face recognition",
+    "知识图谱": "knowledge graph",
+    "迁移学习": "transfer learning",
+    "联邦学习": "federated learning",
+    "图神经网络": "graph neural network",
+    "自动驾驶": "autonomous driving",
+    "人工智能": "artificial intelligence",
+    "大语言模型": "large language model",
+    "扩散模型": "diffusion model",
+    "多模态": "multimodal",
+    "神经网络": "neural network",
+    "数据挖掘": "data mining",
+    "机器人": "robot",
+    "视觉": "vision",
+    "图像": "image",
+    "视频": "video",
+    "检测": "detection",
+    "分割": "segmentation",
+    "识别": "recognition",
+    "分类": "classification",
+}
+
+
+def _quick_keywords(query: str) -> dict:
+    import re
 
     words = [w.strip() for w in re.split(r"[，,、\s]+", query) if w.strip()]
-    cn = [w for w in words if any("一" <= c <= "鿿" for c in w)]
+    cn = [w for w in words if any(19968 <= ord(c) <= 40869 for c in w)]
     en = [w.lower() for w in words if w.isascii() and len(w) >= 2]
-
-    # 中文关键词→英文翻译
-    en_translated = []
-    for kw in cn:
-        if kw in CN2EN:
-            en_translated.append(CN2EN[kw])
-    # 也尝试组合术语 (如"计算机视觉" 在cn列表中作为一个词)
-    query_stripped = re.sub(r"\s+", "", query)
-    if query_stripped in CN2EN and CN2EN[query_stripped] not in en_translated:
-        en_translated.insert(0, CN2EN[query_stripped])
-
-    keywords_en = en + en_translated if (en or en_translated) else [query]
+    en_from_dict = [v for k, v in _CN2EN_FALLBACK.items() if k in query]
+    if en_from_dict and en_from_dict[0] not in en:
+        en = [en_from_dict[0]] + en
     keywords_cn = cn or [query]
-
+    keywords_en = en if en else [query]
     bq = []
     if cn:
         bq.append(
             {
-                "database": "知网",
-                "query": " OR ".join(f"主题='{k}'" for k in cn[:3]),
-                "note": "中文核心关键词",
+                "database": "\u77e5\u7f51",
+                "query": " OR ".join(f"\u4e3b\u9898='{k}'" for k in cn[:3]),
+                "note": "\u4e2d\u6587\u6838\u5fc3\u5173\u952e\u8bcd",
             }
         )
     if keywords_en:
@@ -401,10 +401,9 @@ def _quick_keywords(query: str) -> dict:
             {
                 "database": "arXiv",
                 "query": " OR ".join(keywords_en[:3]),
-                "note": "英文核心关键词",
+                "note": "\u82f1\u6587\u6838\u5fc3\u5173\u952e\u8bcd",
             }
         )
-
     return {
         "keywords_cn": keywords_cn,
         "keywords_en": keywords_en,
@@ -412,7 +411,7 @@ def _quick_keywords(query: str) -> dict:
         "related_terms_cn": [],
         "related_terms_en": [],
         "boolean_queries": bq,
-        "recommended_databases": ["知网", "arXiv"] if cn else ["arXiv"],
+        "recommended_databases": ["\u77e5\u7f51", "arXiv"] if cn else ["arXiv"],
         "top_authors": [],
         "search_tips": "",
     }
@@ -420,13 +419,39 @@ def _quick_keywords(query: str) -> dict:
 
 @app.post("/create_topic")
 async def api_create_topic(req: CreateTopicRequest):
-    """创建课题（快速模式：本地关键词提取，不调LLM，<0.1s）。"""
-    state = create_topic(sanitize_input(req.query))
-    strategy = _quick_keywords(req.query)
+    """创建课题：本地关键词 + LLM翻译(非阻塞增强)。"""
+    query = sanitize_input(req.query)
+    state = create_topic(query)
+    strategy = _quick_keywords(query)
     state.search_strategy = strategy
-    message_store[state.topic_id] = [
-        {"role": "system", "content": f"研究方向: {req.query}"}
-    ]
+    message_store[state.topic_id] = [{"role": "system", "content": f"研究方向: {query}"}]
+
+    # 后台LLM翻译增强英文关键词（非阻塞）
+    async def _enhance():
+        try:
+            en_llm = await _translate_cn_query(query)
+            if en_llm:
+                terms = [t.strip() for t in en_llm.split(",") if t.strip()]
+                if terms:
+                    strategy["keywords_en"] = list(set(terms + strategy["keywords_en"]))
+                    strategy["boolean_queries"] = [
+                        bq
+                        for bq in strategy.get("boolean_queries", [])
+                        if bq.get("database") != "arXiv"
+                    ] + [
+                        {
+                            "database": "arXiv",
+                            "query": " OR ".join(strategy["keywords_en"][:4]),
+                            "note": "LLM翻译增强",
+                        }
+                    ]
+                    state.search_strategy = strategy
+        except Exception:
+            pass
+
+    import asyncio
+
+    asyncio.create_task(_enhance())
     return {"topic_id": state.topic_id, "strategy": strategy}
 
 

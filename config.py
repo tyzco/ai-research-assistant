@@ -40,6 +40,15 @@ IMAGE_DIR = PROJECT_ROOT / os.getenv("IMAGE_DIR", "data/images")
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "2048"))
 RETRIEVAL_TOP_K = int(os.getenv("RETRIEVAL_TOP_K", "5"))
 
+# ---- Timeouts & Token Limits (centralized) ----
+SEARCH_FAST_TIMEOUT = 10
+SEARCH_SLOW_TIMEOUT = 5
+LLM_GEN_MAX_TOKENS = 500
+LLM_GEN_TIMEOUT = 20
+LLM_QUICK_MAX_TOKENS = 400
+LLM_QUICK_TIMEOUT = 15
+LLM_TRANSLATE_MAX_TOKENS = 50
+
 # ---- Model Options (前端可切换) ----
 AVAILABLE_LLM_MODELS = ["deepseek-v4-pro", "deepseek-v4-flash"]
 AVAILABLE_VISION_MODELS = ["qwen-vl-max", "qwen-vl-plus", "glm-4v"]

@@ -70,6 +70,27 @@ STATIC_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/images", StaticFiles(directory=str(IMAGE_DIR)), name="images")
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+import time as _time
+
+# ---- 简易限流: 每 IP 最多 30 req/s ----
+from collections import defaultdict
+
+_rate_limiter: dict[str, list[float]] = defaultdict(list)
+
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    ip = request.client.host if request.client else "unknown"
+    now = _time.time()
+    window = [t for t in _rate_limiter[ip] if now - t < 1.0]
+    if len(window) > 30:
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse({"detail": "请求过于频繁，请稍后重试"}, status_code=429)
+    window.append(now)
+    _rate_limiter[ip] = window[-100:]  # trim old entries
+    return await call_next(request)
+
 
 @app.get("/")
 async def root():
@@ -1152,8 +1173,27 @@ async def api_ask_trace(request: Request):
         raise HTTPException(400, "需要 question 参数")
 
     state = active_topics.get(topic_id) if topic_id else None
-    if not state or not state.lancedb_table:
-        raise HTTPException(404, "Topic 不存在或知识库未就绪")
+    kb_table = state.lancedb_table if state else None
+    if not kb_table:
+        # Auto-find any available KB
+        import lancedb
+
+        from config import LANCEDB_DIR
+
+        db = lancedb.connect(str(LANCEDB_DIR))
+        raw = db.list_tables()
+        all_t = raw.tables if hasattr(raw, "tables") else []
+        best, best_n = "", 0
+        for t in all_t:
+            try:
+                n = db.open_table(t).count_rows()
+                if n > best_n:
+                    best, best_n = t, n
+            except:
+                pass
+        kb_table = str(best) if best_n > 100 else None
+    if not kb_table:
+        raise HTTPException(404, "Topic 不存在或无可用知识库")
 
     async def trace():
         s = (
@@ -1194,7 +1234,7 @@ async def api_ask_trace(request: Request):
         t1 = time.time()
         qv = _embed_texts_sync([expanded])[0]
         db = lancedb.connect(str(LANCEDB_DIR))
-        tbl = db.open_table(state.lancedb_table)
+        tbl = db.open_table(kb_table)
         vec_res = _cosine_search(tbl, qv, 5, "is_fulltext = true AND is_image = false")
         dt_v = time.time() - t1
         top_score = float(
@@ -1239,7 +1279,7 @@ async def api_ask_trace(request: Request):
         try:
             from hybrid_retriever import AdaptiveHybridRetriever
 
-            hr = AdaptiveHybridRetriever(state.lancedb_table)
+            hr = AdaptiveHybridRetriever(kb_table)
             alpha = hr._compute_adaptive_weight(expanded)
             text_res, _ = hr.search(
                 expanded, top_k=5, filter_expr="is_fulltext = true AND is_image = false"

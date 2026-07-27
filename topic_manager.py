@@ -55,10 +55,10 @@ def _load_topics():
         logger.warning(f"Failed to load topics: {e}")
 
 
-def create_topic(query: str) -> TopicState:
-    topic_id = uuid.uuid4().hex[:12]
-    state = TopicState(topic_id=topic_id, query=query)
-    active_topics[topic_id] = state
+def create_topic(query: str, topic_id: str = "") -> TopicState:
+    tid = topic_id if topic_id else uuid.uuid4().hex[:12]
+    state = TopicState(topic_id=tid, query=query)
+    active_topics[tid] = state
     _save_topics()
     return state
 

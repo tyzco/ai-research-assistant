@@ -54,6 +54,7 @@ class PaperMeta(BaseModel):
 class CreateTopicRequest(BaseModel):
     query: str
     model: str = ""
+    topic_id: str = ""
 
 
 class CreateTopicResponse(BaseModel):

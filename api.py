@@ -442,7 +442,7 @@ def _quick_keywords(query: str) -> dict:
 async def api_create_topic(req: CreateTopicRequest):
     """创建课题：本地关键词 + LLM翻译(非阻塞增强)。"""
     query = sanitize_input(req.query)
-    state = create_topic(query)
+    state = create_topic(query, topic_id=req.topic_id if req.topic_id else "")
     strategy = _quick_keywords(query)
     state.search_strategy = strategy
     message_store[state.topic_id] = [{"role": "system", "content": f"研究方向: {query}"}]

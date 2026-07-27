@@ -54,12 +54,16 @@ python api.py
 ├── search.py              # 6 源并行论文搜索
 ├── downloader.py          # PDF 解析 + 语义分块
 ├── agent/
-│   ├── agent_core.py      # ReAct Agent 循环
-│   └── tool_registry.py   # 8 标准化工具
-├── static/index.html      # Web 前端
-├── rag-admin/             # Vue 3 管理后台
-├── evaluate_ragas.py      # 评估脚本
-└── 项目总结-面试版.md      # 面试文档
+│   ├── langgraph_workflow.py # LangGraph StateGraph Agent
+│   └── tool_registry.py      # 12 标准化工具
+├── static/index.html         # Web 前端
+├── static/kg.html            # 知识图谱可视化
+├── static/pipeline.html      # RAG 流水线追踪
+├── static/watch.html         # Agent 监控面板
+├── static/test.html          # API 测试面板
+├── rag-admin/                # Vue 3 管理后台 (骨架预留)
+├── evaluate_rag_standards.py # 标准化评估脚本
+└── 项目总结-面试版.md         # 面试文档
 ```
 
 ## 评估指标

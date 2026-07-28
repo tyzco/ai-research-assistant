@@ -877,12 +877,14 @@ async def api_chat(request: Request):
     from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
 
     client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+    history = req.get("history", [])
+    msgs = []
+    for h in (history or [])[-8:]:
+        role = "user" if h.get("r") == "u" else "assistant"
+        msgs.append({"role": role, "content": str(h.get("c", ""))[:400]})
+    msgs.append({"role": "user", "content": question})
     resp = await client.chat.completions.create(
-        model=DEEPSEEK_MODEL,
-        temperature=0.3,
-        max_tokens=500,
-        timeout=15,
-        messages=[{"role": "user", "content": question}],
+        model=DEEPSEEK_MODEL, temperature=0.3, max_tokens=500, timeout=15, messages=msgs
     )
     return {"answer": resp.choices[0].message.content.strip()}
 
@@ -988,18 +990,22 @@ async def api_ask(req: AskRequest):
         "is_fulltext = true AND is_image = false",
     )
     ctx = "\n".join([r.get("text", "")[:300] for r in (res or [])[:3]])
+    history = req.get("history", [])
+    hist_text = ""
+    for h in (history or [])[-4:]:
+        role = "用户" if h.get("r") == "u" else "AI"
+        hist_text += f"{role}: {str(h.get('c',''))[:200]}\n"
+
+    prompt = f"基于上下文简洁回答（100-300字）。如果信息不足请说明。\n上下文：{ctx}\n问题：{question}\n回答："
+    if hist_text:
+        prompt = f"对话历史：\n{hist_text}\n{prompt}"
 
     resp = await client.chat.completions.create(
         model=DEEPSEEK_MODEL,
         temperature=0.3,
         max_tokens=500,
         timeout=15,
-        messages=[
-            {
-                "role": "user",
-                "content": f"基于上下文简洁回答（100-300字）。如果信息不足请说明。\n上下文：{ctx}\n问题：{question}\n回答：",
-            }
-        ],
+        messages=[{"role": "user", "content": prompt}],
     )
     return {
         "answer": resp.choices[0].message.content.strip(),

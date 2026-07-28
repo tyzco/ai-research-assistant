@@ -865,6 +865,28 @@ async def api_topic_status(topic_id: str):
     }
 
 
+@app.post("/chat")
+async def api_chat(request: Request):
+    """通用 AI 聊天：直接调 DeepSeek，无 RAG 检索。与知识库共享对话历史。"""
+    req = await request.json()
+    question = sanitize_input(req.get("question", ""))
+    if not question:
+        raise HTTPException(400, "需要 question 参数")
+    from openai import AsyncOpenAI
+
+    from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
+
+    client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+    resp = await client.chat.completions.create(
+        model=DEEPSEEK_MODEL,
+        temperature=0.3,
+        max_tokens=500,
+        timeout=15,
+        messages=[{"role": "user", "content": question}],
+    )
+    return {"answer": resp.choices[0].message.content.strip()}
+
+
 @app.post("/ask")
 async def api_ask(req: AskRequest):
     """RAG 问答：默认 SSE 流式返回 + JSON 降级。检测 Accept 头或 stream 参数。"""

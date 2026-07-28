@@ -15,6 +15,7 @@ from config import (
     DEEPSEEK_BASE_URL,
     DEEPSEEK_MODEL,
     SEMANTIC_SCHOLAR_API_KEY,
+    SOURCE_WEIGHTS,
 )
 from models import PaperMeta
 

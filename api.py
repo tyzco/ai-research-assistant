@@ -58,10 +58,10 @@ async def startup_preload():
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:8001", "http://127.0.0.1:8001"],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 IMAGE_DIR.mkdir(parents=True, exist_ok=True)
@@ -247,26 +247,41 @@ async def api_kg_build(request: Request):
 
 # ===== 认证端点 =====
 
+# Login rate limiting: 5 attempts per IP per minute
+_login_attempts: dict[str, list[float]] = {}
+
 
 @app.post("/register")
 async def api_register(request: Request):
     req = await request.json()
-    ok, msg = register_user(
-        req.get("username", ""), req.get("password", ""), req.get("email", "")
-    )
+    username = sanitize_input(req.get("username", ""))
+    password = req.get("password", "")
+    if not username or len(username) < 2 or len(username) > 32:
+        raise HTTPException(400, "用户名需 2-32 个字符")
+    if not password or len(password) < 6:
+        raise HTTPException(400, "密码至少 6 个字符")
+    ok, msg = register_user(username, password, req.get("email", ""))
     if not ok:
         raise HTTPException(400, msg)
-    token = create_token(req["username"])
-    return {"access_token": token, "token_type": "bearer", "user": req["username"]}
+    token = create_token(username)
+    return {"access_token": token, "token_type": "bearer", "user": username}
 
 
 @app.post("/login")
 async def api_login(request: Request):
+    ip = request.client.host if request.client else "unknown"
+    now = _time.time()
+    window = [t for t in _login_attempts.get(ip, []) if now - t < 60]
+    if len(window) >= 5:
+        raise HTTPException(429, "登录尝试过于频繁，请 1 分钟后重试")
     req = await request.json()
-    token = login_user(req.get("username", ""), req.get("password", ""))
+    username = sanitize_input(req.get("username", ""))
+    password = req.get("password", "")
+    token = login_user(username, password)
     if not token:
+        _login_attempts[ip] = window + [now]
         raise HTTPException(401, "用户名或密码错误")
-    return {"access_token": token, "token_type": "bearer", "user": req["username"]}
+    return {"access_token": token, "token_type": "bearer", "user": username}
 
 
 @app.get("/me")

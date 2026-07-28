@@ -19,6 +19,7 @@
 
 import json
 import logging
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -31,12 +32,20 @@ from passlib.context import CryptContext
 logger = logging.getLogger(__name__)
 
 # ---- 配置 ----
-SECRET_KEY = "aia-research-secret-key-change-in-production-2024"
+SECRET_KEY = os.getenv(
+    "JWT_SECRET_KEY", "aia-research-secret-key-change-in-production-2024"
+)
+if SECRET_KEY == "aia-research-secret-key-change-in-production-2024":
+    logger.warning(
+        "JWT_SECRET_KEY is using the default value. Set JWT_SECRET_KEY env var for production."
+    )
 ALGORITHM = "HS256"
 TOKEN_EXPIRE_DAYS = 7
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-security = HTTPBearer(auto_error=False)  # auto_error=False 允许无鉴权访问公开端点
+security = HTTPBearer(
+    auto_error=False
+)  # auto_error=False allows unauthenticated access to public endpoints
 
 # ---- 简易用户数据库（JSON 文件持久化） ----
 USERS_FILE = Path("data/users.json")

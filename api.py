@@ -982,7 +982,7 @@ async def api_ask(req: AskRequest):
     res = _cosine_search(
         db.open_table(table)
         if "db" in dir()
-        else _lancedb.connect(str(LANCEDB_DIR)).open_table(table),
+        else lancedb.connect(str(LANCEDB_DIR)).open_table(table),
         qv,
         5,
         "is_fulltext = true AND is_image = false",

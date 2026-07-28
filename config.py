@@ -150,3 +150,93 @@ RATE_LIMIT_REQUESTS_PER_SEC = 30
 # ===================================================================
 AVAILABLE_LLM_MODELS = ["deepseek-v4-pro", "deepseek-v4-flash"]
 AVAILABLE_VISION_MODELS = ["qwen-vl-max", "qwen-vl-plus", "glm-4v"]
+
+# ===================================================================
+# RAG Pipeline Parameters
+# ===================================================================
+# Query rewrite: skip expansion for short queries
+REWRITE_MIN_LENGTH = 15
+# Semantic validation: reject expansion if cosine similarity < this
+EXPANSION_SIMILARITY_THRESHOLD = 0.75
+# Coreference resolution: only try if question < this length
+COREF_MAX_LENGTH = 20
+# Complex query: trigger rerank if intent matches these types
+COMPLEX_INTENT_TYPES = ["对比", "原理", "最新"]
+
+# ===================================================================
+# Intent Classification Keywords (5 classes: definition/compare/practical/recent/principle)
+# ===================================================================
+INTENT_KEYWORDS = {
+    "定义": ["什么是", "是什么", "定义", "概念", "define", "what is"],
+    "对比": ["对比", "区别", "优缺点", "比较", "vs", "compare", "哪个更好", "差异"],
+    "实操": ["如何", "怎么", "怎样", "方法", "步骤", "how to", "流程", "实现"],
+    "最新": ["最新", "前沿", "趋势", "2024", "2025", "2026", "recent", "latest", "突破", "进展"],
+    "原理": ["为什么", "原理", "机制", "原因", "why", "mechanism", "证明"],
+}
+
+# ===================================================================
+# Adaptive Retrieval Parameters
+# ===================================================================
+# _compute_adaptive_weight coefficients
+ADAPTIVE_SHORT_QUERY_BOOST = 0.2       # queries < 15 chars → BM25 boost
+ADAPTIVE_ACRONYM_BOOST = 0.15          # queries with acronyms → BM25 boost
+ADAPTIVE_QUESTION_PENALTY = -0.15      # question-form queries → BM25 penalty
+ADAPTIVE_LONG_QUERY_PENALTY = -0.1     # queries > 40 chars → BM25 penalty
+ADAPTIVE_SHORT_THRESHOLD = 15
+ADAPTIVE_LONG_THRESHOLD = 40
+ADAPTIVE_DEFAULT_ALPHA = 0.5           # balanced default
+ADAPTIVE_ALPHA_MIN = 0.05
+ADAPTIVE_ALPHA_MAX = 0.95
+
+# ===================================================================
+# Image Filter Thresholds
+# ===================================================================
+IMAGE_MIN_PIXELS = 100                  # min width or height in px
+IMAGE_MAX_ASPECT_RATIO = 6.0           # max width/height ratio
+IMAGE_MIN_COLORS = 5                    # min unique colors (PIL quantized)
+
+# ===================================================================
+# Spam/Quality Filter Keywords
+# ===================================================================
+SPAM_KEYWORDS = [
+    "征稿", "会议通知", "征文", "订阅", "广告", "约稿", "稿约",
+    "投稿须知", "撤稿", "抄袭", "学术不端", "书评", "读者来信", "简讯", "新闻",
+]
+
+# Source credibility weights (higher = more trustworthy)
+SOURCE_WEIGHTS = {
+    "Semantic Scholar": 10,
+    "OpenAlex": 8,
+    "arXiv": 7,
+    "baidu_xueshu": 3,
+    "nssd": 5,
+}
+
+# ===================================================================
+# CN→EN Academic Term Translations (fallback when LLM fails)
+# ===================================================================
+CN_EN_TERMS = {
+    "计算机视觉": "computer vision", "机器学习": "machine learning",
+    "深度学习": "deep learning", "自然语言处理": "natural language processing",
+    "强化学习": "reinforcement learning", "图像识别": "image recognition",
+    "目标检测": "object detection", "语义分割": "semantic segmentation",
+    "人脸识别": "face recognition", "知识图谱": "knowledge graph",
+    "迁移学习": "transfer learning", "联邦学习": "federated learning",
+    "图神经网络": "graph neural network", "自动驾驶": "autonomous driving",
+    "人工智能": "artificial intelligence", "大语言模型": "large language model",
+    "扩散模型": "diffusion model", "多模态": "multimodal",
+    "神经网络": "neural network", "数据挖掘": "data mining",
+    "机器人": "robot", "视觉": "vision", "图像": "image", "视频": "video",
+    "检测": "detection", "分割": "segmentation", "识别": "recognition",
+    "分类": "classification",
+}
+
+# ===================================================================
+# Prompt Injection Detection Patterns
+# ===================================================================
+INJECTION_PATTERNS = [
+    r"忽略.*指令", r"ignore.*instruction", r"system\s*:",
+    r"你是一个", r"you are a", r"忘记.*规则", r"forget.*rule",
+    r"切换角色", r"switch.*role", r"<<SYS>>", r"\[INST\]",
+    r"\[SYSTEM\]", r"DAN\s*:", r"jailbreak",
+]

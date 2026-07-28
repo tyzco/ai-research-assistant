@@ -13,6 +13,7 @@ from config import (
     APIFY_API_KEY,
     DEEPSEEK_API_KEY,
     DEEPSEEK_BASE_URL,
+    DEEPSEEK_MODEL,
     SEMANTIC_SCHOLAR_API_KEY,
 )
 from models import PaperMeta

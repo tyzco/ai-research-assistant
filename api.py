@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 load_dotenv()
 
 from auth import create_token, get_current_user, login_user, register_user, require_user
-from config import IMAGE_DIR, PROJECT_ROOT
+from config import CN_EN_TERMS, IMAGE_DIR, PROJECT_ROOT
 from downloader import chunk_text, parse_pdf
 from knowledge_base import build_knowledge_base, store_image_descriptions
 from models import AskRequest, CreateTopicRequest, PaperMeta, TopicStatus
@@ -380,45 +380,13 @@ async def _translate_cn_query(query: str) -> str:
         return ""
 
 
-_CN2EN_FALLBACK = {
-    "计算机视觉": "computer vision",
-    "机器学习": "machine learning",
-    "深度学习": "deep learning",
-    "自然语言处理": "natural language processing",
-    "强化学习": "reinforcement learning",
-    "图像识别": "image recognition",
-    "目标检测": "object detection",
-    "语义分割": "semantic segmentation",
-    "人脸识别": "face recognition",
-    "知识图谱": "knowledge graph",
-    "迁移学习": "transfer learning",
-    "联邦学习": "federated learning",
-    "图神经网络": "graph neural network",
-    "自动驾驶": "autonomous driving",
-    "人工智能": "artificial intelligence",
-    "大语言模型": "large language model",
-    "扩散模型": "diffusion model",
-    "多模态": "multimodal",
-    "神经网络": "neural network",
-    "数据挖掘": "data mining",
-    "机器人": "robot",
-    "视觉": "vision",
-    "图像": "image",
-    "视频": "video",
-    "检测": "detection",
-    "分割": "segmentation",
-    "识别": "recognition",
-    "分类": "classification",
-}
-
-
 def _quick_keywords(query: str) -> dict:
     import re
 
     words = [w.strip() for w in re.split(r"[，,、\s]+", query) if w.strip()]
     cn = [w for w in words if any(19968 <= ord(c) <= 40869 for c in w)]
     en = [w.lower() for w in words if w.isascii() and len(w) >= 2]
-    en_from_dict = [v for k, v in _CN2EN_FALLBACK.items() if k in query]
+    en_from_dict = [v for k, v in CN_EN_TERMS.items() if k in query]
     if en_from_dict and en_from_dict[0] not in en:
         en = [en_from_dict[0]] + en
     keywords_cn = cn or [query]

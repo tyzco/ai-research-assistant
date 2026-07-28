@@ -138,7 +138,7 @@ _BLOCK = [
 
 def _quality_score(p: PaperMeta, source: str = "") -> float:
     """综合质量评分：来源权重 + 引用数 + 年份。"""
-    w = _SRC_W.get(source, 2) if source else 2
+    w = SOURCE_WEIGHTS.get(source, 2) if source else 2
     cit = p.year or 0
     return w * 10 + max(0, (p.year or 2000) - 2000) * 0.1
 

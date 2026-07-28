@@ -889,122 +889,72 @@ async def api_chat(request: Request):
     return {"answer": resp.choices[0].message.content.strip()}
 
 
+def _find_kb_table() -> str:
+    import lancedb
+
+    from config import LANCEDB_DIR
+
+    db = lancedb.connect(str(LANCEDB_DIR))
+    raw = db.list_tables()
+    all_t = raw.tables if hasattr(raw, "tables") else []
+    best, best_n = "", 0
+    for t in all_t:
+        try:
+            n = db.open_table(t).count_rows()
+        except:
+            continue
+        if n > best_n:
+            best, best_n = t, n
+    if not best or best_n <= 5:
+        raise HTTPException(404, "No knowledge base available. Upload PDFs first.")
+    return str(best)
+
+
 @app.post("/ask")
 async def api_ask(req: AskRequest):
-    """RAG 问答：默认 SSE 流式返回 + JSON 降级。检测 Accept 头或 stream 参数。"""
-
-    state = active_topics.get(req.topic_id)
-    if not state:
-        # Topic not in memory — use agent/quick fallback (auto-finds KB)
-        question = sanitize_input(req.question)
-        try:
-            import lancedb as _lancedb
-            from openai import AsyncOpenAI
-
-            from config import (
-                DEEPSEEK_API_KEY,
-                DEEPSEEK_BASE_URL,
-                DEEPSEEK_MODEL,
-                LANCEDB_DIR,
-            )
-            from knowledge_base import _cosine_search, _embed_texts_sync
-
-            db = _lancedb.connect(str(LANCEDB_DIR))
-            raw = db.list_tables()
-            all_t = raw.tables if hasattr(raw, "tables") else []
-            best, best_n = "", 0
-            for t in all_t:
-                try:
-                    n = db.open_table(t).count_rows()
-                except:
-                    continue
-                if n > best_n:
-                    best, best_n = t, n
-            if best and best_n > 5:
-                qv = _embed_texts_sync([question])[0]
-                res = _cosine_search(
-                    db.open_table(best), qv, 5, "is_fulltext=true AND is_image=false"
-                )
-                ctx = "\n".join([r.get("text", "")[:500] for r in (res or [])[:3]])
-                client = AsyncOpenAI(
-                    api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL
-                )
-                resp = await client.chat.completions.create(
-                    model=DEEPSEEK_MODEL,
-                    temperature=0.3,
-                    max_tokens=400,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": f"基于上下文简洁回答（100-200字）。如果信息不足请说明。\n上下文：{ctx}\n问题：{question}\n回答：",
-                        }
-                    ],
-                )
-                return {
-                    "answer": resp.choices[0].message.content.strip(),
-                    "references": [],
-                    "supplement": [],
-                    "images": [],
-                }
-        except:
-            pass
-        raise HTTPException(404, "Topic not found")
-
-    question = sanitize_input(req.question)
-    table = state.lancedb_table
-    if not table:
-        import lancedb
-
-        from config import LANCEDB_DIR
-
-        db = lancedb.connect(str(LANCEDB_DIR))
-        raw = db.list_tables()
-        tables = raw.tables if hasattr(raw, "tables") else []
-        best, best_n = "", 0
-        for t in tables:
-            try:
-                n = db.open_table(t).count_rows()
-            except:
-                pass
-            if n > best_n:
-                best, best_n = t, n
-        if best and best_n > 5:
-            table = str(best)
-        else:
-            raise HTTPException(400, detail="请先上传PDF或一键下载构建知识库")
-
-    # Retrieve + Generate
+    import lancedb
     from openai import AsyncOpenAI
 
-    from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
+    from config import (
+        DEEPSEEK_API_KEY,
+        DEEPSEEK_BASE_URL,
+        DEEPSEEK_MODEL,
+        LANCEDB_DIR,
+        LLM_GEN_MAX_TOKENS,
+        LLM_GEN_TEMPERATURE,
+        LLM_GEN_TIMEOUT,
+    )
     from knowledge_base import _cosine_search, _embed_texts_sync
+
+    question = sanitize_input(req.question)
+    state = active_topics.get(req.topic_id)
+    table = state.lancedb_table if state and state.lancedb_table else ""
+    if not table:
+        table = _find_kb_table()
 
     client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
     qv = _embed_texts_sync([question])[0]
+    db = lancedb.connect(str(LANCEDB_DIR))
     res = _cosine_search(
-        db.open_table(table)
-        if "db" in dir()
-        else lancedb.connect(str(LANCEDB_DIR)).open_table(table),
-        qv,
-        5,
-        "is_fulltext = true AND is_image = false",
+        db.open_table(table), qv, 5, "is_fulltext = true AND is_image = false"
     )
     ctx = "\n".join([r.get("text", "")[:300] for r in (res or [])[:3]])
-    history = req.get("history", [])
+
+    history = req.history or []
     hist_text = ""
-    for h in (history or [])[-4:]:
-        role = "用户" if h.get("r") == "u" else "AI"
+    for h in history[-4:]:
+        role = "\u7528\u6237" if h.get("r") == "u" else "AI"
         hist_text += f"{role}: {str(h.get('c',''))[:200]}\n"
 
-    prompt = f"基于上下文简洁回答（100-300字）。如果信息不足请说明。\n上下文：{ctx}\n问题：{question}\n回答："
+    prompt = f"\u57fa\u4e8e\u4e0a\u4e0b\u6587\u7b80\u6d01\u56de\u7b54\uff08100-300\u5b57\uff09\u3002\u5982\u679c\u4fe1\u606f\u4e0d\u8db3\u8bf7\u8bf4\u660e\u3002\n\u4e0a\u4e0b\u6587\uff1a{ctx}\n\u95ee\u9898\uff1a{question}\n\u56de\u7b54\uff1a"
     if hist_text:
-        prompt = f"对话历史：\n{hist_text}\n{prompt}"
+        prompt = f"\u5bf9\u8bdd\u5386\u53f2\uff1a\n{hist_text}\n{prompt}"
 
     resp = await client.chat.completions.create(
         model=DEEPSEEK_MODEL,
-        temperature=0.3,
-        max_tokens=500,
-        timeout=15,
+        temperature=LLM_GEN_TEMPERATURE,
+        max_tokens=LLM_GEN_MAX_TOKENS,
+        timeout=LLM_GEN_TIMEOUT,
         messages=[{"role": "user", "content": prompt}],
     )
     return {

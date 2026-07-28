@@ -36,12 +36,12 @@ class AdaptiveHybridRetriever:
 
     def _get_stage1(self):
         if self._stage1 is None:
-            self._stage1 = SentenceTransformer("all-MiniLM-L6-v2")
+            self._stage1 = SentenceTransformer(RERANK_STAGE1_MODEL)
         return self._stage1
 
     def _get_stage2(self):
         if self._stage2 is None:
-            self._stage2 = CrossEncoder("BAAI/bge-reranker-base", max_length=512)
+            self._stage2 = CrossEncoder(RERANK_MODEL, max_length=512)
         return self._stage2
 
     # ---- 自适应权重推理 ----

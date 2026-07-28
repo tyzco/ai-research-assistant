@@ -72,10 +72,10 @@ async def _resolve_coreference(question: str, history: str) -> str:
                     ),
                 }
             ],
-            temperature=0.1,
-            max_tokens=100,
+            temperature=LLM_COREF_TEMPERATURE,
+            max_tokens=LLM_COREF_MAX_TOKENS,
             max_retries=1,
-            timeout=8.0,
+            timeout=LLM_COREF_TIMEOUT,
             source="llm",
         )
         if resp is None:
@@ -99,10 +99,10 @@ async def _expand_query(question: str) -> str:
                     "content": QUERY_EXPAND_PROMPT.format(question=question),
                 }
             ],
-            temperature=0.3,
-            max_tokens=200,
+            temperature=LLM_EXPAND_TEMPERATURE,
+            max_tokens=LLM_EXPAND_MAX_TOKENS,
             max_retries=1,
-            timeout=10.0,
+            timeout=LLM_EXPAND_TIMEOUT,
             source="llm",
         )
         if resp is None:
@@ -317,10 +317,10 @@ async def ask_question(
             client.chat.completions.create,
             model=model or DEEPSEEK_MODEL,
             messages=[{"role": "user", "content": prompt_content}],
-            temperature=0.3,
-            max_tokens=800,
+            temperature=LLM_GEN_TEMPERATURE,
+            max_tokens=LLM_GEN_MAX_TOKENS,
             max_retries=2,
-            timeout=20.0,
+            timeout=LLM_GEN_TIMEOUT,
             source="llm",
         )
         if resp is None:

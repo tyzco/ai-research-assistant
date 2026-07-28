@@ -61,8 +61,8 @@ async def agent_node(state: AgentState) -> dict:
             messages=msgs,
             tools=get_tools_schema(),
             tool_choice="auto",
-            temperature=0.3,
-            max_tokens=1000,
+            temperature=AGENT_TEMPERATURE,
+            max_tokens=AGENT_MAX_TOKENS,
         )
     except Exception as e:
         logger.error(f"Agent LLM error: {e}")
@@ -297,8 +297,8 @@ class MultiAgentGraph:
         try:
             resp = await client.chat.completions.create(
                 model=DEEPSEEK_MODEL,
-                temperature=0.2,
-                max_tokens=500,
+                temperature=LLM_GEN_TEMPERATURE,
+                max_tokens=LLM_GEN_MAX_TOKENS,
                 messages=[
                     {"role": "user", "content": PLANNER_PROMPT.format(task=task)}
                 ],
@@ -340,8 +340,8 @@ class MultiAgentGraph:
         try:
             resp = await client.chat.completions.create(
                 model=DEEPSEEK_MODEL,
-                temperature=0.3,
-                max_tokens=800,
+                temperature=LLM_GEN_TEMPERATURE,
+                max_tokens=LLM_STRATEGY_MAX_TOKENS,
                 messages=[
                     {
                         "role": "user",

@@ -73,6 +73,7 @@ class AskRequest(BaseModel):
     question: str
     model: str = ""
     vision_model: str = ""
+    history: list = []
 
 
 class AskResponse(BaseModel):

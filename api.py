@@ -868,7 +868,6 @@ async def api_topic_status(topic_id: str):
 @app.post("/ask")
 async def api_ask(req: AskRequest):
     """RAG 问答：默认 SSE 流式返回 + JSON 降级。检测 Accept 头或 stream 参数。"""
-    import json as _json
 
     state = active_topics.get(req.topic_id)
     if not state:
@@ -878,7 +877,12 @@ async def api_ask(req: AskRequest):
             import lancedb as _lancedb
             from openai import AsyncOpenAI
 
-            from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
+            from config import (
+                DEEPSEEK_API_KEY,
+                DEEPSEEK_BASE_URL,
+                DEEPSEEK_MODEL,
+                LANCEDB_DIR,
+            )
             from knowledge_base import _cosine_search, _embed_texts_sync
 
             db = _lancedb.connect(str(LANCEDB_DIR))
@@ -925,7 +929,6 @@ async def api_ask(req: AskRequest):
     question = sanitize_input(req.question)
     table = state.lancedb_table
     if not table:
-        # Fallback: find any existing KB
         import lancedb
 
         from config import LANCEDB_DIR
@@ -937,57 +940,51 @@ async def api_ask(req: AskRequest):
         for t in tables:
             try:
                 n = db.open_table(t).count_rows()
-                if n > best_n:
-                    best, best_n = t, n
             except:
                 pass
+            if n > best_n:
+                best, best_n = t, n
         if best and best_n > 5:
             table = str(best)
         else:
             raise HTTPException(400, detail="请先上传PDF或一键下载构建知识库")
 
-    # Stream by default
-    async def _stream_answer():
-        import lancedb as _lancedb
-        from openai import AsyncOpenAI
+    # Retrieve + Generate
+    from openai import AsyncOpenAI
 
-        from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
-        from knowledge_base import _cosine_search, _embed_texts_sync
+    from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
+    from knowledge_base import _cosine_search, _embed_texts_sync
 
-        yield f"data: {_json.dumps({'status': 'retrieving'})}\n\n"
-        db = _lancedb.connect(str(LANCEDB_DIR))
-        tbl = db.open_table(table)
-        qv = _embed_texts_sync([question])[0]
-        res = _cosine_search(tbl, qv, 5, "is_fulltext = true AND is_image = false")
-        ctx = "\n".join([r.get("text", "")[:300] for r in (res or [])[:3]])
-        yield f"data: {_json.dumps({'status': 'retrieved', 'chunks': len(res) if res else 0})}\n\n"
+    client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+    qv = _embed_texts_sync([question])[0]
+    res = _cosine_search(
+        db.open_table(table)
+        if "db" in dir()
+        else _lancedb.connect(str(LANCEDB_DIR)).open_table(table),
+        qv,
+        5,
+        "is_fulltext = true AND is_image = false",
+    )
+    ctx = "\n".join([r.get("text", "")[:300] for r in (res or [])[:3]])
 
-        client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
-        prompt = f"基于上下文简洁回答（100-200字）。信息不足请说明。\n上下文：{ctx}\n问题：{question}\n回答："
-        try:
-            stream = await client.chat.completions.create(
-                model=req.model or DEEPSEEK_MODEL,
-                temperature=0.3,
-                max_tokens=500,
-                messages=[{"role": "user", "content": prompt}],
-                stream=True,
-                timeout=15,
-            )
-            async for chunk in stream:
-                c = chunk.choices[0].delta.content
-                if c:
-                    yield f"data: {_json.dumps({'token': c})}\n\n"
-            yield f"data: {_json.dumps({'done': True})}\n\n"
-        except Exception as e:
-            yield f"data: {_json.dumps({'error': str(e)})}\n\n"
-
-        # Save memory
-        msgs = message_store.setdefault(req.topic_id, [])
-        msgs.append({"role": "user", "content": question})
-
-    from fastapi.responses import StreamingResponse
-
-    return StreamingResponse(_stream_answer(), media_type="text/event-stream")
+    resp = await client.chat.completions.create(
+        model=DEEPSEEK_MODEL,
+        temperature=0.3,
+        max_tokens=500,
+        timeout=15,
+        messages=[
+            {
+                "role": "user",
+                "content": f"基于上下文简洁回答（100-300字）。如果信息不足请说明。\n上下文：{ctx}\n问题：{question}\n回答：",
+            }
+        ],
+    )
+    return {
+        "answer": resp.choices[0].message.content.strip(),
+        "references": [],
+        "supplement": [],
+        "images": [],
+    }
 
 
 @app.post("/agent/langgraph")

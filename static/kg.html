@@ -5,93 +5,160 @@
 <title>PaperLink Graph</title>
 <script src="https://d3js.org/d3.v7.min.js"></script>
 <style>
+/* Obsidian 风格知识图谱 — 深空底 + 发光节点 + 透镜聚焦 */
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans SC',sans-serif;background:#0b1120;color:#e2e8f0;overflow:hidden;height:100vh;display:flex}
-#graph{flex:1;position:relative}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans SC',sans-serif;background:#0a0a10;color:#c9c9e2;overflow:hidden;height:100vh;display:flex}
+/* 深空微晕 */
+body::before{content:'';position:fixed;inset:0;pointer-events:none;background:radial-gradient(ellipse at 50% 40%,rgba(80,80,160,.10) 0%,transparent 60%);z-index:0}
+#graph{flex:1;position:relative;z-index:1}
 svg{width:100%;height:100%}
-#detail{width:340px;background:#1e293b;border-left:1px solid #334155;padding:16px;overflow-y:auto;display:none;flex-shrink:0}
+#detail{width:320px;background:rgba(18,18,28,.95);border-left:1px solid rgba(110,110,160,.25);padding:16px;overflow-y:auto;display:none;flex-shrink:0;z-index:2}
 #detail.show{display:block}
-#detail h3{font-size:14px;color:#60a5fa;margin-bottom:8px;word-break:break-all}
-#detail .meta{font-size:11px;color:#94a3b8;margin-bottom:6px}
-#detail .links{margin-top:10px;border-top:1px solid #334155;padding-top:10px}
-#detail .links a{display:block;font-size:11px;color:#f59e0b;text-decoration:none;margin:4px 0}
-#detail .links a:hover{color:#60a5fa}
-#search{position:fixed;top:16px;right:368px;z-index:10}
-#search input{padding:7px 14px;border:1px solid #334155;border-radius:8px;background:rgba(30,41,59,.95);color:#e2e8f0;font-size:12px;width:200px;outline:none}
-#search input:focus{border-color:#60a5fa}
-#stats{position:fixed;bottom:16px;left:16px;z-index:10;background:rgba(30,41,59,.95);border:1px solid #334155;border-radius:10px;padding:10px 14px;font-size:11px}
-#stats span{margin:0 8px;color:#94a3b8}
-#stats b{color:#e2e8f0}
-#refreshBtn{position:fixed;top:16px;left:16px;z-index:10;padding:5px 14px;border:1px solid #334155;border-radius:6px;background:#1e293b;color:#94a3b8;font-size:11px;cursor:pointer}
-#refreshBtn:hover{color:#60a5fa;border-color:#60a5fa}
-.tt{position:fixed;background:rgba(30,41,59,.98);border:1px solid #334155;border-radius:8px;padding:8px 12px;font-size:11px;max-width:280px;pointer-events:none;z-index:100;display:none}
-.nl{font-size:8px;fill:#94a3b8;text-anchor:middle;pointer-events:none}
-.lk{stroke:#334155;stroke-opacity:.4}
-.lk.highlight{stroke:#f59e0b;stroke-opacity:.9;stroke-width:2}
+#detail h3{font-size:14px;color:#9a9aff;margin-bottom:8px;word-break:break-all}
+#detail .meta{font-size:11px;color:#6b6b85;margin-bottom:6px}
+#detail .links{margin-top:10px;border-top:1px solid rgba(110,110,160,.2);padding-top:10px}
+#detail .links a{display:block;font-size:11px;color:#8a8ad0;text-decoration:none;margin:4px 0}
+#detail .links a:hover{color:#c9c9e2}
+#search{position:fixed;top:16px;right:348px;z-index:10}
+#search input{padding:6px 13px;border:1px solid rgba(110,110,160,.3);border-radius:8px;background:rgba(18,18,28,.9);color:#c9c9e2;font-size:12px;width:190px;outline:none;backdrop-filter:blur(6px)}
+#search input:focus{border-color:#9a9aff}
+#matchCount{position:fixed;top:50px;right:348px;z-index:10;font-size:11px;color:#6b6b85}
+#stats{position:fixed;bottom:14px;left:14px;z-index:10;background:rgba(18,18,28,.85);border:1px solid rgba(110,110,160,.2);border-radius:10px;padding:8px 12px;font-size:11px;backdrop-filter:blur(6px)}
+#stats span{margin:0 6px;color:#6b6b85}
+#stats b{color:#c9c9e2}
+#refreshBtn{position:fixed;top:16px;left:14px;z-index:10;padding:5px 13px;border:1px solid rgba(110,110,160,.3);border-radius:7px;background:rgba(18,18,28,.85);color:#8a8ad0;font-size:11px;cursor:pointer;backdrop-filter:blur(6px)}
+#refreshBtn:hover{color:#c9c9e2;border-color:#9a9aff}
+/* 图例 */
+#legend{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);z-index:10;display:flex;gap:16px;background:rgba(18,18,28,.75);border:1px solid rgba(110,110,160,.2);border-radius:9px;padding:6px 14px;font-size:10px;color:#6b6b85;backdrop-filter:blur(6px)}
+#legend i{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;vertical-align:middle;box-shadow:0 0 6px currentColor}
+/* 节点/边 — Obsidian 星点质感 */
+.nd{cursor:pointer;transition:opacity .18s ease}
+.nl{font-size:9px;fill:#b9b9d4;text-anchor:middle;pointer-events:none;opacity:0;transition:opacity .18s ease;text-shadow:0 0 4px rgba(0,0,0,.8)}
+.lk{stroke:rgba(120,120,180,.16);stroke-width:.8;transition:opacity .18s ease}
+.lk.highlight{stroke:rgba(180,180,255,.5);stroke-opacity:.9;stroke-width:1.2}
 </style>
 </head>
 <body>
 <div id="graph"></div>
 <div id="detail"><div id="dcontent"></div></div>
 <button id="refreshBtn" onclick="L()">Refresh</button>
-<div id="search"><input type="text" id="si" placeholder="Search..."></div>
+<div id="search"><input type="text" id="si" placeholder="搜索节点…"></div>
+<div id="matchCount"></div>
 <div id="stats"></div>
-<div class="tt" id="tt"></div>
+<div id="legend"><span><i style="color:#9a9aff"></i>论文</span><span><i style="color:#4fd1c5"></i>方法</span><span><i style="color:#f6c453"></i>数据集</span><span><i style="color:#f472b6"></i>指标</span></div>
 
 <script>
-var C=d3.scaleOrdinal().domain(['paper','method','dataset','metric']).range(['#3b82f6','#22c55e','#f59e0b','#ef4444']);
-var W=window.innerWidth-340,H=window.innerHeight;
+var API_BASE = window.location.origin.replace(':5173',':8001') || 'http://localhost:8001';
+(function(){
+// HTML 转义 (防 XSS)
+function esc(s){var d=document.createElement('div');d.textContent=(s==null?'':String(s));return d.innerHTML}
+function escA(s){return String(s==null?'':s).replace(/\\/g,"\\\\").replace(/'/g,"\\'")}
+// Obsidian 式发光调色 (低饱和, 微弱)
+var C=d3.scaleOrdinal().domain(['paper','method','dataset','metric']).range(['#9a9aff','#4fd1c5','#f6c453','#f472b6']);
+var W=window.innerWidth-320,H=window.innerHeight;
 var svg=d3.select('#graph').append('svg').attr('width',W).attr('height',H),g=svg.append('g');
-var tt=d3.select('#tt'),selectedNode=null;
+// 发光滤镜 (星点光晕)
+var defs=svg.append('defs');
+var f=defs.append('filter').attr('id','glow').attr('x','-200%').attr('y','-200%').attr('width','500%').attr('height','500%');
+f.append('feGaussianBlur').attr('stdDeviation','2.2').attr('result','blur');
+var merge=f.append('feMerge');merge.append('feMergeNode').attr('in','blur');merge.append('feMergeNode').attr('in','SourceGraphic');
 var sim=d3.forceSimulation()
-  .force('link',d3.forceLink().id(function(d){return d.id}).distance(90).strength(.4))
-  .force('charge',d3.forceManyBody().strength(-250))
+  .force('link',d3.forceLink().id(function(d){return d.id}).distance(70).strength(.3))
+  .force('charge',d3.forceManyBody().strength(-180))
   .force('center',d3.forceCenter(W/2,H/2))
-  .force('collide',d3.forceCollide(35));
+  .force('collide',d3.forceCollide(18));
 svg.call(d3.zoom().scaleExtent([.1,5]).on('zoom',function(e){g.attr('transform',e.transform)}));
+// 窗口 resize 自适应
+window.addEventListener('resize',function(){
+  W=window.innerWidth-320;H=window.innerHeight;
+  svg.attr('width',W).attr('height',H);
+  sim.force('center',d3.forceCenter(W/2,H/2)).alpha(.3).restart();
+});
 
+// 加载/错误状态提示 (限次重试)
+var loadAttempts=0;
+function statusMsg(text,color){d3.select('#stats').append('span').style('color',color||'#8a8ad0').text(text)}
 async function L(){
   try{
     var topic = localStorage.getItem('aia_t') || '';
-    var r = await fetch('http://localhost:8001/kg_data?table='+topic);
+    var r = await fetch(API_BASE + '/kg_data?table=' + topic);
     var d = await r.json();
-    d3.select('#stats').html('<span>Nodes <b>'+d.nodes.length+'</b></span><span>Edges <b>'+d.links.length+'</b></span><span>Click node for details</span>');
-    if(!d.nodes.length){setTimeout(L,5000);return}
-    R(d.nodes,d.links)
-  }catch(e){setTimeout(L,5000)}
+    d3.select('#stats').html('<span>Nodes <b>'+d.nodes.length+'</b></span><span>Edges <b>'+d.links.length+'</b></span>' +
+      '<a href="/" style="color:#9a9aff;margin-left:10px">返回 PaperLink</a>');
+    if(!d.nodes.length){
+      if(++loadAttempts<6){statusMsg('等待数据…');setTimeout(L,5000)}
+      else statusMsg('暂无数据，请先在主界面上传论文','#f87171');
+      return;
+    }
+    loadAttempts=0;
+    R(d.nodes,d.links);
+  }catch(e){
+    if(++loadAttempts<6){setTimeout(L,5000)}
+    else statusMsg('加载失败: '+esc(e.message).substring(0,40),'#f87171');
+  }
+}
+
+// 节点邻居集合 (透镜聚焦用)
+function neighborsOf(id,links){
+  var s=new Set([id]);
+  links.forEach(function(l){
+    var a=typeof l.source==='object'?l.source.id:l.source;
+    var b=typeof l.target==='object'?l.target.id:l.target;
+    if(a===id)s.add(b);if(b===id)s.add(a);
+  });
+  return s;
 }
 
 function R(nodes,links){
-  g.selectAll('.lk').remove();g.selectAll('.nd').remove();g.selectAll('.edge-label').remove();
+  // 节点上限 200 + 孤儿边过滤
+  if(nodes.length>200){
+    var ids={};nodes.slice(0,200).forEach(function(n){ids[n.id]=1});
+    nodes=nodes.slice(0,200);
+    links=links.filter(function(l){
+      var s=typeof l.source==='object'?l.source.id:l.source;
+      var t=typeof l.target==='object'?l.target.id:l.target;
+      return ids[s]&&ids[t];
+    });
+  }
+  g.selectAll('.lk').remove();g.selectAll('.nd').remove();
   var lk=g.selectAll('.lk').data(links).enter().append('line').attr('class','lk');
   var nd=g.selectAll('.nd').data(nodes).enter().append('g').attr('class','nd')
     .call(d3.drag().on('start',function(e,d){if(!e.active)sim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y})
       .on('drag',function(e,d){d.fx=e.x;d.fy=e.y})
       .on('end',function(e,d){if(!e.active)sim.alphaTarget(0);d.fx=null;d.fy=null}));
-  nd.append('circle').attr('r',function(d){return d.group==='paper'?7:5}).attr('fill',function(d){return C(d.group)})
-    .attr('stroke',function(d){return d.group==='paper'?'rgba(59,130,246,.3)':'none'}).attr('stroke-width',2);
-  nd.append('text').attr('class','nl').attr('dy',function(d){return d.group==='paper'?16:12})
-    .text(function(d){return(d.label||d.id).substring(0,20)});
-  nd.on('click',function(e,d){showDetail(d,nodes,links);e.stopPropagation()})
-    .on('mouseenter',function(e,d){tt.style('display','block').html('<b>'+d.label+'</b><br><span style="color:#94a3b8">Type: '+d.group+' Year: '+(d.year||'?')+'</span>')})
-    .on('mousemove',function(e){tt.style('left',(e.pageX+12)+'px').style('top',(e.pageY-10)+'px')})
-    .on('mouseleave',function(){tt.style('display','none')});
-  g.selectAll('.edge-label').data(links.filter(function(l){return l.type})).enter()
-    .append('text').attr('class','edge-label').attr('font-size','8px').attr('fill','#64748b').attr('text-anchor','middle').text(function(d){return d.type||''});
+  // 星点: 外圈微光晕 + 内圈亮核 + 悬停标签
+  nd.append('circle').attr('class','halo').attr('r',function(d){return d.group==='paper'?7:5})
+    .attr('fill',function(d){return C(d.group)}).attr('opacity',.12);
+  nd.append('circle').attr('class','core').attr('r',function(d){return d.group==='paper'?2.6:2})
+    .attr('fill',function(d){return C(d.group)}).attr('filter','url(#glow)').attr('opacity',.95);
+  nd.append('text').attr('class','nl').attr('dy',-9)
+    .text(function(d){return(d.label||d.id).substring(0,22)});
+  // Obsidian 透镜: 悬停聚焦自身+邻居, 其余变暗; 标签显示
+  nd.on('mouseenter',function(e,d){
+    var nb=neighborsOf(d.id,links);
+    nd.style('opacity',function(n){return n.id===d.id?1:(nb.has(n.id)?0.85:0.12)});
+    nd.select('.nl').style('opacity',function(n){return n.id===d.id||nb.has(n.id)?1:0});
+    lk.style('opacity',function(l){
+      var a=typeof l.source==='object'?l.source.id:l.source,b=typeof l.target==='object'?l.target.id:l.target;
+      return(a===d.id||b===d.id)?0.55:0.05;
+    });
+  })
+  .on('mouseleave',function(){
+    nd.style('opacity',1);nd.selectAll('.nl').style('opacity',0);lk.style('opacity',1);
+  })
+  .on('click',function(e,d){showDetail(d,nodes,links);e.stopPropagation()});
   sim.nodes(nodes).on('tick',function(){
     lk.attr('x1',function(d){return d.source.x}).attr('y1',function(d){return d.source.y})
       .attr('x2',function(d){return d.target.x}).attr('y2',function(d){return d.target.y});
     nd.attr('transform',function(d){return'translate('+d.x+','+d.y+')'});
-    g.selectAll('.edge-label').attr('x',function(d){return(d.source.x+d.target.x)/2}).attr('y',function(d){return(d.source.y+d.target.y)/2-6});
   });
   sim.force('link').links(links);sim.alpha(1).restart();
 }
 
 function showDetail(d,nodes,links){
-  selectedNode=d;
   d3.select('#detail').classed('show',true).select('#dcontent').html(
-    '<h3>'+d.label+'</h3>'+
-    '<div class="meta"><span>Type: '+d.group+'</span><span>Year: '+(d.year||'?')+'</span></div>'+
+    '<h3>'+esc(d.label)+'</h3>'+
+    '<div class="meta"><span>Type: '+esc(d.group)+'</span><span>Year: '+esc(d.year||'?')+'</span></div>'+
     '<div class="links"><b>Connections:</b>'+
     links.filter(function(l){
       var s=typeof l.source==='object'?l.source.id:l.source;
@@ -103,10 +170,10 @@ function showDetail(d,nodes,links){
       var other=s===d.id?t:s;
       var label=l.type||'related';
       var otherNode=nodes.find(function(n){return n.id===other});
-      return '<a href="#" onclick="event.preventDefault();jumpTo(\''+other+'\')">'+label+' → '+(otherNode?otherNode.label.substring(0,40):other)+'</a>';
+      return '<a href="#" onclick="event.preventDefault();jumpTo(\''+escA(other)+'\')">'+esc(label)+' → '+esc(otherNode?otherNode.label.substring(0,40):other)+'</a>';
     }).join('')+
     '</div>'+
-    '<div style="margin-top:12px"><button onclick="event.preventDefault();window.open(\'http://localhost:8001/kg/build\',\'_blank\')" style="padding:6px 12px;background:#7c3aed;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer">Rebuild with LLM entities</button></div>'
+    '<div style="margin-top:12px"><button id="rebuildBtn" onclick="event.preventDefault();rebuildLLM()" style="padding:6px 12px;background:#0d9488;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer">Rebuild with LLM entities</button></div>'
   );
   g.selectAll('.lk').classed('highlight',function(l){
     var s=typeof l.source==='object'?l.source.id:l.source;
@@ -126,11 +193,40 @@ function jumpTo(nodeId){
 }
 
 svg.on('click',function(){g.selectAll('.lk').classed('highlight',false);d3.select('#detail').classed('show',false)});
+// 搜索: 高亮 + 匹配数 + 非匹配禁交互
 d3.select('#si').on('input',function(){
   var q=this.value.toLowerCase();
-  g.selectAll('.nd').style('opacity',function(d){return(d.label||'').toLowerCase().includes(q)?1:.15});
-  g.selectAll('.lk').style('opacity',0.1);
+  var matches=0;
+  g.selectAll('.nd').each(function(d){if((d.label||'').toLowerCase().includes(q))matches++})
+    .style('opacity',function(d){return (q && !(d.label||'').toLowerCase().includes(q)) ? 0.15 : 1})
+    .style('pointer-events',function(d){return (q && !(d.label||'').toLowerCase().includes(q)) ? 'none' : null});
+  g.selectAll('.lk').style('opacity',q?0.1:1);
+  d3.select('#matchCount').text(q?('匹配 '+matches+' 节点'):'');
 });
+// 重建: 防重复 + 加载提示 + 内联错误
+var building=false;
+async function rebuildLLM(){
+  if(building)return;
+  building=true;
+  var btn=d3.select('#rebuildBtn');
+  if(!btn.empty()){btn.attr('disabled',true).text('重建中…')}
+  var topic = localStorage.getItem('aia_t') || '';
+  try{
+    var r = await fetch(API_BASE + '/kg/build', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({table: topic})});
+    var d = await r.json();
+    R(d.nodes, d.links);
+    d3.select('#stats').html('<span>Nodes <b>'+d.nodes.length+'</b></span><span>Edges <b>'+d.links.length+'</b></span>' +
+      '<span style="color:#34d399;margin-left:10px">LLM entities loaded</span>');
+  }catch(e){
+    statusMsg('LLM 重建失败: '+esc(e.message).substring(0,40),'#f87171');
+  }finally{
+    building=false;
+    if(!btn.empty()){btn.attr('disabled',null).text('Rebuild with LLM entities')}
+  }
+}
+window.L = L;
+window.rebuildLLM = rebuildLLM;
+})();
 L();
 </script>
 </body>

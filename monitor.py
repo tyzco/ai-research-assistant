@@ -7,42 +7,41 @@
     clean = sanitize_input(user_text)
 """
 
+import asyncio
 import logging
 import re
+import threading
 import time
+import unicodedata
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-
 # ===== 安全过滤 =====
 
-# Prompt 注入防护关键词
-INJECTION_PATTERNS = [
-    r"忽略.*指令",
-    r"ignore.*instruction",
-    r"system\s*:",
-    r"你是一个",
-    r"you are a",
-    r"忘记.*规则",
-    r"forget.*rule",
-    r"切换角色",
-    r"switch.*role",
-    r"<<SYS>>",
-    r"\[INST\]",
-    r"\[SYSTEM\]",
-    r"DAN\s*:",
-    r"jailbreak",
-]
+from config import INJECTION_PATTERNS
+
+# Unicode 零宽字符 / 混淆字符 (可被用于绕过过滤)
+_ZERO_WIDTH_CHARS = re.compile("[​‌‍‎‏⁠⁡⁢⁣⁤﻿￹￺￻]")
 
 
 def sanitize_input(text: str, max_length: int = 2000) -> str:
-    """过滤用户输入：去特殊字符、截断超长、防注入。"""
+    """过滤用户输入：Unicode 规范化 → 移除零宽字符 → 截断 → 防注入。"""
     if not text:
         return ""
-    cleaned = str(text)[:max_length].strip()
-    # 移除不可见控制字符
+
+    # Unicode 规范化 (NFC): 防止同形异义攻击
+    cleaned = unicodedata.normalize("NFC", str(text))
+
+    # 移除 Unicode 零宽字符 (BOM / LRE / RLE / ZWSP 等，可被用于绕过检测)
+    cleaned = _ZERO_WIDTH_CHARS.sub("", cleaned)
+
+    # 移除不可见 ASCII 控制字符 (保留 \t \n \r)
     cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", cleaned)
+
+    # 安全截断 (Python 字符串按 Unicode 码点计数，不会截断多字节字符)
+    cleaned = cleaned[:max_length].strip()
+
     # 检测注入
     for pattern in INJECTION_PATTERNS:
         if re.search(pattern, cleaned, re.IGNORECASE):
@@ -50,26 +49,19 @@ def sanitize_input(text: str, max_length: int = 2000) -> str:
                 f"Potential prompt injection detected, sanitizing: {pattern}"
             )
             cleaned = re.sub(pattern, "[filtered]", cleaned, flags=re.IGNORECASE)
+
     return cleaned
-
-
-def validate_pdf_header(content: bytes) -> bool:
-    """校验 PDF 文件头魔数（%PDF-）。"""
-    return len(content) > 10 and content[:5] == b"%PDF-"
-
-
-def validate_filename(filename: str) -> bool:
-    """防止路径遍历攻击。"""
-    return not (".." in filename or "/" in filename or "\\" in filename)
 
 
 # ===== 指标收集 =====
 
 
 class MetricsTracker:
-    """全局指标计数器（内存，可扩展 Redis）。"""
+    """全局指标计数器（内存 + threading.Lock，线程安全）。"""
 
     def __init__(self):
+        # RLock (可重入): to_dict() 在持锁时调 estimate_cost() 也加锁, Lock 会自死锁 → /metrics 永久挂起
+        self._lock = threading.RLock()
         self.total_requests = 0
         self.error_count = 0
         self.total_tokens = 0
@@ -78,63 +70,84 @@ class MetricsTracker:
         self.download_count = 0
         self.search_errors = 0
         self.llm_errors = 0
+        # 细粒度错误分类 (DeepSeek 对话建议)
+        self.error_by_type: dict[str, int] = {}
         self.start_time = time.time()
-        self.audit_log: list[dict] = []  # 操作审计
 
-    def record_request(self, tokens: int = 0, latency_ms: float = 0.0, model: str = ""):
-        self.total_requests += 1
-        self.total_tokens += tokens
-        self.total_latency_ms += latency_ms
+    def record_request(
+        self,
+        tokens: int = 0,
+        latency_ms: float = 0.0,
+        model: str = "",
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+    ):
+        with self._lock:
+            self.total_requests += 1
+            self.total_tokens += tokens
+            self.total_latency_ms += latency_ms
+            # 记录真实 token 分布 (用于准确成本估算)
+            if prompt_tokens or completion_tokens:
+                if not hasattr(self, "_prompt_tokens_total"):
+                    self._prompt_tokens_total = 0
+                    self._completion_tokens_total = 0
+                self._prompt_tokens_total += prompt_tokens
+                self._completion_tokens_total += completion_tokens
 
-    def record_error(self, source: str = ""):
-        self.error_count += 1
-        if source == "search":
-            self.search_errors += 1
-        elif source == "llm":
-            self.llm_errors += 1
+    def record_error(self, source: str = "", error_type: str = ""):
+        with self._lock:
+            self.error_count += 1
+            if source == "search":
+                self.search_errors += 1
+            elif source == "llm":
+                self.llm_errors += 1
+            if error_type:
+                self.error_by_type[error_type] = (
+                    self.error_by_type.get(error_type, 0) + 1
+                )
 
     def record_search(self):
-        self.search_count += 1
+        with self._lock:
+            self.search_count += 1
 
     def record_download(self):
-        self.download_count += 1
-
-    def audit(self, tool_name: str, user: str, result: str, cost_tokens: int = 0):
-        """操作审计：记录每次工具调用的时间/用户/结果。准备2 §操作审计。"""
-        entry = {
-            "time": time.time(),
-            "tool": tool_name,
-            "user": user,
-            "result": str(result)[:200],
-            "tokens": cost_tokens,
-        }
-        self.audit_log.append(entry)
-        if len(self.audit_log) > 1000:
-            self.audit_log = self.audit_log[-500:]  # 只保留最近 500 条
+        with self._lock:
+            self.download_count += 1
 
     def estimate_cost(self) -> dict:
-        """Token 成本估算：deepseek-v4-pro 约 $0.14/1M input, $0.28/1M output。"""
-        in_tokens = self.total_tokens // 2  # 粗略假设 50:50
-        out_tokens = self.total_tokens - in_tokens
-        est = in_tokens / 1e6 * 0.14 + out_tokens / 1e6 * 0.28
-        return {"total_tokens": self.total_tokens, "estimated_cost_usd": round(est, 4)}
+        """Token 成本估算：优先使用真实 prompt/completion 分布，否则 50:50。"""
+        with self._lock:
+            prompt = getattr(self, "_prompt_tokens_total", 0)
+            completion = getattr(self, "_completion_tokens_total", 0)
+            if prompt > 0 or completion > 0:
+                est = prompt / 1e6 * 0.14 + completion / 1e6 * 0.28
+            else:
+                in_t = self.total_tokens // 2
+                out_t = self.total_tokens - in_t
+                est = in_t / 1e6 * 0.14 + out_t / 1e6 * 0.28
+            return {
+                "total_tokens": self.total_tokens,
+                "estimated_cost_usd": round(est, 4),
+            }
 
     def to_dict(self) -> dict:
-        uptime = max(1, time.time() - self.start_time)
-        avg_latency = self.total_latency_ms / max(1, self.total_requests)
-        error_rate = self.error_count / max(1, self.total_requests)
-        return {
-            "uptime_seconds": round(uptime),
-            "total_requests": self.total_requests,
-            "avg_latency_ms": round(avg_latency, 1),
-            "error_rate": round(error_rate, 4),
-            "total_tokens": self.total_tokens,
-            **self.estimate_cost(),
-            "search_count": self.search_count,
-            "download_count": self.download_count,
-            "search_errors": self.search_errors,
-            "llm_errors": self.llm_errors,
-        }
+        with self._lock:
+            uptime = max(1, time.time() - self.start_time)
+            avg_latency = self.total_latency_ms / max(1, self.total_requests)
+            error_rate = self.error_count / max(1, self.total_requests)
+            return {
+                "uptime_seconds": round(uptime),
+                "total_requests": self.total_requests,
+                "avg_latency_ms": round(avg_latency, 1),
+                "error_rate": round(error_rate, 4),
+                "total_tokens": self.total_tokens,
+                **self.estimate_cost(),
+                "search_count": self.search_count,
+                "download_count": self.download_count,
+                "search_errors": self.search_errors,
+                "llm_errors": self.llm_errors,
+                "error_by_type": dict(self.error_by_type),
+            }
 
 
 metrics = MetricsTracker()
@@ -151,34 +164,40 @@ async def safe_call(
     source: str = "general",
     **kwargs,
 ) -> Any:
-    """包装异步函数调用：超时 + 重试 + 降级。"""
-    import asyncio
+    """包装异步函数调用：超时 + 指数退避重试 + 降级。
 
+    func 必须是异步可调用对象 (async def 或返回 awaitable)。
+    """
     last_error = None
+    last_error_type = ""
+
     for attempt in range(max_retries + 1):
         try:
             result = await asyncio.wait_for(
-                func(*args, **kwargs) if callable(func) else func,
+                func(*args, **kwargs),
                 timeout=timeout,
             )
             return result
         except asyncio.TimeoutError:
             last_error = TimeoutError(f"{source} 超时 ({timeout}s)")
+            last_error_type = "timeout"
             logger.warning(f"[Retry {attempt+1}/{max_retries}] {last_error}")
         except Exception as e:
             last_error = e
+            last_error_type = type(e).__name__
             logger.warning(f"[Retry {attempt+1}/{max_retries}] {source} error: {e}")
 
+        # 指数退避: 1s, 2s, 4s... 避免立即重试加重下游压力
+        if attempt < max_retries:
+            backoff = min(2**attempt, 8)  # cap at 8s
+            await asyncio.sleep(backoff)
+
     # 全部重试失败 → 降级
-    metrics.record_error(source)
-    logger.error(f"{source} all retries failed: {last_error}")
-    return None if source in ("llm",) else ([] if source == "search" else {})
+    metrics.record_error(source, error_type=last_error_type)
+    logger.error(f"{source} all retries failed ({last_error_type}): {last_error}")
 
-
-def safe_sync_call(func, *args, default=None, **kwargs) -> Any:
-    """包装同步函数调用：异常捕获 + 降级。"""
-    try:
-        return func(*args, **kwargs)
-    except Exception as e:
-        logger.error(f"Sync call failed: {e}")
-        return default
+    if source in ("llm",):
+        return None
+    elif source == "search":
+        return []
+    return {}

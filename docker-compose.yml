@@ -1,19 +1,24 @@
 services:
-  app:
+  paperlink:
     build: .
+    container_name: paperlink
     ports:
       - "8001:8001"
     env_file:
       - .env
     environment:
       - HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-0}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-paperlink-production-change-me}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:8001,http://127.0.0.1:8001}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       - "./paper_cache:/app/paper_cache"
       - "./data:/app/data"
       - "${HF_HOME:-~/.cache/huggingface}:/root/.cache/huggingface:ro"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8001/ready"]
       interval: 30s
       timeout: 5s
       retries: 3
+      start_period: 90s

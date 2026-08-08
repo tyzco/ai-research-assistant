@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.git/
+.env
+*.egg-info/
+dist/
+node_modules/
+rag-admin/
+.chainlit/
+*.jsonl
+data/*
+!data/.gitkeep
+paper_cache/*
+!paper_cache/.gitkeep

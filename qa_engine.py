@@ -1,11 +1,28 @@
 """问答引擎：查询改写校验 + 策略路由 + 混合检索 + 级联重排 + 多轮记忆 + DeepSeek 生成。"""
 
 import logging
+import re
+import threading
 from typing import Any
 
 from openai import AsyncOpenAI
 
-from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
+from config import (
+    COMPLEX_INTENT_TYPES,
+    DEEPSEEK_API_KEY,
+    DEEPSEEK_BASE_URL,
+    DEEPSEEK_MODEL,
+    INTENT_KEYWORDS,
+    LLM_COREF_MAX_TOKENS,
+    LLM_COREF_TEMPERATURE,
+    LLM_COREF_TIMEOUT,
+    LLM_EXPAND_MAX_TOKENS,
+    LLM_EXPAND_TEMPERATURE,
+    LLM_EXPAND_TIMEOUT,
+    LLM_GEN_MAX_TOKENS,
+    LLM_GEN_TEMPERATURE,
+    LLM_GEN_TIMEOUT,
+)
 from models import AskResponse
 from monitor import safe_call
 
@@ -13,20 +30,25 @@ logger = logging.getLogger(__name__)
 
 # ---- Rerank 模型（延迟加载）----
 _reranker = None
+_reranker_lock = threading.Lock()  # DeepSeek 审查 #3: 防并发重复加载
 
 
 def _get_reranker():
     global _reranker
     if _reranker is None:
-        from sentence_transformers import CrossEncoder
+        with _reranker_lock:
+            if _reranker is None:
+                from sentence_transformers import CrossEncoder
 
-        logger.info("Loading BAAI/bge-reranker-base...")
-        _reranker = CrossEncoder("BAAI/bge-reranker-base", max_length=512)
+                from config import RERANK_MODEL
+
+                logger.info(f"Loading {RERANK_MODEL}...")
+                _reranker = CrossEncoder(RERANK_MODEL, max_length=512)
     return _reranker
 
 
 def _rerank(question: str, chunks: list[dict], top_k: int = 5) -> list[dict]:
-    """CrossEncoder 重排序：从粗召回中精排 top-k。"""
+    """CrossEncoder 重排序：从粗召回中精排 top-k。同步版本 (供同步调用)。"""
     if len(chunks) <= top_k:
         return chunks
     try:
@@ -38,6 +60,16 @@ def _rerank(question: str, chunks: list[dict], top_k: int = 5) -> list[dict]:
     except Exception as e:
         logger.warning(f"Rerank failed: {e}, using top-{top_k} by vector score")
         return chunks[:top_k]
+
+
+async def _rerank_async(question: str, chunks: list[dict], top_k: int = 5) -> list[dict]:
+    """异步重排 (DeepSeek 审查 #2: CrossEncoder.predict 同步阻塞事件循环)。
+    通过 to_thread 放入线程池执行, 不阻塞 asyncio 主循环。"""
+    import asyncio
+
+    if len(chunks) <= top_k:
+        return chunks
+    return await asyncio.to_thread(_rerank, question, chunks, top_k)
 
 
 # ---- 查询改写 ----
@@ -82,7 +114,8 @@ async def _resolve_coreference(question: str, history: str) -> str:
             return question
         resolved = resp.choices[0].message.content.strip()
         return resolved if len(resolved) >= 5 else question
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Coreference resolution failed: {e}")  # DeepSeek 审查 #4
         return question
 
 
@@ -114,7 +147,8 @@ async def _expand_query(question: str) -> str:
         if _validate_expansion(question, expanded):
             return expanded
         return question
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Query expansion failed: {e}")  # DeepSeek 审查 #4
         return question
 
 
@@ -133,28 +167,35 @@ def _validate_expansion(original: str, expanded: str, threshold: float = 0.75) -
 
 def _classify_intent(question: str) -> str:
     """意图路由：分类查询类型以选择最优检索策略。
-    准备2 §意图识别：定义/对比/实操/最新四类路由。"""
-    mapping = [
-        ("定义", ["什么是", "是什么", "定义", "概念", "define", "what is"]),
-        ("对比", ["对比", "区别", "优缺点", "比较", "vs", "compare", "哪个更好", "差异"]),
-        ("实操", ["如何", "怎么", "怎样", "方法", "步骤", "how to", "流程", "实现"]),
-        (
-            "最新",
-            ["最新", "前沿", "趋势", "2024", "2025", "2026", "recent", "latest", "突破", "进展"],
-        ),
-        ("原理", ["为什么", "原理", "机制", "原因", "why", "mechanism", "证明"]),
-    ]
+    三层漏斗第 1+2 层: 关键词快路径 → 嵌入语义兜底 → 默认事实。
+    关键词从 config.INTENT_KEYWORDS 统一读取。"""
     q = (question or "").lower()
-    for label, keywords in mapping:
+    for label, keywords in INTENT_KEYWORDS.items():
         if any(kw in q for kw in keywords):
             return label
+    # 第 2 层: 规则未命中 → 嵌入语义分类 (承接"意思常规但改了表达"的查询)
+    try:
+        from intent_classifier import classify_intent
+
+        sem = classify_intent(question)
+        if sem:
+            return sem[0]
+    except Exception:
+        pass  # 语义层不可用 → 静默降级为纯规则+LLM
     return "事实"  # default: simple fact retrieval
 
 
 def _is_complex_query(question: str) -> bool:
     """策略路由：判断是否需要 Rerank 重排序。"""
     intent = _classify_intent(question)
-    return intent in ("对比", "原理", "最新") or len(question) > 15
+    return intent in tuple(COMPLEX_INTENT_TYPES) or len(question) > 15
+
+
+# 复杂意图关键词集：由 config.INTENT_KEYWORDS + COMPLEX_INTENT_TYPES 派生 (DeepSeek 审查 #6)
+# 替代原硬编码 ["对比", "区别", "优缺点", "机制"]，新增意图关键词无需改代码
+COMPLEX_EXPAND_KEYWORDS = {
+    kw for label in COMPLEX_INTENT_TYPES for kw in INTENT_KEYWORDS.get(label, [])
+}
 
 
 # ---- Prompt ----
@@ -185,19 +226,27 @@ QA_PROMPT = """你是学术文献精读助手。基于用户上传的论文全�
 
 # ---- 主要问答函数 ----
 async def ask_question(
-    table_name: str, question: str, use_rerank: bool = True, model: str = ""
+    table_name: str,
+    question: str,
+    use_rerank: bool = True,
+    model: str = "",
+    memory_key: str = "",
 ) -> AskResponse:
-    """RAG 问答：指代消解 → 查询改写 → 粗召回 → Rerank 精排 → 生成。"""
+    """RAG 问答：指代消解 → 查询改写 → 粗召回 → Rerank 精排 → 生成。
+
+    memory_key: ConversationMemory 的 key。传入 topic_id 使前端 /ask 和 Agent
+    工具共享同一份对话记忆。为空时回退到 table_name（Agent 工具场景）。"""
     from knowledge_base import retrieve_with_images
 
     client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+    mem_key = memory_key or table_name
 
     # 多轮指代消解：有历史 + 短问题 → 消解"它/这"等指代词
     mem_ctx = ""
     try:
         from conversation_memory import get_memory
 
-        mem = get_memory(table_name)
+        mem = get_memory(mem_key)
         mem_ctx = mem.get_context()
     except Exception:
         pass
@@ -205,20 +254,21 @@ async def ask_question(
     if mem_ctx and len(question) < 20:
         resolved_question = await _resolve_coreference(question, mem_ctx)
 
-    # 查询改写（短问题跳过，节省 2-3s）
+    # 查询改写（短问题跳过，节省 2-3s；复杂意图短问题仍改写）
     if len(resolved_question) < 15 and not any(
-        kw in resolved_question for kw in ["对比", "区别", "优缺点", "机制"]
+        kw in resolved_question for kw in COMPLEX_EXPAND_KEYWORDS
     ):
         expanded = resolved_question
     else:
         expanded = await _expand_query(resolved_question)
 
     # 自适应混合检索 + 快速模式（短问题跳过 Rerank 省 1-2s）
-    use_rerank = (
-        use_rerank
-        and _is_complex_query(resolved_question)
-        and len(resolved_question) > 15
-    )
+    # DeepSeek 审查 #5: _is_complex_query 内部已含 len>15, 外层冗余判断删除
+    use_rerank = use_rerank and _is_complex_query(resolved_question)
+    # DeepSeek 审查 #7: 预初始化, 避免降级分支抛异常时 UnboundLocalError
+    text_res: list[dict] = []
+    img_res: list[dict] = []
+    abs_res: list[dict] = []
     try:
         from hybrid_retriever import AdaptiveHybridRetriever
 
@@ -227,18 +277,30 @@ async def ask_question(
             expanded, top_k=5, filter_expr="is_fulltext = true AND is_image = false"
         )
         img_res, _ = hr.search(expanded, top_k=3, filter_expr="is_image = true")
-        abs_res = []  # 摘要层用下面的简单检索
     except Exception:
         text_res, img_res, abs_res = retrieve_with_images(
             table_name, expanded, top_k=20
         )
         if use_rerank:
-            text_res = _rerank(question, text_res, top_k=5)
-            img_res = _rerank(question, img_res, top_k=3)
+            text_res = await _rerank_async(question, text_res, top_k=5)
+            img_res = await _rerank_async(question, img_res, top_k=3)
 
     # 摘要层用简单检索
     if not abs_res:
         _, _, abs_res = retrieve_with_images(table_name, expanded, top_k=5)
+
+    # 无任何检索结果 → 引导建库 (真实体验修复: 原直接调 LLM 返回空答案,
+    # 用户"先提问后建库"会看到空白气泡, 且空上下文浪费一次 LLM 调用)
+    if not text_res and not img_res and not abs_res:
+        return AskResponse(
+            answer=(
+                "⚠️ 该课题暂无知识库内容，无法检索到相关论文段落。\n\n"
+                "请先完成建库再提问：\n"
+                "1. 点论文卡片「📥 构建知识库」批量下载 OA 论文，或\n"
+                "2. 直接拖拽 PDF 到页面上传\n\n"
+                "建库完成后即可基于论文全文回答。"
+            )
+        )
 
     # 父子分块扩展：检索到 chunk 后，拉取相邻 chunk 提供完整上下文
     neighbor_texts = []
@@ -258,13 +320,14 @@ async def ask_question(
             expanded_ids.add(cid)
             pid = r.get("paper_id", "")
             ci = r.get("chunk_index")
-            if not pid or ci is None:
+            # DeepSeek 审查 #2: pid 白名单校验, 防止拼接进 where 子句引发语法错误/注入
+            if not pid or ci is None or not re.fullmatch(r"[A-Za-z0-9_-]+", pid):
                 continue
             # 查同一论文 chunk_index ±1 的块
             neighbors = (
                 tbl.search()
                 .where(
-                    f"paper_id = '{pid}' AND chunk_index >= {max(1, ci-1)} AND chunk_index <= {ci+1} AND is_fulltext = true"
+                    f"paper_id = '{pid}' AND chunk_index >= {max(1, ci-2)} AND chunk_index <= {ci+2} AND is_fulltext = true"
                 )
                 .limit(6)
                 .to_list()
@@ -273,15 +336,15 @@ async def ask_question(
                 if n.get("chunk_id", "") not in expanded_ids:
                     expanded_ids.add(n["chunk_id"])
                     neighbor_texts.append(n)
-    except Exception:
-        pass  # 静默降级，不影响主流程
+    except Exception as e:
+        logger.warning(f"Neighbor chunk expansion failed: {e}")
     if neighbor_texts:
         text_res = (text_res or []) + neighbor_texts
 
     # 构建 Prompt
     if text_res:
         ft = "\n\n".join(
-            f"[{i+1}] {r.get('title','N/A')} ({r.get('year','N/A')}), p{r.get('page_number',0)}\n{r.get('text','')[:1200]}"
+            f"[{i+1}] {r.get('title','N/A')} ({r.get('year','N/A')}), p{r.get('page_number',0)}\n{r.get('text','')[:4096]}"
             for i, r in enumerate(text_res)
         )
     else:
@@ -310,8 +373,9 @@ async def ask_question(
             abstract_context=ab,
             question=question,
         )
+        # DeepSeek 审查 #8: 历史放开头, 避免污染末端的回答指令
         if mem_ctx:
-            prompt_content += f"\n\n【对话历史】\n{mem_ctx}"
+            prompt_content = f"【对话历史】\n{mem_ctx}\n\n{prompt_content}"
 
         resp = await safe_call(
             client.chat.completions.create,
@@ -319,6 +383,8 @@ async def ask_question(
             messages=[{"role": "user", "content": prompt_content}],
             temperature=LLM_GEN_TEMPERATURE,
             max_tokens=LLM_GEN_MAX_TOKENS,
+            # deepseek-v4-pro 推理模型: 禁用推理, 防止复杂 RAG prompt 下推理耗尽 max_tokens 输出空串
+            extra_body={"thinking": {"type": "disabled"}},
             max_retries=2,
             timeout=LLM_GEN_TIMEOUT,
             source="llm",
@@ -335,15 +401,22 @@ async def ask_question(
     try:
         from conversation_memory import get_memory
 
-        get_memory(table_name).add_turn(question, answer)
+        get_memory(mem_key).add_turn(question, answer)
     except Exception:
         pass
 
-    # 引用列表
+    # 引用列表 (DeepSeek 审查 #3: 去重键 DOI/paper_id 优先, 避免同名论文误去重)
+    def _ref_key(r: dict) -> str:
+        return (
+            f"doi:{r.get('doi','').lower()}"
+            if r.get("doi")
+            else (r.get("paper_id") or r.get("title") or "")
+        )
+
     seen = set()
     references: list[dict[str, Any]] = []
     for r in text_res or []:
-        key = r.get("title", "")
+        key = _ref_key(r)
         if key and key not in seen:
             seen.add(key)
             references.append(
@@ -356,9 +429,9 @@ async def ask_question(
             )
 
     supplement: list[dict[str, Any]] = []
-    seen.update(r.get("title", "") for r in (text_res or []))
+    seen.update(_ref_key(r) for r in (text_res or []))
     for r in abs_res or []:
-        key = r.get("title", "")
+        key = _ref_key(r)
         if key and key not in seen:
             seen.add(key)
             doi_val = r.get("doi")

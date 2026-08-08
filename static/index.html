@@ -4,59 +4,79 @@
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PaperLink &mdash; 直达论文</title>
 <style>
-:root,.light{--bg:#f8fafc;--card:#fff;--text:#1e293b;--muted:#64748b;--border:#e2e8f0;--brand:#2563eb;--brand-light:#3b82f6;--green:#16a34a;--hover:#f1f5f9;--input-bg:#fff;--shadow:0 1px 3px rgba(0,0,0,.04);--red:#dc2626}
-.dark{--bg:#0f172a;--card:#1e293b;--text:#e2e8f0;--muted:#94a3b8;--border:#334155;--brand:#3b82f6;--brand-light:#60a5fa;--green:#22c55e;--hover:#334155;--input-bg:#1e293b;--shadow:0 1px 3px rgba(0,0,0,.2);--red:#ef4444}
+/* ============================================================
+   PaperLink · 学术研究助手 — 暖纸 × 深茶绿
+   依据 taste-skill (单强调色/反AI蓝紫/反卡片滥用) + impeccable (craft floor)
+   + ui-ux-pro-max (学术调性配色)。保留全部 class 名, 仅重设计视觉层。
+   ============================================================ */
+:root,.light{--bg:#faf9f7;--card:#fff;--text:#1c1917;--muted:#78716c;--border:#e7e5e4;--brand:#0f766e;--brand-light:#0d9488;--brand-strong:#0f766e;--green:#047857;--hover:#f5f5f4;--input-bg:#fff;--shadow:0 1px 3px rgba(28,25,23,.06),0 4px 16px rgba(28,25,23,.04);--red:#b91c1c;--ring:rgba(15,118,110,.14)}
+.dark{--bg:#16140f;--card:#211e19;--text:#e7e5e4;--muted:#a8a29e;--border:#3f3b36;--brand:#2dd4bf;--brand-light:#5eead4;--brand-strong:#0d9488;--green:#34d399;--hover:#2b2823;--input-bg:#211e19;--shadow:0 1px 3px rgba(0,0,0,.35),0 6px 20px rgba(0,0,0,.22);--red:#f87171;--ring:rgba(45,212,191,.18)}
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans SC',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex}
-/* Glow */
-.glow{position:fixed;top:-256px;left:0;right:0;height:512px;background:radial-gradient(ellipse at 50% 0,rgba(37,99,235,.08) 0,transparent 70%);pointer-events:none;z-index:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','PingFang SC','Noto Sans SC','Segoe UI',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+/* 暖调顶部光晕 — 替代 AI 蓝紫 */
+.glow{position:fixed;top:-256px;left:0;right:0;height:512px;background:radial-gradient(ellipse at 50% 0,rgba(15,118,110,.06) 0,transparent 70%);pointer-events:none;z-index:0}
 /* Sidebar */
 .sidebar{width:220px;background:var(--card);border-right:1px solid var(--border);display:flex;flex-direction:column;position:sticky;top:0;height:100vh;z-index:10;flex-shrink:0}
-.sidebar h2{font-size:13px;font-weight:600;padding:12px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px}
-.sidebar h2 i{width:24px;height:24px;border-radius:8px;background:linear-gradient(135deg,var(--brand),#7c3aed);color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-style:normal}
-.sidebar .btn-new{width:100%;padding:7px;background:var(--brand);color:#fff;border:none;border-radius:8px;font-size:11px;font-weight:500;cursor:pointer;margin:8px 0}
-.sidebar .btn-new:hover{background:var(--brand-light)}
-.topic-list{flex:1;overflow-y:auto;padding:4px}
-.topic-item{padding:7px 10px;border-radius:8px;cursor:pointer;font-size:11px;margin:2px 4px;border-left:2px solid transparent;transition:.15s}
+.sidebar h2{font-size:14px;font-weight:700;letter-spacing:-.01em;padding:15px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:9px}
+.sidebar h2 i{width:28px;height:28px;border-radius:9px;background:linear-gradient(135deg,var(--brand-strong),#0d9488);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-style:normal;box-shadow:0 2px 8px var(--ring)}
+.sidebar .btn-new{width:calc(100% - 20px);padding:9px;margin:12px 10px;background:linear-gradient(135deg,var(--brand-strong),#0d9488);color:#fff;border:none;border-radius:10px;font-size:12px;font-weight:600;cursor:pointer;transition:transform .12s,box-shadow .12s;box-shadow:0 3px 12px var(--ring)}
+.sidebar .btn-new:hover{box-shadow:0 5px 16px var(--ring);filter:brightness(1.05)}
+.sidebar .btn-new:active{transform:scale(.97)}
+.topic-list{flex:1;overflow-y:auto;padding:6px 8px}
+.topic-item{padding:9px 12px;border-radius:10px;cursor:pointer;font-size:11px;margin:3px 2px;border-left:3px solid transparent;transition:background .15s,border-color .15s}
 .topic-item:hover{background:var(--hover)}
-.topic-item.active{background:color-mix(in srgb,var(--brand) 8%,transparent);border-left-color:var(--brand)}
+.topic-item.active{background:color-mix(in srgb,var(--brand) 9%,transparent);border-left-color:var(--brand)}
 .topic-item .tname{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .topic-item .tmeta{font-size:10px;color:var(--muted)}
 /* Main */
 .main{flex:1;display:flex;flex-direction:column;max-height:100vh}
-.topbar{padding:6px 14px;background:var(--card);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-shrink:0;font-size:11px}
-.topbar select,.topbar button{font-size:10px;padding:3px 8px;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--text);cursor:pointer}
+/* ===== 专业应用头部 ===== */
+.topbar{position:relative;padding:0 16px;height:54px;background:color-mix(in srgb,var(--card) 88%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;flex-shrink:0;z-index:20}
+.topbar .brand{display:flex;align-items:center;gap:9px;min-width:0}
+.topbar .brand-mark{width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,var(--brand-strong),#0d9488);color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:800;box-shadow:0 2px 10px var(--ring);flex-shrink:0}
+.topbar .brand-name{font-size:14px;font-weight:700;letter-spacing:-.01em}
+.topbar .conn{font-size:10px;color:var(--muted)}
+.top-actions{display:flex;align-items:center;gap:7px}
+.topbar select,.topbar .chip{font-size:11px;padding:6px 11px;border:1px solid var(--border);border-radius:9px;background:var(--card);color:var(--text);cursor:pointer;transition:border-color .15s,box-shadow .15s;outline:none;font-weight:500}
+.topbar select:hover,.topbar .chip:hover{border-color:var(--brand)}
+.topbar select:focus,.topbar .chip:focus{border-color:var(--brand);box-shadow:0 0 0 3px var(--ring)}
+.topbar .chip:active{transform:scale(.96)}
+.topbar .icon-btn{width:30px;height:30px;padding:0;display:inline-flex;align-items:center;justify-content:center}
 .topbar .sep{color:var(--muted);font-size:10px}
-.chat{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px}
+.agent-on{background:var(--brand-strong)!important;color:#fff!important;border-color:var(--brand-strong)!important}
+.chat{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px}
 /* Messages */
 @keyframes popIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
-.msg{animation:popIn .3s ease-out both}
+.msg{animation:popIn .3s cubic-bezier(.16,1,.3,1) both}
 .msg.user{display:flex;justify-content:flex-end}
-.msg.user .bubble{max-width:80%;background:var(--brand);color:#fff;border-radius:16px 16px 4px 16px;padding:10px 14px;font-size:13px;line-height:1.5;box-shadow:0 2px 6px rgba(37,99,235,.12)}
-.msg .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px;font-size:13px;line-height:1.6;box-shadow:var(--shadow)}
-/* ----- ACTION BUTTONS: 醒目、灰底、蓝字、大号 ----- */
-.msg-actions{margin-top:8px;padding-top:8px;border-top:1px solid var(--border);display:flex;gap:8px;flex-wrap:wrap}
-.msg-actions button,.msg-actions a{display:inline-flex!important;align-items:center;gap:5px;padding:7px 16px;font-size:13px;font-weight:600;background:var(--hover);border:2px solid #94a3b8;border-radius:10px;color:var(--text);cursor:pointer;transition:all .15s;text-decoration:none;line-height:1.2}
-.msg-actions button:hover,.msg-actions a:hover{background:var(--brand);color:#fff;border-color:var(--brand)}
+.msg.user .bubble{max-width:80%;background:var(--brand-strong);color:#fff;border-radius:16px 16px 4px 16px;padding:10px 16px;font-size:13px;line-height:1.55;box-shadow:0 3px 12px var(--ring)}
+.msg .card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:16px 18px;font-size:13px;line-height:1.7;box-shadow:0 1px 2px rgba(0,0,0,.03),0 8px 24px color-mix(in srgb,var(--text) 4%,transparent);transition:border-color .15s}
+.msg .card:hover{border-color:color-mix(in srgb,var(--brand) 35%,var(--border))}
+/* Action buttons — 灰底 → 强调色 hover, 触觉反馈 */
+.msg-actions{margin-top:9px;padding-top:9px;border-top:1px solid var(--border);display:flex;gap:8px;flex-wrap:wrap}
+.msg-actions button,.msg-actions a{display:inline-flex!important;align-items:center;gap:5px;padding:7px 15px;font-size:13px;font-weight:600;background:var(--hover);border:1.5px solid var(--border);border-radius:10px;color:var(--text);cursor:pointer;transition:all .15s;text-decoration:none;line-height:1.2}
+.msg-actions button:hover,.msg-actions a:hover{background:var(--brand-strong);color:#fff;border-color:var(--brand-strong)}
+.msg-actions button:active,.msg-actions a:active{transform:scale(.97)}
 /* Markdown */
-.msg h1{font-size:15px;font-weight:700;margin-bottom:6px}
-.msg h2{font-size:14px;font-weight:600;margin:8px 0 4px}
-.msg h3{font-size:13px;font-weight:600;margin:6px 0 2px}
-.msg pre{background:#1e293b;color:#e2e8f0;border-radius:8px;padding:10px 14px;font-size:12px;overflow-x:auto;margin:6px 0}
-.msg code{background:var(--hover);padding:2px 5px;border-radius:4px;font-size:12px;color:var(--brand)}
-.msg blockquote{border-left:3px solid #a5b4fc;margin:6px 0;padding:4px 12px;color:var(--muted);font-size:12px;background:var(--hover);border-radius:0 6px 6px 0}
+.msg h1{font-size:16px;font-weight:700;letter-spacing:-.01em;margin-bottom:7px}
+.msg h2{font-size:15px;font-weight:600;letter-spacing:-.01em;margin:10px 0 5px}
+.msg h3{font-size:13px;font-weight:600;margin:7px 0 3px}
+.msg pre{background:#1c1917;color:#e7e5e4;border-radius:9px;padding:11px 14px;font-size:12px;line-height:1.55;overflow-x:auto;margin:7px 0}
+.msg code{background:var(--hover);padding:2px 6px;border-radius:5px;font-size:12px;color:var(--brand)}
+.msg pre code{background:transparent;padding:0;color:inherit}
+.msg blockquote{border-left:3px solid var(--brand);margin:7px 0;padding:5px 13px;color:var(--muted);font-size:12px;background:var(--hover);border-radius:0 7px 7px 0}
 .msg a{color:var(--brand)}
 .msg a:hover{text-decoration:underline}
-.msg ul,.msg ol{padding-left:20px;margin:4px 0}
+.msg ul,.msg ol{padding-left:20px;margin:5px 0}
 /* Section titles */
-.cn-header,.en-header{font-weight:700;font-size:12px;padding:6px 0;margin:6px 0 4px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border)}
+.cn-header,.en-header{font-weight:700;font-size:12px;padding:7px 0;margin:7px 0 5px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border)}
 .cn-header{color:var(--red)}
 .en-header{color:var(--brand)}
-.cn-header .badge,.en-header .badge{font-size:10px;padding:2px 8px;border-radius:10px;font-weight:500}
-.cn-header .badge{background:#fee2e2;color:var(--red)}.dark .cn-header .badge{background:#7f1d1d;color:#fca5a5}
-.en-header .badge{background:#dbeafe;color:var(--brand)}.dark .en-header .badge{background:#1e3a5f;color:#93c5fd}
+.cn-header .badge,.en-header .badge{font-size:10px;padding:2px 9px;border-radius:10px;font-weight:500}
+.cn-header .badge{background:color-mix(in srgb,var(--red) 12%,transparent);color:var(--red)}
+.en-header .badge{background:color-mix(in srgb,var(--brand) 12%,transparent);color:var(--brand)}
 /* Paper card */
-.paper{display:flex;align-items:flex-start;gap:8px;padding:10px 12px;border-radius:10px;margin-bottom:3px;background:var(--card);border:1px solid var(--border);transition:all .15s}
+.paper{display:flex;align-items:flex-start;gap:9px;padding:11px 13px;border-radius:11px;margin-bottom:4px;background:var(--card);border:1px solid var(--border);transition:border-color .15s,box-shadow .15s}
 .paper:hover{border-color:var(--brand);box-shadow:var(--shadow)}
 .paper .icon{font-size:16px;flex-shrink:0;margin-top:2px}
 .paper .info{flex:1;min-width:0}
@@ -65,19 +85,28 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans SC',sans
 .paper .info .ptitle a:hover{color:var(--brand)}
 .paper .info .pmeta{font-size:10px;color:var(--muted);margin-bottom:4px}
 .paper .tags{display:flex;gap:5px;flex-wrap:wrap;align-items:center}
-.tag{display:inline-flex;align-items:center;gap:2px;padding:3px 8px;border-radius:5px;font-size:10px;font-weight:500;text-decoration:none}
-.tag.green{background:#dcfce7;color:#166534}.dark .tag.green{background:#14532d;color:#86efac}
+.tag{display:inline-flex;align-items:center;gap:2px;padding:3px 9px;border-radius:6px;font-size:10px;font-weight:500;text-decoration:none}
+.tag.green{background:color-mix(in srgb,var(--green) 12%,transparent);color:var(--green)}
 .tag.yellow{background:#fef9c3;color:#854d0e}.dark .tag.yellow{background:#713f12;color:#fde047}
-.tag.red{background:#fee2e2;color:#991b1b}
-.tag.blue{background:#dbeafe;color:#1e40af}
+.tag.red{background:color-mix(in srgb,var(--red) 10%,transparent);color:var(--red)}
+.tag.blue{background:color-mix(in srgb,var(--brand) 12%,transparent);color:var(--brand)}
 .tag.gray{background:var(--hover);color:var(--muted);cursor:pointer}
 .tag.gray:hover{background:var(--border)}
-.tag.purple{background:#f0e6ff;color:#7c3aed;text-decoration:none}.dark .tag.purple{background:#2d1b69;color:#a78bfa}
+/* purple tag 归并到强调色 — 单一强调色原则 */
+.tag.purple{background:color-mix(in srgb,var(--brand) 12%,transparent);color:var(--brand);text-decoration:none}
+/* Skill selector + Agent toggle */
+.skill-sel{font-size:10px;padding:4px 7px;border:1px solid var(--border);border-radius:7px;background:var(--card);color:var(--text);cursor:pointer;max-width:90px}
+.agent-on{background:var(--brand-strong)!important;color:#fff!important}
+/* Pi-Agent trace */
+.pi-trace{padding:8px 12px;margin:4px 0;border-radius:8px;font-size:10px;border-left:3px solid var(--brand);background:var(--hover);animation:popIn .3s ease-out}
+.pi-trace.tool-ok{border-left-color:var(--green)}
+.pi-trace.tool-err{border-left-color:var(--red)}
+.pi-trace .step-num{font-weight:600;color:var(--brand);margin-right:4px}
 /* Progress bar */
-.progress{position:fixed;bottom:20px;right:20px;z-index:100;width:300px;background:var(--card);border:2px solid var(--brand);border-radius:14px;padding:16px;box-shadow:0 8px 30px rgba(0,0,0,.12);display:none}
+.progress{position:fixed;bottom:20px;right:20px;z-index:100;width:300px;background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px;box-shadow:0 12px 40px rgba(0,0,0,.15);display:none}
 .progress .bar{width:100%;height:8px;background:var(--hover);border-radius:4px;overflow:hidden;margin:10px 0}
-.progress .fill{height:100%;background:linear-gradient(90deg,var(--brand),#7c3aed);border-radius:4px;transition:width .4s ease-out;animation:shimmer 2s infinite}
-@keyframes shimmer{0%{opacity:.7}50%{opacity:1}100%{opacity:.7}}
+.progress .fill{height:100%;background:var(--brand-strong);border-radius:4px;transition:width .4s ease-out;animation:softPulse 2s infinite}
+@keyframes softPulse{0%,100%{opacity:.85}50%{opacity:1}}
 .progress .title{font-weight:600;font-size:12px;color:var(--brand);display:flex;justify-content:space-between}
 .progress .detail{font-size:10px;color:var(--muted);margin-top:4px}
 /* Loading */
@@ -89,16 +118,19 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans SC',sans
 .loading .status{font-size:12px;font-weight:600;color:var(--brand);margin-bottom:6px}
 /* Upload */
 .upload-zone{border:2px dashed var(--border);border-radius:16px;padding:24px;text-align:center;cursor:pointer;margin:0 14px 8px;transition:.15s}
-.upload-zone:hover{border-color:var(--brand);background:color-mix(in srgb,var(--brand) 3%,transparent)}
+.upload-zone:hover{border-color:var(--brand);background:color-mix(in srgb,var(--brand) 4%,transparent)}
 /* Input */
-.input-bar{padding:8px 14px 14px;display:flex;gap:8px}
-.input-bar textarea{flex:1;border:1px solid var(--border);border-radius:14px;padding:10px 14px;font-size:13px;resize:none;outline:none;font-family:inherit;line-height:1.4;max-height:120px;background:var(--input-bg);color:var(--text);box-shadow:var(--shadow)}
-.input-bar textarea:focus{border-color:var(--brand);box-shadow:0 0 0 3px rgba(37,99,235,.1)}
-.input-bar .send-btn{padding:10px 20px;background:var(--brand);color:#fff;border:none;border-radius:14px;font-size:13px;font-weight:600;cursor:pointer;transition:.15s}
-.input-bar .send-btn:hover{box-shadow:0 4px 12px rgba(37,99,235,.3);transform:translateY(-1px)}
-.input-bar .send-btn:disabled{opacity:.5}
+.input-bar{padding:12px 18px 16px;display:flex;gap:10px;background:linear-gradient(0deg,color-mix(in srgb,var(--bg) 60%,transparent),transparent)}
+.input-bar textarea{flex:1;border:1px solid var(--border);border-radius:16px;padding:12px 16px;font-size:13px;resize:none;outline:none;font-family:inherit;line-height:1.5;max-height:120px;background:var(--input-bg);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.03),0 4px 16px color-mix(in srgb,var(--text) 4%,transparent);transition:border-color .15s,box-shadow .15s}
+.input-bar textarea:focus{border-color:var(--brand);box-shadow:0 0 0 3px var(--ring)}
+.input-bar .send-btn{padding:11px 22px;background:var(--brand-strong);color:#fff;border:none;border-radius:16px;font-size:13px;font-weight:600;cursor:pointer;transition:transform .12s,box-shadow .12s;box-shadow:0 3px 12px var(--ring)}
+.input-bar .send-btn:hover{box-shadow:0 5px 18px var(--ring);transform:translateY(-1px)}
+.input-bar .send-btn:active{transform:translateY(0) scale(.96)}
+.input-bar .send-btn:disabled{opacity:.5;cursor:not-allowed}
+/* 全局焦点可见性 (无障碍) */
+:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 /* Shimmer 文字动画 */
-.shimmer-text{display:inline-block;background:linear-gradient(90deg,#64748b 25%,#3b82f6 50%,#64748b 75%);background-size:200% 100%;-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;animation:shimmer-text 2s linear infinite}
+.shimmer-text{display:inline-block;background:linear-gradient(90deg,var(--muted) 25%,var(--brand) 50%,var(--muted) 75%);background-size:200% 100%;-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;animation:shimmer-text 2s linear infinite}
 @keyframes shimmer-text{0%{background-position:200% 0}100%{background-position:-200% 0}}
 /* Agent step card */
 .agent-step{padding:10px 14px;margin:4px 0;border-radius:10px;font-size:11px;border-left:3px solid var(--brand);background:var(--hover);animation:popIn .3s ease-out}
@@ -121,7 +153,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans SC',sans
 .topbar .dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:4px;vertical-align:middle}
 .topbar .dot.live{background:var(--green);animation:dotLive 2s ease-in-out infinite}
 .topbar .dot.idle{background:var(--muted)}
-@keyframes dotLive{0%,100%{box-shadow:0 0 0 0 rgba(22,163,74,.4)}50%{box-shadow:0 0 0 5px rgba(22,163,74,0)}}
+@keyframes dotLive{0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--green) 40%,transparent)}50%{box-shadow:0 0 0 5px color-mix(in srgb,var(--green) 0%,transparent)}}
 .count-pop{animation:countPop .35s ease-out}
 @keyframes countPop{0%{transform:scale(1)}40%{transform:scale(1.2)}100%{transform:scale(1)}}
 </style>
@@ -136,16 +168,40 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans SC',sans
   <nav class="topic-list" id="tl"></nav>
   <div class="footnote">
     本平台仅提供论文元数据索引<br>不存储或分发受版权保护的论文全文
-    <br><br><a href="/static/pipeline.html" style="color:var(--muted)">🔬 流水线</a> · <a href="/static/kg.html" style="color:var(--muted)">📊 图谱</a> · <a href="/static/watch.html" style="color:var(--muted)">👁️ 监控</a>
-  </div>
+    <br><br>  </div>
 </aside>
 
 <main class="main">
-  <div class="topbar">
-    <span style="font-weight:600" id="ht">PaperLink</span>
-    <span style="font-size:10px;color:var(--muted)" id="st"></span><span class="dot live" id="ldot" style="display:none"></span>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark" id="bm">P</span><span class="brand-name" id="ht">PaperLink</span></div>
+    <span class="conn" id="st"></span><span class="dot live" id="ldot" style="display:none"></span>
     <span style="margin-left:auto"></span>
-    <button onclick="T()" title="暗色模式">🌓</button>
+    <div class="top-actions">
+      <button class="chip" id="modeWrite" onclick="MD('write')" title="写论文模式：基于知识库问答/写作">✍️ 写论文</button>
+      <button class="chip" id="modeFind" onclick="MD('find')" title="找论文模式：检索相关论文，提供下载/浏览链接">🔍 找论文</button>
+      <button class="chip" id="modeTeam" onclick="MD('team')" title="科研团队模式：13 Agent 全流程调研">👥 科研团队</button>
+      <span id="quotaChip" class="chip" style="font-size:11px;cursor:pointer" onclick="refreshQuota()" title="LLM 额度 (剩余 token, 点击刷新)">🪙 --</span>
+      <button class="chip" onclick="recharge()" title="充值 LLM 额度 (Stripe 支付)">💳 充值</button>
+      <select id="exportFmt" onchange="EX(this.value)" title="导出">
+        <option value="">导出</option>
+        <option value="markdown">↓ MD</option>
+        <option value="docx">↓ DOCX</option>
+        <option value="latex">↓ LaTeX</option>
+        <option value="bibtex">↓ BibTeX</option>
+      </select>
+      <button class="chip icon-btn" id="userChip" onclick="showLogin()" title="登录/注册">👤</button>
+      <button class="chip icon-btn" onclick="T()" title="暗色模式">🌓</button>
+    </div>
+  </header>
+  <div id="approval-bar" style="display:none;margin:0 14px 8px;padding:10px 14px;background:color-mix(in srgb,var(--brand) 8%,transparent);border:2px solid var(--brand);border-radius:12px;font-size:12px">
+    <div style="font-weight:600;color:var(--brand);margin-bottom:6px">&#9888; 人工审批闸门</div>
+    <div id="approval-text" style="margin-bottom:8px"></div>
+    <div style="display:flex;gap:8px">
+      <button onclick="approvalGo()" style="padding:5px 14px;background:var(--green);color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:12px">确认通过</button>
+      <button onclick="showApprovalFeedback()" style="padding:5px 14px;background:var(--brand);color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:12px">修改后通过</button>
+    </div>
+    <textarea id="approval-fb" style="display:none;width:100%;margin-top:6px;padding:6px 10px;border:1px solid var(--border);border-radius:8px;font-size:12px;resize:none;background:var(--bg);color:var(--text)" rows="2" placeholder="输入修正意见..."></textarea>
+    <button id="approval-submit" onclick="TA_submit()" style="display:none;margin-top:6px;padding:5px 14px;background:var(--green);color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:12px">提交并继续</button>
   </div>
   <div class="chat" id="cc"></div>
   <div class="upload-zone" id="uz" style="display:none" onclick="document.getElementById('fi').click()" ondragover="event.preventDefault()" ondrop="H(event)">
@@ -154,8 +210,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans SC',sans
     <p style="font-size:13px;color:var(--muted)">拖拽或点击上传 PDF 论文</p>
   </div>
   <div class="input-bar">
+    <div id="suggestBar" style="font-size:11px;color:var(--muted);padding:2px 4px;margin-bottom:4px;display:none">💡 建议: <span id="suggestText"></span> <button class="chip" id="suggestGo" onclick="doSuggest(S._suggestAction)" style="display:none;font-size:11px;margin-left:6px">执行 →</button></div>
     <textarea id="ui" rows="1" placeholder="输入研究方向或提问…" onkeydown="if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();X()}" oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px'" oncompositionstart="this.dataset.composing='1'" oncompositionend="this.dataset.composing='0'"></textarea>
-    <button class="send-btn" id="toggleKB" onclick="S.useKB=!S.useKB;document.getElementById('toggleKB').textContent=S.useKB?'知识库':'通用';document.getElementById('toggleKB').style.background=S.useKB?'var(--green)':'var(--muted)'" style="padding:8px 10px;font-size:11px;background:var(--muted);color:#fff;border:none;border-radius:14px;cursor:pointer;white-space:nowrap;min-width:48px">通用</button>
+    <button class="send-btn" id="btnStop" onclick="ST()" style="display:none;padding:8px 10px;font-size:11px;background:#e5484d;color:#fff;border:none;border-radius:14px;cursor:pointer;white-space:nowrap">⏹ 停止</button>
     <button class="send-btn" onclick="X()">发送</button>
   </div>
 </main>
@@ -167,127 +224,216 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans SC',sans
 </div>
 
 <script>
-const A='http://localhost:8001';
-let S={ts:[],tid:null,q:'',msgs:[],strategy:null,pps:[],ppv:null,phase:'welcome',pg:0,pi:null,agent:false,agentSteps:[],sessions:{},useKB:false};
+(function(){
+const A=window.location.origin||'http://localhost:8001';
+var S={ts:[],tid:null,q:'',msgs:[],strategy:null,pps:[],ppv:null,phase:'welcome',pg:0,pi:null,agent:false,agentSteps:[],piSteps:[],sessions:{},useKB:false,skill:'auto',useAgent:true};
 var PHASES={welcome:'等待输入',strategy:'策略就绪',searching:'搜索中',papers_loaded:'论文已加载',building:'构建知识库',ready:'可以提问',thinking:'生成中'};
-function setPhase(p){var prev=S.phase;S.phase=p;CACHE();R()}
+window._papersVisible = false;
+
+function setPhase(p){var prev=S.phase;S.phase=p;saveSession();R()}
 function saveSession(){if(!S.tid)return;var snap={q:S.q,msgs:S.msgs.slice(),strategy:S.strategy,pps:S.pps,phase:S.phase};S.sessions[S.tid]=snap;try{localStorage.setItem('session_'+S.tid,JSON.stringify(snap))}catch(e){}}
 function loadSession(id){var cached=S.sessions[id];if(!cached){try{var raw=localStorage.getItem('session_'+id);if(raw){cached=JSON.parse(raw);S.sessions[id]=cached}}catch(e){}}return cached}
-// alias: saveSession called via CACHE
-var CACHE=saveSession;
 function restoreFrom(id){var snap=loadSession(id);if(!snap)return false;S.q=snap.q;S.msgs=snap.msgs||[];S.strategy=snap.strategy;S.pps=snap.pps||[];S.phase=snap.phase||'strategy';S.tid=id;return true}
-async function loadTopics(){await L();var s=localStorage.aia_t;if(s){var found=S.ts.find(function(x){return x.topic_id===s});if(found){W(s).catch(function(){localStorage.removeItem('aia_t');Y()})}else{localStorage.removeItem('aia_t');Y()}}else Y()}
-(function I(){if(localStorage.aia_d==='1')document.documentElement.className='dark';loadTopics()})();
-function T(){let h=document.documentElement;h.className=h.className==='dark'?'light':'dark';localStorage.aia_d=h.className==='dark'?'1':'0'}
-async function L(){try{S.ts=await(await fetch(A+'/topics')).json();K()}catch(e){setTimeout(L,3000)}}
+async function loadTopics(){await L();var s=localStorage.aia_t;if(s){var found=S.ts.find(function(x){return x.topic_id===s});if(found){var foundId=found.topic_id;WW(foundId).catch(function(){localStorage.removeItem('aia_t');Y()})}else{localStorage.removeItem('aia_t');Y()}}else Y()}
+(function I(){if(localStorage.aia_d==='1')document.documentElement.className='dark';syncMode();loadTopics()})();
+function TT(){var h=document.documentElement;h.className=h.className==='dark'?'light':'dark';localStorage.aia_d=h.className==='dark'?'1':'0'}
+async function L(){try{var data=await(await fetch(A+'/topics',{headers:authHeaders()})).json();S.ts=data;K()}catch(e){setTimeout(L,3000)}}
 function Y(){S.msgs=[{r:'s',c:'# PaperLink\n\n输入研究方向 / 提问 / 上传论文\n\n搜索 12 个学术数据库 · 自动构建知识库 · 深度问答'}];R()}
-function N(){clearInterval(S.pi);S.tid=null;S.q='';S.msgs=[];S.strategy=null;S.pps=[];S.pg=0;setPhase('welcome');localStorage.removeItem('aia_t');document.getElementById('uz').style.display='none';document.getElementById('pg').style.display='none';Y()}
-async function W(id){if(S.tid&&S.tid!==id)saveSession();S.tid=id;S.ppv=null;S.pg=0;localStorage.aia_t=id;S._resetScroll=true;S._autoScroll=false;var t=S.ts.find(function(x){return x.topic_id===id});S.q=t?t.query||'':'';if(!S.q){Y();return}if(restoreFrom(id)){document.getElementById('uz').style.display='block';R();L();return}var restoreMessages=S.msgs;S.msgs=[{r:'s',c:'# '+S.q+'\n\n加载中…'}];setPhase('strategy');R();try{var r=await fetch(A+'/create_topic',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:S.q,topic_id:id})});var d=await r.json();S.strategy=d.strategy;var sc='# '+S.q+'\n\n检索策略: '+(d.strategy.keywords_cn||[]).slice(0,4).join(' · ')+'\n\n输入问题开始问答，或拖拽论文PDF上传';S.msgs=[{r:'s',c:sc}];saveSession();document.getElementById('uz').style.display='block';R();L()}catch(e){S.msgs=restoreMessages.length?restoreMessages:[{r:'s',c:'# '+S.q+'\n\n加载失败: '+e.message}];R()}}
+function NN(){clearInterval(S.pi);S.tid=null;S.q='';S.msgs=[];S.strategy=null;S.pps=[];S.pg=0;setPhase('welcome');localStorage.removeItem('aia_t');document.getElementById('uz').style.display='none';document.getElementById('pg').style.display='none';Y()}
+async function WW(id){if(S.tid&&S.tid!==id)saveSession();S.tid=id;S.ppv=null;S.pg=0;localStorage.aia_t=id;S._resetScroll=true;S._autoScroll=false;var t=S.ts.find(function(x){return x.topic_id===id});S.q=t?t.query||'':'';if(!S.q){Y();return}if(restoreFrom(id)){document.getElementById('uz').style.display='block';R();L();return}var restoreMessages=S.msgs;S.msgs=[{r:'s',c:'# '+S.q+'\n\n加载中…'}];setPhase('strategy');R();try{var r=await fetch(A+'/create_topic',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({query:S.q,topic_id:id})});var d=await r.json();S.strategy=d.strategy;var sc='# '+S.q+'\n\n检索策略: '+(d.strategy.keywords_cn||[]).slice(0,4).join(' · ')+'\n\n输入问题开始问答，或拖拽论文PDF上传';S.msgs=[{r:'s',c:sc}];saveSession();document.getElementById('uz').style.display='block';R();L()}catch(e){S.msgs=restoreMessages.length?restoreMessages:[{r:'s',c:'# '+S.q+'\n\n加载失败: '+e.message}];R()}}
 async function SR(q,ke,kc){
   S.pps=[];setPhase('searching');document.getElementById('ldot').style.display='inline-block';document.getElementById('fbar').style.display='block';document.getElementById('ldot').className='dot live';R();
   try{
-    let r=await fetch(A+'/search_papers/stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:q,keywords_en:ke,keywords_cn:kc})});
-    let reader=r.body.getReader(),decoder=new TextDecoder(),buf='';
+    var r=await fetch(A+'/search_papers/stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:q,keywords_en:ke,keywords_cn:kc})});
+    var reader=r.body.getReader(),decoder=new TextDecoder(),buf='';
     while(true){
-      let{value,done}=await reader.read();
+      var _a=await reader.read(),value=_a.value,done=_a.done;
       if(done)break;
       buf+=decoder.decode(value,{stream:true});
-      let lines=buf.split('\n');buf=lines.pop()||'';
-      for(let l of lines){
+      var lines=buf.split('\n');buf=lines.pop()||'';
+      for(var i=0;i<lines.length;i++){var l=lines[i];
         if(l.indexOf('data: ')!==0)continue;
         try{
-          let d=JSON.parse(l.slice(6));
+          var d=JSON.parse(l.slice(6));
           if(d.event==='batch'){
-            let seen=new Set(S.pps.map(function(x){return x.paper_id}));
-            for(let i=0;i<(d.papers||[]).length;i++){
-              let p=d.papers[i];
-              if(!seen.has(p.paper_id)){seen.add(p.paper_id);S.pps.push(p)}
-            }
+            var seen=new Set(S.pps.map(function(x){return x.paper_id}));
+            for(var j=0;j<(d.papers||[]).length;j++){var p=d.papers[j];
+              if(!seen.has(p.paper_id)){seen.add(p.paper_id);S.pps.push(p)}}
             R()
           }else if(d.event==='done'){
-            console.log('Search done: '+d.total+' papers in '+d.elapsed);var db=document.querySelectorAll('.dots-bar i');for(var j=0;j<db.length&&j<12;j++)db[j].className='on'
+            console.log('Search done: '+d.total+' papers in '+d.elapsed);var dots=document.querySelectorAll('.dots-bar i');for(var k=0;k<dots.length&&k<12;k++)dots[k].className='on'
           }
         }catch(e){}
       }
     }
     setPhase('papers_loaded');saveSession();R()
   }catch(e){console.log('stream search failed: '+e.message);setPhase('strategy');document.getElementById('ldot').className='dot idle';document.getElementById('fbar').style.display='none';R()}
-}async function X(){let el=document.getElementById('ui');let t=el.value.trim();if(!t||S.phase==='thinking'||S.phase==='building')return;el.value='';el.style.height='auto';S._resetScroll=true;S._autoScroll=true;if(!S.tid){await C(t);return}Ae('user',t);if(S.useKB){await Q(t)}else{await CHAT(t)}}
-async function C(q){S._resetScroll=true;S._autoScroll=false;setPhase('thinking');try{let r=await fetch(A+'/create_topic',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:q})});let d=await r.json();S.tid=d.topic_id;S.q=q;S.strategy=d.strategy;S.msgs=[];localStorage.aia_t=d.topic_id;let c='# '+q+'\n\n✅ 检索策略已生成 — '+(d.strategy.keywords_cn||[]).slice(0,3).join(' · ')+'\n\n### 📤 下一步：上传 PDF 或点"一键下载并构建"';Ae('s',c);setPhase('strategy');document.getElementById('uz').style.display='block';await L();SR(q,d.strategy.keywords_en,d.strategy.keywords_cn);setTimeout(function(){if(S.tid===d.topic_id&&S.phase==='papers_loaded')Ae('s','## 📚 如何使用\n\n1. 点击论文标题跳转下载 PDF\n2. 或点 **⬇📥 一键下载并构建**\n3. 拖拽 PDF 到页面上传\n4. 建库完成后即可提问')},30000)}catch(e){Ae('s','❌ '+e.message);setPhase('papers_loaded');R()}}
-async function CHAT(q){setPhase('thinking');try{var r=await fetch(A+'/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q,history:S.msgs.slice(-10)})});var d=await r.json();Ae('a',d.answer||'生成失败')}catch(e){Ae('s','提问失败: '+(e.message||'网络错误'))}setPhase('papers_loaded');saveSession();R()}
-async function Q(q){setPhase('thinking');try{var r=await fetch(A+'/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({topic_id:S.tid,question:q,history:S.msgs.slice(-10)})});var d=await r.json();if(d.error){Ae('s',d.error);return}var c=d.answer||'';if(d.references&&d.references.length)c+='\n\n---\n**参考文献**\n'+d.references.map(function(x){return'> '+x.title+' ('+(x.year||'')+')'}).join('\n');if(d.supplement&&d.supplement.length){c+='\n\n**补充线索**\n';d.supplement.forEach(function(s){c+='> **'+s.title+'** ('+(s.year||'')+')\n';if(s.doi_url)c+='> [DOI]('+s.doi_url+') '})}Ae('a',c)}catch(e){Ae('s','提问失败: '+(e.message||'网络错误'))}setPhase('papers_loaded');saveSession();R()}
-function H(e){e.preventDefault();F(e.dataTransfer.files)}
-async function F(files){if(!files.length||!S.tid)return;setPhase('thinking');let fd=new FormData();for(let f of files)fd.append('files',f);try{let r=await fetch(A+'/upload_pdf/'+S.tid,{method:'POST',body:fd});let d=await r.json();setPhase('ready');document.getElementById('uz').style.display='none';Ae('s','✅ 知识库就绪！'+d.papers+'篇, '+d.chunks+'个文本块');await L()}catch(e){Ae('s','❌ '+e.message)}setPhase('papers_loaded');R()}
-async function B(){let urls=S.pps.filter(p=>p.is_oa&&p.pdf_url).map(p=>p.pdf_url);if(!urls.length)return alert('没有可下载的 OA 论文');let pg=document.getElementById('pg');pg.style.display='block';document.getElementById('pc').textContent='0/'+urls.length;document.getElementById('pf').style.width='0%';clearInterval(S.pi);S.pi=setInterval(async()=>{try{let r=await fetch(A+'/topic_status/'+S.tid);let d=await r.json();if(d.status==='ready'){clearInterval(S.pi);document.getElementById('pf').style.width='100%';document.getElementById('pc').textContent='✅';document.getElementById('pd').textContent=d.progress;Ae('s','✅ **知识库就绪！**\n\n'+d.progress+'\n\n现在可以提问了！');setPhase('ready');document.getElementById('uz').style.display='none';await L();setTimeout(()=>pg.style.display='none',3000)}else if(d.step){let pct=d.total?Math.round(d.current/d.total*100):0;document.getElementById('pf').style.width=pct+'%';document.getElementById('pc').textContent=(d.current||0)+'/'+(d.total||urls.length);document.getElementById('pd').textContent='处理中… 🇨🇳'+(d.cn_papers||0)+' 🌐'+(d.en_papers||0)}}catch(e){}},1500);setPhase('thinking');try{let r=await fetch(A+'/download_bulk',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({urls,topic_id:S.tid})});let blob=await r.blob();let a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='papers_'+S.tid+'.zip';a.click()}catch(e){clearInterval(S.pi);pg.style.display='none';alert('下载失败')}setPhase('papers_loaded');R()}
-async function AR(task){setPhase('thinking');S.agentSteps=[];render();try{let r=await fetch(A+'/agent/quick?v='+Date.now(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:task})});let d=await r.json();if(d.result){Ae('a',d.result)}else{Ae('s','❌ Agent 未能在限制步数内完成任务。')}}catch(e){Ae('s','❌ Agent 执行失败: '+e.message)}setPhase('ready');render()}
-async function E(){if(!S.tid)return;let r=await fetch(A+'/export/'+S.tid);let blob=await r.blob();let a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='topic_'+S.tid+'.md';a.click()}
-function CP(id){let el=document.getElementById(id);if(!el)return;navigator.clipboard.writeText(el.innerText);let btn=document.querySelector('[data-cp="'+id+'"]');if(btn){btn.innerHTML='✅ 已复制';setTimeout(()=>btn.innerHTML='📋 复制',1500)}}
-function Ae(r,c){S.msgs.push({r,c});R()}
+}async function XX(){var el=document.getElementById('ui');var t=el.value.trim();if(!t||S.phase==='thinking'||S.phase==='building')return;el.value='';el.style.height='auto';S._resetScroll=true;S._autoScroll=true;if(S.mode==='find'){ /* 找论文模式: 直接检索, 展示论文+下载/浏览链接 */ if(!S.tid){await CC(t)}else{Ae('user',t);await SR(t,(S.strategy||{}).keywords_en,(S.strategy||{}).keywords_cn)} setPhase('papers_loaded');saveSession();R();return} if(S.mode==='team'){ /* 科研团队模式: 13 Agent 全流程 */ if(!S.tid){await CC(t)}else{Ae('user',t);await TM(t)} saveSession();R();refreshSuggest();return} if(!S.tid){await CC(t);return}Ae('user',t);if(S.useAgent){await PI(t)}else{await CHAT(t)}refreshSuggest()}
+async function CC(q){S._resetScroll=true;S._autoScroll=false;setPhase('thinking');try{var r=await fetch(A+'/create_topic',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({query:q,reuse_kb:S.mode==='write'})});var d=await r.json();if(d.suggest){if(confirm('检测到相似课题「'+d.suggest.query+'」，是否复用其知识库？\n确定=复用（跳过多源检索）\n取消=新建课题')){var r2=await fetch(A+'/create_topic',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({query:q,topic_id:d.suggest.topic_id})});var d2=await r2.json();S.tid=d2.topic_id;S.q=q;S.strategy=d2.strategy;S.msgs=[];localStorage.aia_t=d2.topic_id;var rc2='# '+q+'\n\n✅ 已复用知识库「'+d.suggest.query+'」\n\n直接在下方输入问题，基于知识库问答';Ae('s',rc2);setPhase('ready');document.getElementById('uz').style.display='none';await L();saveSession();R();return}else{var r3=await fetch(A+'/create_topic',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({query:q})});d=await r3.json()}}S.tid=d.topic_id;S.q=q;S.strategy=d.strategy;S.msgs=[];localStorage.aia_t=d.topic_id;if(d.reused){var rc='# '+q+'\n\n✅ 已复用已有知识库（跳过多源检索）\n\n直接在下方输入问题，基于知识库问答';Ae('s',rc);setPhase('ready');document.getElementById('uz').style.display='none';await L();saveSession();R();return}var c='# '+q+'\n\n✅ 检索策略已生成 — '+(d.strategy.keywords_cn||[]).slice(0,3).join(' · ')+'\n\n### 📤 下一步：上传 PDF 或点\\"一键下载并构建\\"';Ae('s',c);setPhase('strategy');document.getElementById('uz').style.display='block';await L();SR(q,d.strategy.keywords_en,d.strategy.keywords_cn);setTimeout(function(){if(S.tid===d.topic_id&&S.phase==='papers_loaded')Ae('s','## 📚 如何使用\n\n1. 点击论文标题跳转下载 PDF\n2. 或点 **⬇📥 一键下载并构建**\n3. 拖拽 PDF 到页面上传\n4. 建库完成后即可提问')},30000)}catch(e){Ae('s','❌ '+e.message);setPhase('papers_loaded');R()}}
+async function CHAT(q){setPhase('thinking');try{var hist=S.msgs.filter(function(m){return m.r==='u'||m.r==='a'}).slice(-10);var r=await fetch(A+'/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q,history:hist})});var d=await r.json();Ae('a',d.answer||'生成失败')}catch(e){Ae('s','提问失败: '+(e.message||'网络错误'))}setPhase('papers_loaded');saveSession();R()}
+async function QQ(q){setPhase('thinking');try{var hist=S.msgs.filter(function(m){return m.r==='u'||m.r==='a'}).slice(-10);var r=await fetch(A+'/ask/stream',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({topic_id:S.tid,question:q,history:hist})});if(!r.ok){try{var de=await r.json();Ae('s',de.detail||('请求失败 ('+r.status+')'))}catch(e){Ae('s','请求失败 ('+r.status+')')}return}var reader=r.body.getReader(),decoder=new TextDecoder(),buf='',ans='';S.msgs.push({r:'a',c:'▌'});R();while(true){var _a=await reader.read(),value=_a.value,done=_a.done;if(done)break;buf+=decoder.decode(value,{stream:true});var lines=buf.split('\n');buf=lines.pop()||'';for(var i=0;i<lines.length;i++){var l=lines[i];if(l.indexOf('data: ')!==0)continue;try{var d=JSON.parse(l.slice(6));if(d.token!==undefined){ans+=d.token;S.msgs[S.msgs.length-1].c=ans+'▌';R()}else if(d.error){S.msgs[S.msgs.length-1].c='❌ '+d.error;R()}}catch(e){}}}S.msgs[S.msgs.length-1].c=ans||'（无回答）';R()}catch(e){Ae('s','提问失败: '+(e.message||'网络错误'))}setPhase('papers_loaded');saveSession();R()}
+function HH(e){e.preventDefault();FF(e.dataTransfer.files)}
+async function FF(files){if(!files.length||!S.tid)return;setPhase('thinking');var fd=new FormData();for(var i=0;i<files.length;i++)fd.append('files',files[i]);try{var r=await fetch(A+'/upload_pdf/'+S.tid,{method:'POST',headers:authHeaders(),body:fd});var d=await r.json();setPhase('ready');document.getElementById('uz').style.display='none';Ae('s','✅ 知识库就绪！'+d.papers+'篇, '+d.chunks+'个文本块');await L()}catch(e){Ae('s','❌ '+e.message)}setPhase('papers_loaded');R()}
+async function BB(){var urls=S.pps.filter(function(p){return p.is_oa&&p.pdf_url}).map(function(p){return p.pdf_url});if(!urls.length)return alert('没有可下载的 OA 论文');var pg=document.getElementById('pg');pg.style.display='block';document.getElementById('pc').textContent='0/'+urls.length;document.getElementById('pf').style.width='0%';clearInterval(S.pi);S.pi=setInterval(async function(){try{var r=await fetch(A+'/topic_status/'+S.tid,{headers:authHeaders()});var d=await r.json();if(d.status==='ready'){clearInterval(S.pi);document.getElementById('pf').style.width='100%';document.getElementById('pc').textContent='✅';document.getElementById('pd').textContent=d.progress;Ae('s','✅ **知识库就绪！**\n\n'+d.progress+'\n\n现在可以提问了！');setPhase('ready');document.getElementById('uz').style.display='none';await L();setTimeout(function(){pg.style.display='none'},3000)}else if(d.step){var pct=d.total?Math.round(d.current/d.total*100):0;document.getElementById('pf').style.width=pct+'%';document.getElementById('pc').textContent=(d.current||0)+'/'+(d.total||urls.length);document.getElementById('pd').textContent='处理中… 🇨🇳'+(d.cn_papers||0)+' 🌐'+(d.en_papers||0)}}catch(e){}},1500);setPhase('thinking');try{var r2=await fetch(A+'/download_bulk',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({urls:urls,topic_id:S.tid})});var blob=await r2.blob();var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='papers_'+S.tid+'.zip';a.click()}catch(e){clearInterval(S.pi);pg.style.display='none';alert('下载失败')}setPhase('papers_loaded');R()}
+async function ARR(task){setPhase('thinking');S.agentSteps=[];R();try{var r=await fetch(A+'/agent/quick?v='+Date.now(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:task})});var d=await r.json();if(d.result){Ae('a',d.result)}else{Ae('s','❌ Agent 未能在限制步数内完成任务。')}}catch(e){Ae('s','❌ Agent 执行失败: '+e.message)}setPhase('ready');R()}
+async function PI(task){S.piSteps=[];S.agent=true;setPhase('thinking');showStop(true);R();try{
+  var body={task:task,goal:S.q||'',max_steps:15};
+  var skl=S.skill||'auto';
+  if(skl!=='auto'&&skl!=='research_team'){body.skills=[skl]}
+  var ac=new AbortController();S._abort=ac;
+  var r=await fetch(A+'/agent/pi/stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:ac.signal});
+  if(!r.ok){S.agent=false;showStop(false);try{var de=await r.json();Ae('s',de.detail||('请求失败 ('+r.status+')'))}catch(e){Ae('s','请求失败 ('+r.status+')')}setPhase('papers_loaded');saveSession();R();return}
+  var reader=r.body.getReader(),decoder=new TextDecoder(),buf='',stepsTxt='';
+  S.msgs.push({r:'a',c:'▌'});R();
+  while(true){
+    var _a=await reader.read(),value=_a.value,done=_a.done;
+    if(done)break;
+    buf+=decoder.decode(value,{stream:true});
+    var lines=buf.split('\n');buf=lines.pop()||'';
+    for(var i=0;i<lines.length;i++){var l=lines[i];
+      if(l.indexOf('data: ')!==0)continue;
+      try{var d=JSON.parse(l.slice(6));
+        if(d.event==='step'){stepsTxt+='#'+d.turn+' '+(d.success?'✓':'✗')+' '+(d.tool)+' ('+(d.elapsed_ms||0)+'ms)\n';S.msgs[S.msgs.length-1].c=stepsTxt+'▌';R()}
+        else if(d.event==='result'){
+          S.agent=false;showStop(false);
+          if(d.paused){S._piRunId=d.run_id||'';document.getElementById('approval-bar').style.display='block';document.getElementById('approval-text').innerHTML='<b>⚠️ 需要人工确认</b><br>Agent 请求执行: <b>'+(d.need_confirm?d.need_confirm.tool_name:'工具')+'</b><br>确认后执行，或拒绝让 Agent 换路';Ae('s','## ⚠️ 需要人工确认\n\nAgent 请求执行: **'+(d.need_confirm?d.need_confirm.tool_name:'')+'**\n\n_等待人工确认..._');break}
+          var res=d.result||'';
+          S.msgs[S.msgs.length-1].c=res||stepsTxt||'（无结果）';R();
+          if(d.trace){Ae('s',renderTrace(d.trace))}
+          /* v3 主动推进: Agent 完成实质工作后, 主动递上下一步建议 */
+          var _usedTools=d.trace&&d.trace.tools_used&&d.trace.tools_used.length;
+          refreshSuggest();
+          if(_usedTools||(res&&res.length>300)){setTimeout(function(){var st=document.getElementById('suggestText');if(st&&st.textContent)Ae('s','🔜 下一步建议: '+st.textContent)},250)}
+        }else if(d.event==='error'){S.agent=false;S.msgs[S.msgs.length-1].c='❌ '+(d.message||'错误');R()}
+      }catch(e){}
+    }
+  }
+  S.agent=false;showStop(false);
+}catch(e){S.agent=false;showStop(false);if(e&&e.name==='AbortError'){Ae('s','⏹ Agent 已停止')}else{Ae('s','Agent Error: '+(e.message||'network'))}}
+setPhase('papers_loaded');saveSession();R()}
+// ===== Research Team (13 Agents + 双轨审批) =====
+S._teamGate=null;S._teamRunId='';
+async function TM(task){S.piSteps=[];S.agent=true;setPhase('thinking');R();
+  try{
+    var r=await fetch(A+'/team/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({task:task})});
+    var d=await r.json();
+    S.agent=false;
+    S._teamRunId=d.run_id||'';
+    if(d.status==='awaiting_approval'){
+      S._teamGate=d;
+      document.getElementById('approval-bar').style.display='block';
+      document.getElementById('approval-text').innerHTML='<b>'+d.name+'</b><br>'+d.request.summary.substring(0,300);
+      Ae('s','## '+d.name+'\\n\\n'+d.request.summary.substring(0,400)+'\\n\\n_等待人工审批..._')
+    }else if(d.status==='completed'){
+      Ae('a',d.result||'(empty)');
+      if(d.history){var th='## 科研团队流程\\n\\n';d.history.forEach(function(h){th+='- ['+h.layer+'] **'+h.name+'** '+h.description+'\\n'});Ae('s',th)}
+    }else{Ae('s','Team error')}
+  }catch(e){S.agent=false;Ae('s','Team Error: '+(e.message||'network'))}
+  setPhase('papers_loaded');saveSession();R()
+}
+async function TA_approve(fb){document.getElementById('approval-bar').style.display='none';S.agent=true;setPhase('thinking');R();
+  try{
+    var r=await fetch(A+'/team/approve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({run_id:S._teamRunId||'',feedback:fb||''})});
+    var d=await r.json();
+    S.agent=false;
+    if(d.status==='awaiting_approval'){
+      S._teamGate=d;
+      document.getElementById('approval-bar').style.display='block';
+      document.getElementById('approval-text').innerHTML='<b>'+d.name+'</b><br>'+d.request.summary.substring(0,300);
+      Ae('s','## '+d.name+'\\n\\n'+d.request.summary.substring(0,400)+'\\n\\n_等待人工审批..._')
+    }else if(d.status==='completed'){Ae('a',d.result||'(empty)');
+      if(d.history){var th='## 科研团队流程\n\n';d.history.forEach(function(h){th+='- ['+h.layer+'] **'+h.name+'** '+h.description+'\n'});Ae('s',th)}
+    }else if(d.detail){Ae('s','Team: '+(d.detail||'error'))}
+    else{Ae('a',d.result||'(empty)')}
+  }catch(e){S.agent=false;Ae('s','Team Error: '+(e.message||'network'))}
+  setPhase('papers_loaded');saveSession();R()
+}
+function showApprovalFeedback(){if(S._piRunId){PA_approve(false)}else{document.getElementById('approval-fb').style.display='block';document.getElementById('approval-submit').style.display='block'}}
+function TA_submit(){var fb=document.getElementById('approval-fb').value;document.getElementById('approval-fb').style.display='none';document.getElementById('approval-submit').style.display='none';if(S._piRunId){PA_approve(false)}else{TA_approve(fb)}}
+function approvalGo(){if(S._piRunId){PA_approve(true)}else{TA_approve('')}}
+// ===== Pi-Agent 人工确认 (危险工具暂停后 确认/拒绝) =====
+S._piRunId='';
+async function PA_approve(confirm){document.getElementById('approval-bar').style.display='none';S.agent=true;setPhase('thinking');showStop(true);R();
+  try{
+    var ac=new AbortController();S._abort=ac;
+    var r=await fetch(A+'/agent/pi/approve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({run_id:S._piRunId||'',confirmed:confirm}),signal:ac.signal});
+    var d=await r.json();
+    S.agent=false;showStop(false);
+    if(d.paused){S._piRunId=d.run_id||S._piRunId;document.getElementById('approval-bar').style.display='block';document.getElementById('approval-text').innerHTML='<b>需要人工确认</b><br>'+(d.need_confirm?d.need_confirm.tool_name:'工具');Ae('s','## ⚠️ 需要人工确认\n\nAgent 请求执行: **'+(d.need_confirm?d.need_confirm.tool_name:'')+'**')}
+    else if(d.result){Ae('a',d.result);if(d.trace){Ae('s',renderTrace(d.trace))}}
+    else{Ae('s','Agent: '+(d.result||'未完成任务'))}
+  }catch(e){S.agent=false;showStop(false);if(e&&e.name==='AbortError'){Ae('s','⏹ Agent 已停止')}else{Ae('s','Agent Error: '+(e.message||'network'))}}
+  setPhase('papers_loaded');saveSession();R()}
+function syncMode(){var a=document.getElementById('btnAgent');if(a){a.textContent=S.useAgent?'Agent ON':'Agent';a.className=S.useAgent?'agent-on':''}}
+function TA(){S.useAgent=!S.useAgent;syncMode()}
+function showStop(on){var b=document.getElementById('btnStop');if(b)b.style.display=on?'inline-block':'none'}
+function ST(){if(S._abort){S._abort.abort();S._abort=null}showStop(false)}
+function renderTrace(t){if(!t)return'';var h='<details style="margin:8px 0;font-size:12px;border:1px solid var(--border);border-radius:8px;padding:6px 10px"><summary>🔬 Agent 执行过程 ('+(t.turns||0)+' 轮 · '+(t.elapsed||'?')+'s)</summary><div style="margin-top:6px">';var steps=t.steps||[];if(!steps.length){h+='<div style="color:var(--muted)">（直接回答，无工具调用）</div>'}for(var i=0;i<steps.length;i++){var s=steps[i],ok=s.success?'✅':'❌',tool=s.tool==='llm'?'推理':(s.tool||'?');h+='<div style="padding:3px 0;border-bottom:1px dashed var(--border)">'+ok+' <b>'+esc(tool)+'</b> <span style="color:var(--muted)">#'+(s.turn||i+1)+' · '+(s.tokens||0)+' tok · '+(s.elapsed_ms||0)+'ms</span></div>'}h+='</div></details>';return h}
+function SK(v){S.skill=v;if(v!=='auto'){S.useAgent=true;TA()}}async function EE(){if(!S.tid)return;var r=await fetch(A+'/export/'+S.tid);var blob=await r.blob();var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='topic_'+S.tid+'.md';a.click()}
+async function EX(fmt){if(!fmt||!S.q)return;var sections={};var msgs=S.msgs.filter(function(m){return m.r==='u'||m.r==='a'});for(var i=0;i<msgs.length;i+=2){var role=msgs[i]&&msgs[i].r==='u'?'Q':'Section';var key=role+Math.floor(i/2+1);sections[key]=msgs[i]?msgs[i].c:''}var refs=[];S.pps.slice(0,10).forEach(function(p){refs.push({authors:p.authors||'Unknown',year:p.year||2025,title:p.title||'',doi:p.doi||''})});try{var r=await fetch(A+'/export/paper',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:S.q,sections:sections,references:refs,format:fmt})});var d=await r.json();if(d.filepath){window.open(A+'/export/download?filepath='+encodeURIComponent(d.filepath))}else{alert('Export failed: '+JSON.stringify(d))}}catch(e){alert('Export error: '+e.message)}document.getElementById('exportFmt').value=''}
+async function SB(){var q=prompt('Subscribe to topic: (enter keywords or leave blank to use current topic)',S.q||'');if(!q)return;try{var r=await fetch(A+'/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:q})});var d=await r.json();if(d.ok)alert('Subscribed! ID: '+d.subscription.id+'\nWe will search daily.')}catch(e){}}
+async function CIT(pid){if(!pid)return;setPhase('thinking');R();try{var r=await fetch(A+'/citation/chain',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({paper_id:pid,direction:'both',depth:1})});var d=await r.json();if(d.ok){var h='## Citation Chain\n\nFrom: '+(d.seed&&d.seed.title?d.seed.title.substring(0,80):pid)+'\n\n### Citing Papers ('+d.citations.length+')\n';d.citations.slice(0,8).forEach(function(c,i){h+=(i+1)+'. **'+c.title.substring(0,60)+'** ('+(c.year||'?')+') cites:'+(c.citation_count||0)+(c.is_influential?' ★':'')+'\n'});h+='\n### References ('+d.references.length+')\n';d.references.slice(0,8).forEach(function(r,i){h+=(i+1)+'. **'+r.title.substring(0,60)+'** ('+(r.year||'?')+') cites:'+(r.citation_count||0)+'\n'});Ae('s',h)}else{Ae('s','Citation chain unavailable: '+(d.error||'no data'))}}catch(e){Ae('s','Citation error: '+(e.message||'network'))}setPhase('papers_loaded');R()}
+async function FB(q,a,r){try{await fetch(A+'/feedback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q||'',answer:a||'',rating:r})})}catch(e){}}
+function traceAsk(q){var url='/static/pipeline.html?q='+encodeURIComponent(q)+'&tid='+(S.tid||'');window.open(url,'_blank')}
+function CP(id){var el=document.getElementById(id);if(!el)return;navigator.clipboard.writeText(el.innerText);var btn=document.querySelector('[data-cp="'+id+'"]');if(btn){btn.innerHTML='✅ 已复制';setTimeout(function(){btn.innerHTML='📋 复制'},1500)}}
+function Ae(r,c){S.msgs.push({r:r,c:c});R()}
 function R(){
-  let h='';S.msgs.forEach((m,i)=>{
+  var h='';S.msgs.forEach(function(m,i){
     h+='<div class="msg '+(m.r==='u'?'user':'')+'" style="animation-delay:'+(i*.04)+'s">';
     if(m.r==='u')h+='<div class="bubble">'+esc(m.c)+'</div>';
-    else if(m.r==='a'){h+='<div class="card">'+md(m.c)+'<div class="msg-actions"><button data-cp="msg-'+i+'" onclick="CP(\'msg-'+i+'\')">📋 复制</button>';let p=S.msgs[i-1];if(p&&p.r==='u')h+='<button onclick="Q(\''+escA(p.c)+'\')">🔄 重新生成</button>';h+='</div></div>';}
+    else if(m.r==='a'){h+='<div class="card">'+md(m.c)+'<div class="msg-actions"><button data-cp="msg-'+i+'" onclick="CP(\x27msg-'+i+'\x27)">📋 复制</button>';var p=S.msgs[i-1];if(p&&p.r==='u'){h+='<button onclick="QQ(\x27'+escA(p.c)+'\x27)">🔄 重新生成</button>';h+='<button onclick="traceAsk(\x27'+escA(p.c)+'\x27)">🔬 追踪</button>'}h+='<button onclick="FB(\x27'+escA(p?p.c:'')+'\x27,\x27'+escA(m.c.substring(0,200))+'\x27,1)" style="background:var(--hover);border:1px solid var(--border);border-radius:6px;padding:3px 8px;cursor:pointer;font-size:12px">👍</button><button onclick="FB(\x27'+escA(p?p.c:'')+'\x27,\x27'+escA(m.c.substring(0,200))+'\x27,-1)" style="background:var(--hover);border:1px solid var(--border);border-radius:6px;padding:3px 8px;cursor:pointer;font-size:12px;margin-left:2px">👎</button>';h+='</div></div>';}
     else h+='<div class="card">'+md(m.c)+'</div>';
     h+='</div>';
   });
   if(S.phase==='thinking')h+='<div class="loading"><div class="status"><span class="pulse"></span> '+(S.agent?'Agent 思考中…':'生成回答中…')+'</div><div class="skeleton w80"></div><div class="skeleton w100"></div><div class="skeleton w60"></div></div>';
-  if(S.strategy&&S.strategy.boolean_queries?.length){
+  if(S.strategy&&S.strategy.boolean_queries&&S.strategy.boolean_queries.length){
     h+='<div class="msg card" style="animation-delay:.1s"><div style="font-weight:600;font-size:12px;margin-bottom:6px">🔍 检索策略</div>';
-    h+='<div style="margin-bottom:6px">'+(S.strategy.keywords_cn||[]).map(k=>'<span class="tag blue">'+esc(k)+'</span>').join(' ')+'</div>';
-    h+='<div class="strat-grid">';(S.strategy.boolean_queries||[]).slice(0,4).forEach(bq=>{h+='<div class="strat-card"><div class="db">'+esc(bq.database||'')+'</div><pre>'+esc(bq.query||'')+'</pre></div>';});h+='</div></div>';
+    h+='<div style="margin-bottom:6px">'+(S.strategy.keywords_cn||[]).map(function(k){return '<span class="tag blue">'+esc(k)+'</span>'}).join(' ')+'</div>';
+    h+='<div class="strat-grid">';(S.strategy.boolean_queries||[]).slice(0,4).forEach(function(bq){h+='<div class="strat-card"><div class="db">'+esc(bq.database||'')+'</div><pre>'+esc(bq.query||'')+'</pre></div>';});h+='</div></div>';
   }
-  if(S.agentSteps.length){h+='<div class="msg card" style="animation-delay:.05s"><div style="font-weight:600;font-size:13px;margin-bottom:8px;color:var(--brand)">🤖 Agent 执行过程</div>';S.agentSteps.forEach((s,i)=>{let icon=s.tool_result?'✅':'🧠';let label=s.tool_result?'工具返回':'思考分析';let cls=s.tool_result?'':'shimmer-text';h+='<div class="agent-step" style="animation-delay:'+(i*.1)+'s"><div class="label">'+icon+' Step '+s.step+': '+label+'</div>';if(s.tool_result){try{let tr=JSON.parse(s.tool_result);if(tr.total)h+='<div class="detail">📄 搜索到 '+tr.total+' 篇论文</div>';if(tr.best_kb)h+='<div class="detail">📚 推荐知识库: '+tr.best_kb+'</div>';if(tr.answer)h+='<div class="detail">💬 '+tr.answer.substring(0,100)+'...</div>'}catch(e){h+='<div class="detail">'+esc(String(s.tool_result).substring(0,120))+'</div>'}}else{h+='<div class="detail '+cls+'">'+esc(s.thought||'分析中…')+'</div>'}h+='</div>'});h+='</div>'}if(S.phase==='searching'&&!S.pps.length){h+='<div class="loading" style="animation-delay:.2s"><div class="status">🔍 正在多源搜索论文…</div><div class="skeleton w80"></div><div class="skeleton w100"></div><div class="skeleton w60"></div></div>'}
+  if(S.agentSteps.length){h+='<div class="msg card" style="animation-delay:.05s"><div style="font-weight:600;font-size:13px;margin-bottom:8px;color:var(--brand)">🤖 Agent 执行过程</div>';S.agentSteps.forEach(function(s,i){var icon=s.tool_result?'✅':'🧠';var label=s.tool_result?'工具返回':'思考分析';var cls=s.tool_result?'':'shimmer-text';h+='<div class="agent-step" style="animation-delay:'+(i*.1)+'s"><div class="label">'+icon+' Step '+s.step+': '+label+'</div>';if(s.tool_result){try{var tr=JSON.parse(s.tool_result);if(tr.total)h+='<div class="detail">📄 搜索到 '+tr.total+' 篇论文</div>';if(tr.best_kb)h+='<div class="detail">📚 推荐知识库: '+tr.best_kb+'</div>';if(tr.answer)h+='<div class="detail">💬 '+tr.answer.substring(0,100)+'...</div>'}catch(e){h+='<div class="detail">'+esc(String(s.tool_result).substring(0,120))+'</div>'}}else{h+='<div class="detail '+cls+'">'+esc(s.thought||'分析中…')+'</div>'}h+='</div>'});h+='</div>'}if(S.phase==='searching'&&!S.pps.length){h+='<div class="loading" style="animation-delay:.2s"><div class="status">🔍 正在多源搜索论文…</div><div class="skeleton w80"></div><div class="skeleton w100"></div><div class="skeleton w60"></div></div>'}
   if(S.pps.length){h+='<div class="msg card" style="animation-delay:.1s;font-size:11px">📄 '+S.pps.length+' papers · <span style="cursor:pointer;color:var(--brand);text-decoration:underline" onclick="togglePapers()">Toggle panel</span></div>'}
   document.getElementById('cc').innerHTML=h;
   renderPapers();
-  // Preview panel
   document.getElementById('ht').textContent=S.q||'PaperLink';
-  var el=document.getElementById('st');var txt=PHASES[S.phase]||S.phase;if(el.textContent!==txt){el.innerHTML='<span class=\"count-pop\" style=\"display:inline-block\">'+txt+'</span>';setTimeout(function(){el.textContent=txt},350)}else{el.textContent=txt};
-  // Smart scroll: only auto-scroll if user is near bottom, or if this is a user action
+  var el=document.getElementById('st');var txt=PHASES[S.phase]||S.phase;if(el.textContent!==txt){el.innerHTML='<span class=\\"count-pop\\" style=\\"display:inline-block\\">'+txt+'</span>';setTimeout(function(){el.textContent=txt},350)}else{el.textContent=txt};
   var cc=document.getElementById('cc');
   if(S._autoScroll!==false){cc.scrollTop=cc.scrollHeight}
-  // Reset auto-scroll after user-initiated actions
   if(S._resetScroll){cc.scrollTop=0;S._resetScroll=false}
 }
-// Track manual scroll
 document.addEventListener('DOMContentLoaded',function(){document.getElementById('cc').addEventListener('scroll',function(){var cc=this;S._autoScroll=cc.scrollHeight-cc.scrollTop-cc.clientHeight<80})});
-function PR(p){let dl_url=p.download_url||p.pdf_url,prv_url=p.preview_url||p.doi_url||p.cnki_url||'#';return'<div class="paper"><div class="icon"><input type="checkbox" id="chk_'+escA(p.paper_id)+'" style="margin-right:2px;cursor:pointer" title="选择加入图谱"></div><div class="info"><div class="ptitle"><a href="javascript:void(0)" onclick="PV(\''+escA(p.paper_id)+'\')" title="点击预览摘要">'+esc(p.title)+'</a></div><div class="pmeta">'+esc(p.authors||'')+' · '+(p.year||'')+' · '+(p.source||'')+'</div><div class="tags">'+(dl_url?'<a href="'+esc(dl_url)+'" download class="tag green">⬇ 下载</a>':'<span class="tag yellow">🔒</span>')+(prv_url&&prv_url!=='#'?'<a href="'+esc(prv_url)+'" target="_blank" class="tag purple">🔍 在线</a>':'')+(p.cnki_url?'<a href="'+esc(p.cnki_url)+'" target="_blank" class="tag red">📚 知网</a>':'')+(p.google_scholar_url?'<a href="'+esc(p.google_scholar_url)+'" target="_blank" class="tag blue">GS</a>':'')+(p.doi_url?'<a href="'+esc(p.doi_url)+'" target="_blank" class="tag gray">DOI</a>':'')+'<span class="tag gray" style="cursor:pointer" onclick="PV(\''+escA(p.paper_id)+'\')">👁 预览</span><span class="tag gray" style="cursor:pointer" onclick="navigator.clipboard.writeText(\''+escA(p.title)+'\')">📋</span></div></div></div>'}
+function PR(p){var dl_url=p.download_url||p.pdf_url,prv_url=p.preview_url||p.doi_url||p.cnki_url||'#';return'<div class="paper"><div class="icon"></div><div class="info"><div class="ptitle"><a href="javascript:void(0)" onclick="PV(\x27'+escA(p.paper_id)+'\x27)" title="点击预览摘要">'+esc(p.title)+'</a></div><div class="pmeta">'+esc(p.authors||'')+' · '+(p.year||'')+' · '+(p.source||'')+'</div><div class="tags">'+(dl_url?'<a href="'+esc(dl_url)+'" download class="tag green">⬇ 下载</a>':'<span class="tag yellow" title="闭源论文：请用学校图书馆账号自行下载后，上传到系统">🔒 闭源·学校账号下载</span>')+(prv_url&&prv_url!=='#'?'<a href="'+esc(prv_url)+'" target="_blank" class="tag purple">🔍 在线</a>':'')+(p.cnki_url?'<a href="'+esc(p.cnki_url)+'" target="_blank" class="tag red">📚 知网</a>':'')+(p.google_scholar_url?'<a href="'+esc(p.google_scholar_url)+'" target="_blank" class="tag blue">GS</a>':'')+(p.doi_url?'<a href="'+esc(p.doi_url)+'" target="_blank" class="tag gray">DOI</a>':'')+'<span class="tag gray" style="cursor:pointer" onclick="PV(\x27'+escA(p.paper_id)+'\x27)">👁 预览</span><span class="tag gray" style="cursor:pointer" onclick="navigator.clipboard.writeText(\x27'+escA(p.title)+'\x27)">📋</span></div></div></div>'}
 function PV(pid){var p=S.pps.find(function(x){return x.paper_id===pid});if(!p)return;S.ppv=p;buildPreview(p)}
 function buildPreview(p){
   var old=document.getElementById('ppv');if(old)old.remove();
   var el=document.createElement('div');el.id='ppv';
   el.style.cssText='position:fixed;top:0;right:0;width:420px;height:100vh;background:var(--card);border-left:1px solid var(--border);padding:16px;overflow-y:auto;z-index:50;box-shadow:-4px 0 20px rgba(0,0,0,.3)';
-  var h='<button onclick="var x=document.getElementById(\'ppv\');if(x)x.remove();S.ppv=null" style="float:right;background:none;border:none;color:var(--muted);cursor:pointer;font-size:20px">&times;</button>';
+  var h='<button onclick="var x=document.getElementById(\x27ppv\x27);if(x)x.remove();S.ppv=null" style="float:right;background:none;border:none;color:var(--muted);cursor:pointer;font-size:20px">&times;</button>';
   h+='<h3 style="font-size:13px;color:var(--brand);margin:0 0 6px;line-height:1.5">'+esc(p.title||'')+'</h3>';
   h+='<p style="font-size:10px;color:var(--muted);margin:0 0 10px">'+esc(p.authors||'?')+' &middot; '+(p.year||'?')+' &middot; '+esc(p.source||'')+'</p>';
   h+='<div style="font-size:11px;color:var(--muted);line-height:1.6;max-height:250px;overflow-y:auto;border-top:1px solid var(--border);padding-top:8px;margin-bottom:8px"><b>Abstract:</b> '+esc((p.abstract||'Not available').substring(0,1200))+'</div>';
-  // Lazy PDF: button to load iframe, not auto-download
   if(p.pdf_url){
     var pdfId='pdf_'+Math.random().toString(36).substr(2,6);
-    h+='<button id="btn_'+pdfId+'" onclick="document.getElementById(\''+pdfId+'\').style.display=\'block\';this.style.display=\'none\'" class="tag green" style="font-size:11px;padding:5px 10px;cursor:pointer;margin:8px 0;display:block;width:100%">&#9654; Click to preview PDF</button>';
+    h+='<button id="btn_'+pdfId+'" onclick="document.getElementById(\x27'+pdfId+'\x27).style.display=\x27block\x27;this.style.display=\x27none\x27" class="tag green" style="font-size:11px;padding:5px 10px;cursor:pointer;margin:8px 0;display:block;width:100%">&#9654; Click to preview PDF</button>';
     h+='<iframe id="'+pdfId+'" src="'+esc(p.pdf_url)+'#view=FitH" width="100%" height="380" style="display:none;border:1px solid var(--border);border-radius:8px;margin:8px 0" loading="lazy"></iframe>';
   }
   h+='<div style="display:flex;gap:6px;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:10px">';
-  if(p.doi)h+='<a href="https://doi.org/'+p.doi+'" target="_blank" class="tag gray" style="font-size:11px;padding:5px 10px;text-decoration:none">DOI</a>';
+  if(p.doi_url)h+='<a href="'+esc(p.doi_url)+'" target="_blank" class="tag gray" style="font-size:11px;padding:5px 10px;text-decoration:none">DOI</a>';
   if(p.cnki_url)h+='<a href="'+esc(p.cnki_url)+'" target="_blank" class="tag gray" style="font-size:11px;padding:5px 10px;text-decoration:none">CNKI</a>';
   if(p.pdf_url)h+='<a href="'+esc(p.pdf_url)+'" download class="tag green" style="font-size:11px;padding:5px 10px;text-decoration:none">Download PDF</a>';
-  h+='<button class="tag gray" style="font-size:11px;padding:5px 10px;cursor:pointer" onclick="KGadd()">Add to Graph</button>';
+  h+='<button c';
+  if(p.doi||p.paper_id)h+='<button class="tag gray" style="font-size:11px;padding:5px 10px;cursor:pointer;margin-left:2px" onclick="CIT('+escA(p.doi||p.paper_id)+')">Citation Chain</button>';
   h+='</div>';
   el.innerHTML=h;document.getElementById('cc').appendChild(el);
 }
-async function KGadd(){var p=S.ppv;if(!p)return;try{await fetch(A+'/kg/build',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({table:p.paper_id})});window.open('/static/kg.html','_blank')}catch(e){alert('图谱更新失败: '+e.message)}}
-async function KGBatch(){let ids=[];S.pps.forEach(p=>{let el=document.getElementById('chk_'+escA(p.paper_id));if(el&&el.checked)ids.push(p.paper_id)});if(!ids.length)return alert('请先勾选论文');try{await fetch(A+'/kg/build',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({table:ids.join(',')})});window.open('/static/kg.html','_blank')}catch(e){alert('图谱更新失败: '+e.message)}}
-function K(){var el=document.getElementById('tl');if(!S.ts.length){el.innerHTML='<div style="text-align:center;color:var(--muted);font-size:10px;padding:16px">No topics</div>';return}var h='';for(var i=0;i<S.ts.length;i++){var t=S.ts[i];var st=(t.status==='ready'||t.papers>0)?(t.papers||'')+' papers':'new';h+='<div class="topic-item'+(t.topic_id===S.tid?' active':'')+'" data-tid="'+t.topic_id+'"><div style="flex:1;display:flex;flex-direction:column"><div class="tname">'+esc(t.query||'New')+'</div><div class="tmeta">'+st+'</div></div><button onclick="event.stopPropagation();D(\''+t.topic_id+'\')" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:16px;padding:0 6px" title="Delete">x</button></div>'}el.innerHTML=h}
-// Event delegation: click any .topic-item -> call W()
-(function(){var tl=document.getElementById('tl');tl.addEventListener('click',function(e){if(e.target.tagName==='BUTTON')return;var item=e.target.closest('.topic-item');if(item){var tid=item.getAttribute('data-tid');if(tid)W(tid)}},true)})()
-function md(t){if(!t)return'';let h=esc(t);h=h.replace(/^### (.+)$/gm,'<h3>$1</h3>');h=h.replace(/^## (.+)$/gm,'<h2>$1</h2>');h=h.replace(/^# (.+)$/gm,'<h1>$1</h1>');h=h.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');h=h.replace(/```([\s\S]*?)```/g,'<pre>$1</pre>');h=h.replace(/`([^`]+)`/g,'<code>$1</code>');h=h.replace(/^> (.+)$/gm,'<blockquote>$1</blockquote>');h=h.replace(/\[([^\]]+)\]\(([^)]+)\)/g,'<a href="$2" target="_blank">$1</a>');h=h.replace(/\n\n/g,'</p><p>');h=h.replace(/\n/g,'<br>');return'<p>'+h+'</p>'}
-var _papersVisible = false;
-function togglePapers(){_papersVisible = !_papersVisible; renderPapers()}
+function K(){var el=document.getElementById('tl');if(!S.ts.length){el.innerHTML='<div style="text-align:center;color:var(--muted);font-size:10px;padding:16px">No topics</div>';return}var h='';for(var i=0;i<S.ts.length;i++){var t=S.ts[i];var st=(t.status==='ready'||t.papers>0)?(t.papers||'')+' papers':'new';h+='<div class="topic-item'+(t.topic_id===S.tid?' active':'')+'" data-tid="'+t.topic_id+'"><div style="flex:1;display:flex;column"><div class="tname">'+esc(t.query||'New')+'</div><div class="tmeta">'+st+'</div></div><button onclick="event.stopPropagation();D(\x27'+t.topic_id+'\x27)" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:16px;padding:0 6px" title="Delete">x</button></div>'}el.innerHTML=h}
+(function(){var tl=document.getElementById('tl');tl.addEventListener('click',function(e){if(e.target.tagName==='BUTTON')return;var item=e.target.closest('.topic-item');if(item){var tid=item.getAttribute('data-tid');if(tid)WW(tid)}},true)})()
+function md(t){if(!t)return'';var h=esc(t);h=h.replace(/^### (.+)$/gm,'<h3>$1</h3>');h=h.replace(/^## (.+)$/gm,'<h2>$1</h2>');h=h.replace(/^# (.+)$/gm,'<h1>$1</h1>');h=h.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');h=h.replace(/```([\s\S]*?)```/g,'<pre>$1</pre>');h=h.replace(/`([^`]+)`/g,'<code>$1</code>');h=h.replace(/^> (.+)$/gm,'<blockquote>$1</blockquote>');h=h.replace(/\[([^\]]+)\]\(([^)]+)\)/g,'<a href="$2" target="_blank">$1</a>');h=h.replace(/\n\n/g,'</p><p>');h=h.replace(/\n/g,'<br>');return'<p>'+h+'</p>'}
+function togglePapers(){window._papersVisible = !window._papersVisible; renderPapers()}
 function renderPapers(){
   var el = document.getElementById('papers-panel');
   if (!S.pps.length) { if(el) el.remove(); return }
-  if (!_papersVisible) { if(el) el.remove(); return }
+  if (!window._papersVisible) { if(el) el.remove(); return }
   if (!el) {
     el = document.createElement('div'); el.id = 'papers-panel';
     el.style.cssText = 'position:fixed;top:0;right:0;width:420px;height:100vh;background:var(--card);border-left:1px solid var(--border);padding:16px;overflow-y:auto;z-index:49;box-shadow:-4px 0 20px rgba(0,0,0,.3)';
@@ -297,9 +443,9 @@ function renderPapers(){
   var cn = S.pps.filter(function(p){return isCN(p.title)||(p.title||'').startsWith('[CNKI]')});
   var en = S.pps.filter(function(p){return !isCN(p.title)&&!(p.title||'').startsWith('[CNKI]')});
   var sh = Math.min((S.pg+1)*10, S.pps.length);
-  var h = '<button onclick="_papersVisible=false;var e=document.getElementById(\'papers-panel\');if(e)e.remove()" style="float:right;background:none;border:none;color:var(--muted);cursor:pointer;font-size:20px">&times;</button>';
+  var h = '<button onclick="window._papersVisible=false;var e=document.getElementById(\x27papers-panel\x27);if(e)e.remove()" style="float:right;background:none;border:none;color:var(--muted);cursor:pointer;font-size:20px">&times;</button>';
   h += '<div style="font-weight:600;font-size:13px;margin-bottom:8px">'+S.pps.length+' papers ('+oa+' OA downloadable)</div>';
-  h += '<div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap"><button class="tag green" onclick="B()" style="cursor:pointer;font-size:11px;padding:5px 10px">Download & Build</button><button class="tag gray" onclick="KGBatch()" style="cursor:pointer;font-size:11px;padding:5px 10px">Add to Graph</button><button class="tag gray" onclick="copyDOIs()" style="cursor:pointer;font-size:11px;padding:5px 10px">Copy DOIs</button></div>';
+  h += '<div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap"><button class="tag green" onclick="B()" style="cursor:pointer;font-size:11px;padding:5px 10px">Download & Build</button><button class="tag gray" onclick="copyDOIs()" style="cursor:pointer;font-size:11px;padding:5px 10px">Copy DOIs</button></div>';
   h += '<div style="font-size:10px;color:var(--muted);background:var(--hover);border-radius:6px;padding:8px 10px;margin-bottom:10px;line-height:1.6"><b>Get PDFs:</b> <a href="https://sci-hub.se" target="_blank">Sci-Hub</a> · <a href="https://sci-hub.st" target="_blank">Mirror</a> · <a href="https://scholar.google.com" target="_blank">GS</a> · university proxy &rarr; drag PDF to upload</div>';
   if (cn.length) { h += '<div class="cn-header">Chinese <span class="badge">'+cn.length+'</span></div>'; for(var i=0;i<Math.min(sh,cn.length);i++) h+=PR(cn[i]) }
   if (en.length) { var se = Math.max(0,sh-(cn.length?Math.min(sh,cn.length):0)); h += '<div class="en-header">English <span class="badge">'+en.length+'</span></div>'; for(var j=0;j<se;j++) h+=PR(en[j]) }
@@ -307,11 +453,86 @@ function renderPapers(){
   el.innerHTML = h;
 }
 
-async function D(id){if(!confirm('Delete topic?'))return;try{await fetch(A+'/topic/'+id,{method:'DELETE'});S.ts=S.ts.filter(function(t){return t.topic_id!==id});if(S.tid===id)N();K()}catch(e){}}
-async function copyDOIs(){var ds=S.pps.filter(function(p){return p.doi}).map(function(p){return p.doi});if(!ds.length)return;navigator.clipboard.writeText(ds.join("\n"));alert("已复制 "+ds.length+" 个DOI")}
-function esc(s){let d=document.createElement('div');d.textContent=s||'';return d.innerHTML}
-function escA(s){return(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'\\"')}
-function isCN(t){t=t||'';for(let i=0;i<t.length;i++){let c=t.charCodeAt(i);if(c>=19968&&c<=40869)return true}return false}
+async function DD(id){if(!confirm('Delete topic?'))return;try{await fetch(A+'/topic/'+id,{method:'DELETE'});S.ts=S.ts.filter(function(t){return t.topic_id!==id});if(S.tid===id)NN();K()}catch(e){}}
+async function copyDOIs(){var ds=S.pps.filter(function(p){return p.doi}).map(function(p){return p.doi});if(!ds.length)return;navigator.clipboard.writeText(ds.join("\\n"));alert("\\u5df2\\u590d\\u5236 "+ds.length+" \\u4e2aDOI")}
+function esc(s){var d=document.createElement('div');d.textContent=s||'';return d.innerHTML}
+function escA(s){return(s||'').replace(/\\/g,"\\\\").replace(/'/g,"\\'").replace(/"/g,"&quot;")}
+function isCN(t){t=t||'';for(var i=0;i<t.length;i++){var c=t.charCodeAt(i);if(c>=19968&&c<=40869)return true}return false}
+
+// Expose only the functions needed for HTML onclick handlers
+window.N = NN;
+window.T = TT;
+window.X = XX;
+window.H = HH;
+window.F = FF;
+window.B = BB;
+window.CP = CP;
+window.D = DD;
+window.W = WW;
+window.PV = PV;
+window.AR = ARR;
+window.E = EE;
+window.togglePapers = togglePapers;
+window.copyDOIs = copyDOIs;
+window.QQ = QQ;
+window.S = S;
+window.renderPapers = renderPapers;
+window.traceAsk = traceAsk;
+window.FB = FB;
+window.PI = PI;
+window.TA = TA;
+window.SK = SK;
+window.syncMode = syncMode;
+window.ST = ST;
+window.showStop = showStop;
+window.renderTrace = renderTrace;
+window.TM = TM;
+window.TA_approve = TA_approve;
+window.TA_submit = TA_submit;
+window.showApprovalFeedback = showApprovalFeedback;
+window.EX = EX;
+window.SB = SB;
+window.CIT = CIT;
+// ===== 登录/注册 (auth 入口: 补足 JWT 后端的 UI 触达) =====
+function authHeaders(h){h=h||{};var t=localStorage.getItem('pl_token');if(t)h['Authorization']='Bearer '+t;return h}
+function updateUserChip(){var u=localStorage.getItem('pl_user');var el=document.getElementById('userChip');if(!el)return;if(u){el.textContent='👤 '+u;el.title='退出登录';el.onclick=logout}else{el.textContent='👤 登录';el.title='登录/注册';el.onclick=showLogin}}
+function showLogin(){var m=document.getElementById('modal');if(m)m.style.display='flex';var i=document.getElementById('lgUser');if(i)i.focus()}
+function closeModal(){var m=document.getElementById('modal');if(m)m.style.display='none'}
+async function doLogin(){var u=document.getElementById('lgUser').value.trim(),p=document.getElementById('lgPass').value;if(!u||!p)return alert('请输入用户名和密码');try{var r=await fetch(A+'/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});var d=await r.json();if(!r.ok)return alert(d.detail||'登录失败');localStorage.setItem('pl_token',d.access_token);localStorage.setItem('pl_user',d.user||u);closeModal();updateUserChip();L()}catch(e){alert('登录失败: '+e.message)}}
+async function doRegister(){var u=document.getElementById('lgUser').value.trim(),p=document.getElementById('lgPass').value;if(!u||!p)return alert('请输入用户名和密码');try{var r=await fetch(A+'/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});var d=await r.json();if(!r.ok)return alert(d.detail||'注册失败');localStorage.setItem('pl_token',d.access_token);localStorage.setItem('pl_user',d.user||u);closeModal();updateUserChip();L()}catch(e){alert('注册失败: '+e.message)}}
+function logout(){localStorage.removeItem('pl_token');localStorage.removeItem('pl_user');updateUserChip();L()}
+// ===== Zotero 导入入口 (补足本地 Zotero 桥的 UI 触达) =====
+async function showZotero(){var m=document.getElementById('zmodal'),box=document.getElementById('zlist');if(!m)return;m.style.display='flex';box.innerHTML='加载中…';try{var r=await fetch(A+'/zotero/scan');var d=await r.json();if(!r.ok||!d.ok)throw new Error(d.detail||d.error||'scan 失败');if(!d.papers||!d.papers.length){box.innerHTML='<div style="color:var(--muted);padding:12px 0">未检测到本地 Zotero 期刊文献（扫描 ~/Zotero/zotero.sqlite）。<br>请先在 Zotero 建立文献库再试。</div>';return}box.innerHTML=d.papers.map(function(p,i){return '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px dashed var(--border)"><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(p.title||'条目'+(i+1))+(p.year?' <span style="color:var(--muted)">('+esc(p.year)+')</span>':'')+'</span><button class="chip" onclick="importZotero(\''+escA(p.zotero_key)+'\')">导入</button></div>'}).join('')}catch(e){box.innerHTML='<div style="color:var(--red,#e5484d)">Zotero 读取失败: '+esc(e.message)+'</div>'}}
+async function importZotero(key){try{var s=null;try{s=await(await fetch(A+'/zotero/scan')).json()}catch(e){}var found=s&&s.papers?(s.papers.find(function(p){return p.zotero_key===key})||{}):{};var meta={title:found.title||'',DOI:found.doi||'',year:found.year||'',collections:[]};var r=await fetch(A+'/zotero/import',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify(meta)});var d=await r.json();if(!r.ok||!d.ok)throw new Error(d.detail||d.error||'导入失败');alert('已导入: '+(d.title||'')+(d.tip?'\n'+d.tip:''));document.getElementById('zmodal').style.display='none';S.tid=d.topic_id;S.q=d.title;await L()}catch(e){alert('导入失败: '+e.message)}}
+function MD(m){S.mode=m;var f=document.getElementById('modeFind'),w=document.getElementById('modeWrite'),t=document.getElementById('modeTeam');if(f)f.style.borderColor=(m==='find')?'var(--brand)':'transparent';if(w)w.style.borderColor=(m==='write')?'var(--brand)':'transparent';if(t)t.style.borderColor=(m==='team')?'var(--brand)':'transparent'}
+function refreshQuota(){try{fetch(A+'/quota',{headers:authHeaders()}).then(function(r){return r.json()}).then(function(d){var el=document.getElementById('quotaChip');if(!el)return;if(d.blocked){el.textContent='🪙 额度用尽';el.style.color='#e5484d'}else{el.textContent='🪙 '+Math.floor((d.remaining||0)/1000)+'k';el.style.color=''}}).catch(function(){})}catch(e){}}
+function recharge(){var t=prompt('充值 LLM 额度 (每千 token $0.05, 建议最少 10000):','50000');if(!t)return;t=parseInt(t,10);if(!t||t<=0)return;fetch(A+'/quota/checkout',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({tokens:t})}).then(function(r){return r.json()}).then(function(d){if(d.checkout_url){window.open(d.checkout_url,'_blank');alert('已生成支付页，请在新打开的 Stripe 页面完成支付')}else{alert(d.detail||'支付创建失败')}}).catch(function(e){alert('支付失败: '+e.message)})}
+// 阶段感知主动建议: 预判用户在选题→初稿旅程的位置, 递上下一步
+function refreshSuggest(){var sb=document.getElementById('suggestBar'),st=document.getElementById('suggestText'),go=document.getElementById('suggestGo');if(!sb||!st)return;fetch(A+'/suggest?topic_id='+(S.tid||''),{headers:authHeaders()}).then(function(r){return r.json()}).then(function(d){if(d.suggest){S._suggestAction=d.action;S._suggestStage=d.stage;st.textContent=d.suggest;sb.style.display='block';if(go){go.style.display='inline-block'}}else{sb.style.display='none';if(go)go.style.display='none'}}).catch(function(){sb.style.display='none'})}
+// 一键执行建议的动作 (并记录接受 → 自我进化优化路由)
+function doSuggest(a){if(!a)return;try{fetch(A+'/suggest/accept',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({stage:S._suggestStage,action:a})}).catch(function(){})}catch(e){}var el=document.getElementById('ui');if(a==='new_topic'){if(el)el.focus()}else if(a==='search'){if(S.tid){SR(S.q,(S.strategy||{}).keywords_en,(S.strategy||{}).keywords_cn)}}else if(a==='build_kb'){var oa=S.pps&&S.pps.filter(function(p){return p.is_oa&&p.pdf_url});if(oa&&oa.length){BB()}else{alert('暂无可下载 OA 论文，请拖拽 PDF 上传')}}else if(a==='ask'){if(el)el.focus()}else if(a==='write'){if(S.tid){PI('请基于当前课题「'+S.q+'」写一篇论文初稿：摘要/引言/相关工作/方法/结论，带引用并声明局限')}}}
+window.authHeaders=authHeaders;window.updateUserChip=updateUserChip;window.showLogin=showLogin;window.closeModal=closeModal;window.doLogin=doLogin;window.doRegister=doRegister;window.logout=logout;window.showZotero=showZotero;window.importZotero=importZotero;window.MD=MD;window.refreshQuota=refreshQuota;window.recharge=recharge;window.refreshSuggest=refreshSuggest;window.doSuggest=doSuggest;
+S.mode='write';MD('write');refreshQuota();setInterval(refreshQuota,30000);refreshSuggest();
+updateUserChip();
+})();
 </script>
+<div id="modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:999;align-items:center;justify-content:center">
+  <div style="background:var(--bg);border:1px solid var(--border);border-radius:14px;padding:22px;width:320px;max-width:90vw">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"><b>登录 / 注册</b><button onclick="closeModal()" style="border:none;background:none;cursor:pointer;font-size:16px">✕</button></div>
+    <input id="lgUser" placeholder="用户名 (2-32字符)" style="width:100%;box-sizing:border-box;margin-bottom:8px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text)"/>
+    <input id="lgPass" type="password" placeholder="密码 (至少6位)" style="width:100%;box-sizing:border-box;margin-bottom:12px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text)"/>
+    <div style="display:flex;gap:8px">
+      <button onclick="doLogin()" style="flex:1;padding:8px;background:var(--brand);color:#fff;border:none;border-radius:8px;cursor:pointer">登录</button>
+      <button onclick="doRegister()" style="flex:1;padding:8px;background:var(--border);color:var(--text);border:none;border-radius:8px;cursor:pointer">注册</button>
+    </div>
+    <div style="margin-top:10px;font-size:11px;color:var(--muted)">匿名使用不受影响。登录后新建课题归你名下，历史匿名课题仍共享可见。</div>
+  </div>
+</div>
+<div id="zmodal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:999;align-items:center;justify-content:center">
+  <div style="background:var(--bg);border:1px solid var(--border);border-radius:14px;padding:22px;width:460px;max-width:92vw;max-height:72vh;overflow:auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"><b>从 Zotero 导入</b><button onclick="document.getElementById('zmodal').style.display='none'" style="border:none;background:none;cursor:pointer;font-size:16px">✕</button></div>
+    <div id="zlist" style="font-size:12px"></div>
+  </div>
+</div>
 </body>
 </html>

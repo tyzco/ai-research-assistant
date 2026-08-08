@@ -4,7 +4,7 @@
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>API 测试面板</title>
 <style>
-:root{--bg:#0b1120;--card:#1e293b;--text:#e2e8f0;--muted:#64748b;--border:#334155;--blue:#3b82f6;--green:#22c55e;--red:#ef4444;--amber:#f59e0b;--purple:#a855f7}
+:root{--bg:#16140f;--card:#211e19;--text:#e7e5e4;--muted:#a8a29e;--border:#3f3b36;--blue:#2dd4bf;--blue-strong:#0d9488;--green:#34d399;--red:#f87171;--amber:#fbbf24;--purple:#2dd4bf;--ring:rgba(45,212,191,.18)}
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans SC',monospace;background:var(--bg);color:var(--text);min-height:100vh}
 header{padding:12px 20px;background:var(--card);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px}
@@ -12,33 +12,39 @@ header h1{font-size:13px;font-weight:600}header span{font-size:10px;color:var(--
 main{max-width:1200px;margin:0 auto;padding:20px}
 .section{margin-bottom:24px}
 .section h2{font-size:14px;color:var(--blue);margin-bottom:12px;padding-bottom:4px;border-bottom:1px solid var(--border)}
+#searchEp{width:100%;padding:8px 14px;background:var(--card);border:1px solid var(--border);border-radius:9px;color:var(--text);font-size:12px;margin-bottom:12px;outline:none}
+#searchEp:focus{border-color:var(--blue)}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:10px}
 .card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;transition:all .2s}
 .card:hover{border-color:var(--blue)}
+.card.hidden{display:none}
 .card .h{display:flex;align-items:center;gap:8px;margin-bottom:8px}
 .card .h .method{font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px}
-.m-GET{background:rgba(34,197,94,.2);color:var(--green)}.m-POST{background:rgba(59,130,246,.2);color:var(--blue)}.m-SSE{background:rgba(168,85,247,.2);color:var(--purple)}
+.m-GET{background:rgba(52,211,153,.2);color:var(--green)}.m-POST{background:var(--ring);color:var(--blue)}.m-SSE{background:var(--ring);color:var(--purple)}
 .card .h .path{font-size:12px;font-weight:600;font-family:monospace;word-break:break-all}
 .card .desc{font-size:10px;color:var(--muted);margin-bottom:8px;line-height:1.4}
 .card .actions{display:flex;gap:6px;flex-wrap:wrap}
 .card .actions button{padding:5px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:10px;cursor:pointer;transition:all .15s;white-space:nowrap}
-.card .actions button:hover{border-color:var(--blue);background:rgba(59,130,246,.1)}
-.card .actions .go{background:var(--blue);color:#fff;border-color:var(--blue)}
-.card .actions .go:hover{background:#2563eb}
+.card .actions button:hover{border-color:var(--blue);background:var(--ring)}
+.card .actions .go{background:var(--blue-strong);color:#fff;border-color:var(--blue-strong)}
+.card .actions .go:hover{background:#0f766e}
+.card .actions .go:disabled{opacity:.5;cursor:wait}
 .card .result{margin-top:10px;padding:8px 10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;font-size:10px;font-family:monospace;max-height:200px;overflow-y:auto;display:none;white-space:pre-wrap;line-height:1.4}
 .card .result.show{display:block}
 .card .result.ok{border-color:var(--green)}.card .result.err{border-color:var(--red)}
 .vis-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}
 .vis-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;text-align:center;cursor:pointer;transition:all .2s;text-decoration:none;color:var(--text);display:block}
-.vis-card:hover{border-color:var(--blue);box-shadow:0 0 20px rgba(59,130,246,.1)}
+.vis-card:hover{border-color:var(--blue);box-shadow:0 0 20px var(--ring)}
 .vis-card .icon{font-size:32px;margin-bottom:8px}
 .vis-card .name{font-size:13px;font-weight:600;margin-bottom:4px}
 .vis-card .url{font-size:10px;color:var(--muted)}
 .status{padding:4px 12px;border-radius:6px;font-size:10px;display:inline-block}
-.s-ok{background:rgba(34,197,94,.15);color:var(--green)}.s-err{background:rgba(239,68,68,.15);color:var(--red)}.s-idle{background:rgba(100,116,139,.15);color:var(--muted)}
+.s-ok{background:rgba(52,211,153,.15);color:var(--green)}.s-err{background:rgba(248,113,113,.15);color:var(--red)}.s-idle{background:rgba(168,162,158,.15);color:var(--muted)}
 #global-status{font-size:11px;margin-left:auto;display:flex;align-items:center;gap:6px}
 .input-row{display:flex;gap:4px;width:100%}
 .input-row input{flex:1;min-width:80px;padding:4px 8px;font-size:10px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:monospace}
+.param-row{margin-bottom:4px}
+.param-row input{width:100%;padding:4px 8px;font-size:10px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--amber);font-family:monospace}
 </style>
 </head>
 <body>
@@ -55,20 +61,26 @@ main{max-width:1200px;margin:0 auto;padding:20px}
 </div>
 
 <div class="section">
+  <h2>实时系统状态</h2>
+  <div id="sysStatus" style="font-size:12px;line-height:1.9">加载中…</div>
+</div>
+
+<div class="section">
   <h2>API 端点（一键测试 + curl 复制）</h2>
+  <input type="text" id="searchEp" placeholder="🔍 搜索端点 (路径或描述)...">
   <div class="grid" id="endpoints"></div>
 </div>
 
 </main>
 
 <script>
-var A='http://localhost:8001';
+// #3: API 基地址自动获取 (与主页面同源)
+var A=window.location.origin.replace(':5173',':8001')||'http://localhost:8001';
 // Pages
 var VISPAGES=[
   {icon:'🏠',name:'主界面',url:'/',desc:'学术文献精读助手'},
   {icon:'🔬',name:'RAG 流水线追踪',url:'/static/pipeline.html',desc:'6步检索链路可视化'},
-  {icon:'📊',name:'知识图谱',url:'/static/kg.html',desc:'力导向/树状双模式'},
-  {icon:'👁️',name:'Agent 监控面板',url:'/static/watch.html',desc:'状态机+Token实时'},
+  {icon:'📊',name:'知识图谱',url:'/static/kg.html',desc:'力导向 Obsidian 风格'},
   {icon:'🧪',name:'API 测试面板',url:'/static/test.html',desc:'本页'},
   {icon:'📖',name:'Swagger 文档',url:'/docs',desc:'FastAPI 自动生成'},
   {icon:'📄',name:'Agent 快速测试',url:'/static/agent_test.html',desc:'最小化 Agent 测试'},
@@ -76,32 +88,33 @@ var VISPAGES=[
 // Endpoints
 var ENDPOINTS=[
   // System
-  {method:'GET',path:'/health',desc:'存活检查',test:'/health'},
-  {method:'GET',path:'/metrics',desc:'系统指标 (延迟/Token/错误率/成本估算)',test:'/metrics'},
+  {method:'GET',path:'/health',desc:'存活检查'},
+  {method:'GET',path:'/metrics',desc:'系统指标 (延迟/Token/错误率/成本估算)'},
   // Auth
-  {method:'POST',path:'/register',desc:'用户注册',test:'/register',body:'{"username":"test","password":"123456"}'},
-  {method:'POST',path:'/login',desc:'用户登录',test:'/login',body:'{"username":"test","password":"123456"}'},
-  {method:'GET',path:'/me',desc:'当前用户信息 (需 JWT)',test:'/me'},
+  {method:'POST',path:'/register',desc:'用户注册',body:'{"username":"test","password":"123456"}'},
+  {method:'POST',path:'/login',desc:'用户登录',body:'{"username":"test","password":"123456"}'},
+  {method:'GET',path:'/me',desc:'当前用户信息 (需 JWT)'},
   // Topics
-  {method:'GET',path:'/topics',desc:'所有课题列表',test:'/topics'},
-  {method:'POST',path:'/create_topic',desc:'创建课题',test:'/create_topic',body:'{"query":"机器学习","model":"deepseek-v4-pro"}'},
+  {method:'GET',path:'/topics',desc:'所有课题列表'},
+  {method:'POST',path:'/create_topic',desc:'创建课题',body:'{"query":"机器学习"}'},
   // Search
-  {method:'POST',path:'/search_papers',desc:'多源论文搜索',test:'/search_papers',body:'{"query":"深度学习","keywords_en":["deep learning","neural network"],"keywords_cn":["深度学习","神经网络"]}'},
+  {method:'POST',path:'/search_papers',desc:'多源论文搜索',body:'{"query":"深度学习","keywords_en":["deep learning"],"keywords_cn":["深度学习"]}'},
   // RAG
-  {method:'POST',path:'/ask',desc:'RAG 问答',test:'/ask',body:'{"topic_id":"TOPIC_ID","question":"什么是深度学习"}'},
-  {method:'POST',path:'/ask/stream',desc:'SSE 流式 RAG',test:'/ask/stream',body:'{"topic_id":"TOPIC_ID","question":"解释一下Transformer"}'},
-  {method:'POST',path:'/ask/trace',desc:'Pipeline 追踪 (面试演示)',test:'/ask/trace',body:'{"question":"什么是深度学习"}'},
+  {method:'POST',path:'/ask',desc:'RAG 问答',body:'{"topic_id":"你的课题ID","question":"什么是深度学习"}'},
+  {method:'POST',path:'/ask/stream',desc:'SSE 流式 RAG',body:'{"topic_id":"你的课题ID","question":"解释一下Transformer"}'},
+  {method:'POST',path:'/ask/trace',desc:'Pipeline 追踪 (面试演示)',body:'{"question":"什么是深度学习"}'},
   // Agent
-  {method:'POST',path:'/agent/quick',desc:'Agent 快速模式 (<10s)',test:'/agent/quick',body:'{"question":"什么是机器学习","model":"deepseek-v4-pro"}'},
-  {method:'POST',path:'/agent/langgraph',desc:'LangGraph ReAct Agent',test:'/agent/langgraph',body:'{"task":"调研LLM推理突破","max_steps":5}'},
-  {method:'POST',path:'/agent/multi',desc:'多Agent (Planner-Workers-Synthesizer)',test:'/agent/multi',body:'{"task":"对比ArcFace和FaceNet优缺点"}'},
-  {method:'POST',path:'/agent/watch',desc:'Agent 监控 SSE (状态机流转)',test:'/agent/watch',body:'{"task":"什么是深度学习"}'},
+  {method:'POST',path:'/agent/quick',desc:'Agent 快速模式 (<10s)',body:'{"question":"什么是机器学习"}'},
+  {method:'POST',path:'/agent/pi',desc:'Pi-Agent 主循环 (技能+工具+确认门)',body:'{"task":"调研注意力机制"}'},
+  {method:'GET',path:'/agent/pi/stats',desc:'Agent 运行统计 (hooks/上下文压缩/工具错误)'},
   // Knowledge Graph
-  {method:'GET',path:'/kg_data',desc:'知识图谱 JSON 数据',test:'/kg_data'},
-  {method:'POST',path:'/kg/build',desc:'LLM 实体抽取构建图谱',test:'/kg/build',body:'{"table":""}'},
+  {method:'GET',path:'/kg_data',desc:'知识图谱 JSON 数据'},
+  {method:'POST',path:'/kg/build',desc:'LLM 实体抽取构建图谱',body:'{"table":""}'},
   // Export
-  {method:'GET',path:'/export/{topic_id}',desc:'导出 Markdown',test:'/export/TOPIC_ID'},
+  {method:'GET',path:'/export/{topic_id}',desc:'导出 Markdown',param:'topic_id',paramDefault:'你的课题ID'},
 ];
+
+var controllers={}; // #6: 每个卡片独立 AbortController
 
 (function init(){
   var p='';
@@ -112,11 +125,16 @@ var ENDPOINTS=[
 
   var h='';
   ENDPOINTS.forEach(function(e,i){
-    var cls=e.method==='POST'?'m-POST':(e.path.indexOf('stream')>=0||e.path.indexOf('watch')>=0||e.path.indexOf('trace')>=0?'m-SSE':'m-GET');
-    h+='<div class="card" id="ep'+i+'">';
+    var cls=e.method==='POST'?'m-POST':(e.path.indexOf('stream')>=0||e.path.indexOf('trace')>=0?'m-SSE':'m-GET');
+    h+='<div class="card" id="ep'+i+'" data-search="'+esc((e.path+' '+e.desc).toLowerCase())+'">';
     h+='<div class="h"><span class="method '+cls+'">'+e.method+'</span><span class="path">'+e.path+'</span></div>';
     h+='<div class="desc">'+e.desc+'</div>';
-    h+='<div class="actions"><div class="input-row">';
+    h+='<div class="actions"><div>';
+    // #1: 动态路径参数输入
+    if(e.param){
+      h+='<div class="param-row"><input type="text" id="parm'+i+'" value="'+esc(e.paramDefault||e.param)+'" placeholder="'+esc(e.param)+'"></div>';
+    }
+    h+='<div class="input-row">';
     if(e.body){
       h+='<input type="text" id="inp'+i+'" value="'+esc(e.body)+'" placeholder="JSON body">';
     }else{
@@ -125,7 +143,7 @@ var ENDPOINTS=[
     h+='<button class="go" id="btn'+i+'">运行</button>';
     h+='<button id="curl'+i+'">curl</button>';
     if(e.path.indexOf('{')===-1 && e.method==='GET')h+='<a href="'+A+e.path+'" target="_blank"><button>打开</button></a>';
-    h+='</div></div>';
+    h+='</div></div></div>';
     h+='<div class="result" id="res'+i+'"></div>';
     h+='</div>';
   });
@@ -133,30 +151,72 @@ var ENDPOINTS=[
 
   // Bind events
   ENDPOINTS.forEach(function(e,i){
-    document.getElementById('btn'+i).addEventListener('click',function(){testEndpoint(i,e.method,e.test)});
+    document.getElementById('btn'+i).addEventListener('click',function(){testEndpoint(i,e.method,e.path)});
     document.getElementById('curl'+i).addEventListener('click',function(){copyCurl(i,e.method,e.path,e.body)});
   });
 
-  // Health check
+  // #8: 端点搜索过滤
+  document.getElementById('searchEp').addEventListener('input',function(){
+    var q=this.value.toLowerCase();
+    document.querySelectorAll('#endpoints .card').forEach(function(c){
+      c.classList.toggle('hidden', q && c.dataset.search.indexOf(q)===-1);
+    });
+  });
+
+  // #9: 健康检查 + 30s 自动刷新
+  checkHealth();
+  setInterval(checkHealth,30000);
+})();
+
+// 实时系统状态 (开发侧监控: /metrics + /agent/pi/stats, 5s 轮询)
+function refreshStatus(){
+  var el=document.getElementById('sysStatus');if(!el)return;
+  fetch(A+'/metrics').then(function(r){return r.json()}).then(function(d){
+    var h='<b>运行</b> '+Math.floor(d.uptime_seconds/3600)+'h'+Math.floor((d.uptime_seconds%3600)/60)+'m · <b>请求</b> '+d.total_requests+' · <b>平均延迟</b> '+d.avg_latency_ms+'ms · <b>错误率</b> '+((d.error_rate||0)*100).toFixed(2)+'%';
+    h+='<br><b>Token</b> '+d.total_tokens+' · <b>估算成本</b> $'+(d.estimated_cost_usd||0)+' · <b>搜索</b> '+d.search_count+' · <b>下载</b> '+d.download_count;
+    fetch(A+'/agent/pi/stats').then(function(r){return r.json()}).then(function(s){
+      var hooks=s.hooks||{},ctx=s.context||{},tl=s.tools||{};
+      h+='<br><b>Agent</b> hook节点 '+Object.keys(hooks).length+' · 压缩 '+(ctx.compact_count||0)+' · 工具调用 '+(tl.total_calls||0)+' · 错误类型 '+Object.keys(tl.error_counts||{}).length;
+      el.innerHTML=h;
+    }).catch(function(){el.innerHTML=h+'<br><i>Agent 统计不可用</i>'});
+  }).catch(function(e){el.innerHTML='状态获取失败: '+esc(e.message)});
+}
+refreshStatus();
+setInterval(refreshStatus,5000);
+
+function checkHealth(){
   fetch(A+'/health').then(function(r){return r.json()}).then(function(d){
     var ok=d.status==='ok';
-    document.getElementById('gs').textContent=ok?' API OK (127.0.0.1:8001)':' API DOWN';
+    document.getElementById('gs').textContent=ok?' API OK':' API DOWN';
     document.getElementById('gs').className='status '+(ok?'s-ok':'s-err');
   }).catch(function(){
     document.getElementById('gs').textContent=' API 未启动';
     document.getElementById('gs').className='status s-err';
   });
-})();
+}
+
+// #1: 解析路径, 用参数输入框替换 {param}
+function resolvePath(i,path){
+  var p=document.getElementById('parm'+i);
+  if(p)path=path.replace(/\{([^}]+)\}/g,p.value.trim()||p.placeholder);
+  return path;
+}
 
 function testEndpoint(i,method,path){
+  path=resolvePath(i,path);
   var res=document.getElementById('res'+i);
   var inp=document.getElementById('inp'+i);
+  var btn=document.getElementById('btn'+i);
   var body=null;
   if(inp&&inp.value.trim()){
     try{body=JSON.parse(inp.value)}catch(e){res.textContent='JSON 格式错误: '+e.message;res.className='result show err';return}
   }
+  // #6: 取消前一个请求 + 加载态
+  if(controllers[i])controllers[i].abort();
+  var ac=new AbortController();controllers[i]=ac;
+  btn.disabled=true;btn.textContent='…';
   res.textContent='请求中...';res.className='result show';
-  var opts={method:method,headers:{'Content-Type':'application/json'}};
+  var opts={method:method,headers:{'Content-Type':'application/json'},signal:ac.signal};
   if(method==='POST'&&body)opts.body=JSON.stringify(body);
   var t0=Date.now();
   fetch(A+path,opts).then(function(r){
@@ -166,20 +226,29 @@ function testEndpoint(i,method,path){
     var preview=r.text.substring(0,3000);if(r.text.length>3000)preview+='\n\n... (截断)';
     res.textContent=method+' '+path+' '+String.fromCharCode(8594)+' '+r.status+' ('+r.elapsed+'ms)\n\n'+preview;
     res.className='result show '+(r.ok?'ok':'err');
+    res.scrollTop=res.scrollHeight;
   }).catch(function(e){
+    if(e.name==='AbortError'){res.textContent='已取消';res.className='result show';return}
     res.textContent='请求失败: '+e.message;res.className='result show err';
+  }).finally(function(){
+    btn.disabled=false;btn.textContent='运行';
   });
 }
 
+// #2: curl 生成 (body 单引号转义) + 现代 clipboard
 function copyCurl(i,method,path,body){
-  var cmd='curl';
+  path=resolvePath(i,path);
+  var cmd='curl -s';
   if(method==='POST')cmd+=' -X POST';
-  cmd+=' \''+A+path+'\'';
+  cmd+=" '"+A+path+"'";
   if(method==='POST')cmd+=' -H "Content-Type: application/json"';
-  if(body)cmd+=" -d '"+body+"'";
-  var el=document.createElement('textarea');el.value=cmd;el.style.position='fixed';
-  document.body.appendChild(el);el.select();document.execCommand('copy');document.body.removeChild(el);
+  if(body)cmd+=" -d '"+body.replace(/'/g,"'\\''")+"'";
+  copyText(cmd);
   var res=document.getElementById('res'+i);res.textContent='已复制到剪贴板:\n\n'+cmd;res.className='result show ok';
+}
+function copyText(t){
+  if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t)}
+  else{var el=document.createElement('textarea');el.value=t;el.style.position='fixed';document.body.appendChild(el);el.select();document.execCommand('copy');document.body.removeChild(el)}
 }
 
 function esc(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}

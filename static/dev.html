@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PaperLink 开发者中心</title>
+<style>
+  :root{--bg:#0d1117;--card:#161b22;--border:#30363d;--text:#e6edf3;--muted:#8b949e;--teal:#3fb6a8;--blue:#58a6ff}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:13px;padding:20px;max-width:1100px;margin:0 auto}
+  h1{font-size:20px;margin-bottom:4px;color:var(--teal)}
+  .sub{color:var(--muted);font-size:12px;margin-bottom:18px}
+  .section{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:14px}
+  .section h2{font-size:14px;color:var(--blue);margin-bottom:10px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
+  .card{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px 12px;text-decoration:none;color:var(--text);display:block}
+  .card:hover{border-color:var(--teal)}
+  .card .t{font-weight:600;font-size:13px}
+  .card .d{color:var(--muted);font-size:11px;margin-top:3px}
+  .kv{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px}
+  .kv div{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px 9px}
+  .kv .k{color:var(--muted);font-size:11px}
+  .kv .v{font-size:15px;font-weight:600;color:var(--teal)}
+  pre{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;overflow:auto;font-size:11px;line-height:1.6;color:var(--text)}
+  .badge{display:inline-block;background:var(--teal);color:#04241f;border-radius:4px;padding:1px 7px;font-size:10px;font-weight:700;margin-left:6px;vertical-align:middle}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+</style>
+</head>
+<body>
+  <h1>PaperLink 开发者中心</h1>
+  <div class="sub">开发/调试/监控入口聚合 — 用户侧只保留聊天与瀑布流，所有技术面在此</div>
+
+  <div class="section">
+    <h2>实时系统状态 <span class="badge">5s 刷新</span></h2>
+    <div id="sysStatus" style="font-size:12px;line-height:1.9">加载中…</div>
+  </div>
+
+  <div class="section">
+    <h2>开发工具入口</h2>
+    <div class="grid">
+      <a class="card" href="/static/pipeline.html" target="_blank"><div class="t">🔬 RAG 流水线追踪</div><div class="d">6 步检索链路实时可视化</div></a>
+      <a class="card" href="/static/test.html" target="_blank"><div class="t">🧪 API 测试面板</div><div class="d">一键测全部端点 + curl 导出</div></a>
+      <a class="card" href="/static/kg.html" target="_blank"><div class="t">📊 知识图谱</div><div class="d">知识库图谱可视化（已从用户侧隐藏）</div></a>
+      <a class="card" href="/docs" target="_blank"><div class="t">📖 Swagger 文档</div><div class="d">FastAPI 自动生成</div></a>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Agent 工具与技能</h2>
+    <div class="kv" id="toolsBox"><div class="v">加载中…</div></div>
+  </div>
+
+  <div class="section">
+    <h2>配额状态</h2>
+    <div id="quotaBox" class="mono" style="font-size:12px;line-height:1.8">加载中…</div>
+  </div>
+
+  <div class="section">
+    <h2>主动路由学习 <span class="badge">建议接受度</span></h2>
+    <div id="suggestBox" class="kv"><div class="v">加载中…</div></div>
+    <div class="sub" style="margin-top:6px">用户点「执行」越多的建议，会被越优先推送（自我进化路由）。</div>
+  </div>
+
+  <div class="section">
+    <h2>评估结果 <span class="badge">data/*.json</span></h2>
+    <div id="evalBox" class="kv"><div class="v">加载中…</div></div>
+  </div>
+
+  <div class="section">
+    <h2>评估与运维脚本</h2>
+<pre>python run_eval.py --limit 5               # 检索评估 (hybrid vs vector + 回归门禁)
+python benchmark.py --limit 5              # 延迟/Token/成本
+python evaluate_rag_standards.py --limit 2 # RAGAS 生成质量
+python reindex_all.py --dry-run            # 查看待重建向量表
+python demo/run_all.py "方向"              # 全部 11 模块演示
+python demo/pitch.py "方向"                # 产品演示总纲
+curl -s localhost:8001/metrics             # 系统指标</pre>
+  </div>
+
+<script>
+var A=window.location.origin.replace(':5173',':8001')||'http://localhost:8001';
+function esc(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+
+function refreshStatus(){
+  var el=document.getElementById('sysStatus');if(!el)return;
+  fetch(A+'/metrics').then(function(r){return r.json()}).then(function(d){
+    var h='运行 '+Math.floor(d.uptime_seconds/3600)+'h'+Math.floor((d.uptime_seconds%3600)/60)+'m · 请求 '+d.total_requests+' · 平均延迟 '+d.avg_latency_ms+'ms · 错误率 '+((d.error_rate||0)*100).toFixed(2)+'%';
+    h+='<br>Token '+d.total_tokens+' · 估算成本 $'+(d.estimated_cost_usd||0)+' · 搜索 '+d.search_count+' · 下载 '+d.download_count;
+    fetch(A+'/agent/pi/stats').then(function(r){return r.json()}).then(function(s){
+      var hooks=s.hooks||{},ctx=s.context||{},tl=s.tools||{};
+      h+='<br>Agent: hook 节点 '+Object.keys(hooks).length+' · 压缩 '+(ctx.compact_count||0)+' · 工具调用 '+(tl.total_calls||0)+' · 错误类型 '+Object.keys(tl.error_counts||{}).length;
+      el.innerHTML=h;
+    }).catch(function(){el.innerHTML=h+'<br><i>Agent 统计不可用</i>'});
+  }).catch(function(e){el.innerHTML='状态获取失败: '+esc(e.message)});
+}
+
+function refreshTools(){
+  var box=document.getElementById('toolsBox');if(!box)return;
+  fetch(A+'/agent/tools').then(function(r){return r.json()}).then(function(d){
+    var h='';
+    (d.tools||[]).forEach(function(t){h+='<div><div class="k">'+esc(t.name)+'</div><div class="v" style="font-size:11px;color:var(--muted);font-weight:400">'+esc(t.description)+'<br><span style="color:var(--blue)">技能: '+(t.used_by_skills&&t.used_by_skills.length?esc(t.used_by_skills.join(' / ')):'-')+'</span></div></div>'});
+    box.innerHTML=h||'<div>无工具</div>';
+  }).catch(function(){box.innerHTML='<div>获取失败</div>'});
+}
+
+function refreshQuota(){
+  var el=document.getElementById('quotaBox');if(!el)return;
+  fetch(A+'/quota').then(function(r){return r.json()}).then(function(d){
+    el.textContent='allowed='+d.allowed+' used='+d.used+' remaining='+d.remaining+' blocked='+d.blocked+(d.blocked?'  ⚠️ 需充值':'');
+  }).catch(function(){el.textContent='获取失败'});
+}
+
+function refreshEval(){
+  var box=document.getElementById('evalBox');if(!box)return;
+  fetch(A+'/eval/results').then(function(r){return r.json()}).then(function(d){
+    var r=d.reports||{},h='';
+    if(r.eval_result){var e=r.eval_result;h+='<div><div class="k">检索评估</div><div class="v" style="font-size:11px;color:var(--text);font-weight:400">Hybrid R@5 '+e.hybrid_recall_at_5+' · Vector R@5 '+e.vector_recall_at_5+' · MRR '+e.mrr+' · Δ'+e.hybrid_vs_vector_delta+'</div></div>'}
+    if(r.rag_standards_report){var s=r.rag_standards_report.report||{};h+='<div><div class="k">RAGAS</div><div class="v" style="font-size:11px;color:var(--text);font-weight:400">faithfulness '+(s.faithfulness||'-')+' · ctx_precision '+(s.context_precision||'-')+' · '+s.questions+' 题</div></div>'}
+    if(r.rag_faithfulness_report){var f=r.rag_faithfulness_report;h+='<div><div class="k">忠实度</div><div class="v" style="font-size:11px;color:var(--text);font-weight:400">'+(f.faithfulness||'-')+' · ≥0.80 '+(f.gte80||'-')+'</div></div>'}
+    if(r.embedding_benchmark){var b=r.embedding_benchmark;h+='<div><div class="k">嵌入基准</div><div class="v" style="font-size:11px;color:var(--text);font-weight:400">'+(b.model||'-')+' '+b.dim+'d · recall '+(b.avg_semantic_recall||'-')+'</div></div>'}
+    if(r.e2e_report){var e2=r.e2e_report;h+='<div><div class="k">E2E</div><div class="v" style="font-size:11px;color:var(--text);font-weight:400">'+(e2.passed||0)+'/'+(e2.passed+e2.failed)+' PASS</div></div>'}
+    box.innerHTML=h||'<div class="v">暂无评估数据（运行 run_eval.py 生成）</div>';
+  }).catch(function(){box.innerHTML='<div>获取失败</div>'});
+}
+
+function refreshSuggestStats(){
+  var box=document.getElementById('suggestBox');if(!box)return;
+  fetch(A+'/suggest/stats').then(function(r){return r.json()}).then(function(d){
+    var s=d.stats||{},h='';
+    if(!Object.keys(s).length){box.innerHTML='<div class="v">暂无数据（用户点击建议「执行」后积累）</div>';return}
+    Object.keys(s).forEach(function(stage){
+      var acts=s[stage]||{};
+      h+='<div><div class="k">'+esc(stage)+'</div><div class="v" style="font-size:11px;color:var(--text);font-weight:400">'+Object.keys(acts).map(function(a){return esc(a)+'×'+acts[a]}).join(' · ')+'</div></div>';
+    });
+    box.innerHTML=h;
+  }).catch(function(){box.innerHTML='<div>获取失败</div>'});
+}
+
+refreshStatus();setInterval(refreshStatus,5000);
+refreshTools();setInterval(refreshTools,30000);
+refreshQuota();
+refreshEval();
+refreshSuggestStats();
+</script>
+</body>
+</html>

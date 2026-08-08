@@ -16,6 +16,7 @@ from config import (
     DEEPSEEK_MODEL,
     SEMANTIC_SCHOLAR_API_KEY,
     SOURCE_WEIGHTS,
+    SPAM_KEYWORDS,
 )
 from models import PaperMeta
 
@@ -66,23 +67,98 @@ STRATEGY_PROMPT = """你是图书情报学与学术检索专家。用户的研�
 仅返回 JSON。"""
 
 
-async def generate_search_strategy(query: str) -> dict:
-    client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
-    response = await client.chat.completions.create(
-        model=DEEPSEEK_MODEL,
-        messages=[{"role": "user", "content": STRATEGY_PROMPT.format(query=query)}],
-        temperature=0.3,
-        response_format={"type": "json_object"},
-    )
-    text = response.choices[0].message.content.strip()
-    text = text.replace("```json", "").replace("```", "").strip()
-    import re
+# ===== 检索/策略缓存 (速度: 重复查询秒回, 跨进程 JSON 持久化) =====
+import time as _t
+from pathlib import Path as _Path
 
-    text = re.sub(r",\s*([}\]])", r"\1", text)
+_STRATEGY_CACHE: dict[str, tuple[float, dict]] = {}
+_SEARCH_CACHE: dict[str, tuple[float, list]] = {}
+_CACHE_FILE = _Path(__file__).resolve().parent / "data" / "search_cache.json"
+_STRATEGY_TTL = 3600  # 策略缓存 1 小时
+_SEARCH_TTL = 600     # 搜索结果缓存 10 分钟
+_CACHE_MAX = 100
+
+
+def _cache_get(cache: dict, key: str, ttl: float):
+    item = cache.get(key)
+    if item and _t.time() - item[0] < ttl:
+        return item[1]
+    return None
+
+
+def _cache_set(cache: dict, key: str, value):
+    now = _t.time()
+    if len(cache) >= _CACHE_MAX:
+        for k in [k for k, v in cache.items() if now - v[0] > _SEARCH_TTL]:
+            cache.pop(k, None)
+    cache[key] = (now, value)
+
+
+def _load_caches():
     try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        logger.warning(f"JSON parse failed: {text[:200]}")
+        data = json.loads(_CACHE_FILE.read_text(encoding="utf-8"))
+        _STRATEGY_CACHE.update(
+            {k: (v["ts"], v["strategy"]) for k, v in data.get("strategy", {}).items()}
+        )
+        _SEARCH_CACHE.update(
+            {k: (v["ts"], v["papers"]) for k, v in data.get("search", {}).items()}
+        )
+    except Exception:
+        pass
+
+
+def _save_caches():
+    try:
+        payload = {
+            "strategy": {
+                k: {"ts": v[0], "strategy": v[1]}
+                for k, v in list(_STRATEGY_CACHE.items())[-30:]
+            },
+            "search": {
+                k: {"ts": v[0], "papers": v[1]}
+                for k, v in list(_SEARCH_CACHE.items())[-20:]
+            },
+        }
+        _CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _CACHE_FILE.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+
+
+_load_caches()  # 启动时载入跨进程缓存 (演示重跑/服务重启后仍秒回)
+
+
+async def generate_search_strategy(query: str) -> dict:
+    """检索策略 (缓存包装): 同查询秒回, 跨进程 JSON 持久化。"""
+    key = (query or "").strip().lower()
+    cached = _cache_get(_STRATEGY_CACHE, key, _STRATEGY_TTL)
+    if cached is not None:
+        # 缓存里的旧坏策略 (英文关键词混中文) 也做校验过滤
+        en = cached.get("keywords_en", [])
+        en_clean = [
+            k for k in en if k and not any(19968 <= ord(c) <= 40869 for c in k)
+        ]
+        if en_clean:
+            cached["keywords_en"] = en_clean
+        logger.info("Strategy cache hit")
+        return cached
+    strategy = await _generate_strategy_uncached(query)
+    _cache_set(_STRATEGY_CACHE, key, strategy)
+    _save_caches()
+    return strategy
+
+
+async def _generate_strategy_uncached(query: str) -> dict:
+    from config import (
+        LLM_STRATEGY_MAX_TOKENS,
+        LLM_STRATEGY_TEMPERATURE,
+        LLM_STRATEGY_TIMEOUT,
+    )
+
+    client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+
+    def _fallback() -> dict:
+        """JSON 解析失败时的降级默认值。"""
         return {
             "keywords_cn": [query],
             "keywords_en": [query],
@@ -96,6 +172,74 @@ async def generate_search_strategy(query: str) -> dict:
             "search_tips": f"请手动为「{query}」构建检索式",
         }
 
+    # 解析 LLM 输出: 清理 Markdown 标记 + 尾随逗号 → JSON
+    def _parse(text: str) -> dict | None:
+        import re
+
+        text = text.replace("```json", "").replace("```", "").strip()
+        text = re.sub(r",\s*([}\]])", r"\1", text)
+        try:
+            parsed = json.loads(text)
+            if not (isinstance(parsed, dict) and parsed.get("keywords_cn")):
+                return None
+            # 硬校验: keywords_en 必须是英文术语 (中文原文混入 → 英文源召回失败)
+            # 过滤掉含中文的条目; 若全中文 → 视为策略失败, 触发重试
+            en = parsed.get("keywords_en", [])
+            en_clean = [
+                k for k in en
+                if k and not any(19968 <= ord(c) <= 40869 for c in k)
+            ]
+            if not en_clean:
+                return None
+            parsed["keywords_en"] = en_clean
+            return parsed
+        except json.JSONDecodeError:
+            pass
+        return None
+
+    # 首次调用
+    response = await client.chat.completions.create(
+        model=DEEPSEEK_MODEL,
+        messages=[{"role": "user", "content": STRATEGY_PROMPT.format(query=query)}],
+        temperature=LLM_STRATEGY_TEMPERATURE,
+        max_tokens=LLM_STRATEGY_MAX_TOKENS,
+        timeout=LLM_STRATEGY_TIMEOUT,
+        response_format={"type": "json_object"},
+    )
+    text = response.choices[0].message.content.strip()
+    parsed = _parse(text)
+    if parsed is not None:
+        if not (parsed.get("related_terms_en") or parsed.get("related_terms_cn")):
+            logger.warning(f"Strategy missing related_terms for: {query}")
+        return parsed
+
+    # 重试一次 (DeepSeek 审查 #2: 降低温度提高结构化输出稳定性)
+    logger.warning(f"Strategy JSON parse failed, retrying with lower temp: {text[:200]}")
+    try:
+        retry = await client.chat.completions.create(
+            model=DEEPSEEK_MODEL,
+            messages=[
+                {
+                    "role": "user",
+                    "content": STRATEGY_PROMPT.format(query=query)
+                    + "\n\n硬性要求: 1) keywords_en 必须是纯英文术语, 禁止含中文; "
+                    "2) 必须生成 related_terms_cn 和 related_terms_en (各 ≥3 个领域联想词); "
+                    "3) 严格输出指定 JSON 结构。",
+                }
+            ],
+            temperature=0.0,
+            max_tokens=LLM_STRATEGY_MAX_TOKENS,
+            timeout=LLM_STRATEGY_TIMEOUT,
+            response_format={"type": "json_object"},
+        )
+        parsed = _parse(retry.choices[0].message.content.strip())
+        if parsed is not None:
+            return parsed
+    except Exception as e:
+        logger.warning(f"Strategy retry failed: {e}")
+
+    return _fallback()
+
 
 # ---------- 质量过滤 & 语言检测 ----------
 
@@ -108,47 +252,46 @@ def _detect_cn(text: str) -> bool:
     return False
 
 
-# 来源权重：越高越可信
-_SRC_W = {
-    "Semantic Scholar": 10,
-    "OpenAlex": 8,
-    "arXiv": 7,
-    "baidu_xueshu": 3,
-    "nssd": 5,
-}
-
-# 屏蔽关键词（含这些的论文直接丢弃）
-_BLOCK = [
-    "征稿",
-    "会议通知",
-    "征文",
-    "订阅",
-    "广告",
-    "约稿",
-    "稿约",
-    "投稿须知",
-    "撤稿",
-    "抄袭",
-    "学术不端",
-    "书评",
-    "读者来信",
-    "简讯",
-    "新闻",
-]
+def _infer_source(p: PaperMeta) -> str:
+    """从 paper_id 前缀/arxiv_id 推断论文来源，用于 SOURCE_WEIGHTS 查权重。
+    已知前缀: core/crossref/doaj/pubmed/epmc/pwc/gs。
+    无前缀: arxiv_id 存在 → arXiv; 有 doi → 其他 (Semantic Scholar/OpenAlex 无稳定区分)。
+    """
+    pid = p.paper_id or ""
+    if pid.startswith("core:"):
+        return "CORE"
+    if pid.startswith("crossref:"):
+        return "Crossref"
+    if pid.startswith("doaj:"):
+        return "DOAJ"
+    if pid.startswith("pubmed:"):
+        return "PubMed"
+    if pid.startswith("epmc:"):
+        return "Europe PMC"
+    if pid.startswith("pwc:"):
+        return "Papers With Code"
+    if pid.startswith("gs:") or pid.startswith("gs_apify"):
+        return "Google Scholar"
+    if p.arxiv_id:
+        return "arXiv"
+    # Semantic Scholar / OpenAlex 无前缀区分 — 按 doi 有无粗分
+    return "OpenAlex" if p.doi else "Semantic Scholar"
 
 
 def _quality_score(p: PaperMeta, source: str = "") -> float:
-    """综合质量评分：来源权重 + 引用数 + 年份。"""
-    w = SOURCE_WEIGHTS.get(source, 2) if source else 2
-    cit = p.year or 0
-    return w * 10 + max(0, (p.year or 2000) - 2000) * 0.1
+    """综合质量评分：来源可信度 + 引用数 + 年份加权。"""
+    # 来源权重：显式 source 优先，否则从 paper 推断 (修复硬编码 "other" 问题)
+    w = SOURCE_WEIGHTS.get(source) if source else SOURCE_WEIGHTS.get(_infer_source(p), 2)
+    # 引用数信号: 0~1000 → 0~5
+    cit = p.citation_count or 0
+    cit_signal = min(cit / 1000.0, 5.0)
+    return w * 10 + cit_signal * 8 + max(0, (p.year or 2000) - 2000) * 0.1
 
 
 def _should_drop(p: PaperMeta) -> bool:
     """仅丢弃明显垃圾（广告/撤稿/征稿）。保留其他所有论文。"""
     t = (p.title or "") + (p.abstract or "")
-    spam_kw = ["征稿", "广告", "撤稿", "抄袭", "学术不端", "约稿", "稿约"]
-    for w in spam_kw:
+    for w in SPAM_KEYWORDS:
         if w in t:
             return True
     # 标题短于4字且无DOI才丢弃
@@ -158,6 +301,74 @@ def _should_drop(p: PaperMeta) -> bool:
 
 
 # ---------- 论文搜索（并行 S2 + arXiv + CNKI 链接）----------
+
+async def _translate_cn_query(query: str) -> str:
+    """中文学术语 → 英文检索词 (LLM 翻译 + 本地缓存)。无中文/失败返回空。"""
+    if not any(19968 <= ord(c) <= 40869 for c in query):
+        return ""
+    from config import (
+        TRANSLATION_CACHE_ENABLED,
+        TRANSLATION_CACHE_FILE,
+        LLM_TRANSLATE_TEMPERATURE,
+        LLM_TRANSLATE_MAX_TOKENS,
+        LLM_TRANSLATE_TIMEOUT,
+    )
+
+    # 缓存
+    try:
+        if TRANSLATION_CACHE_ENABLED:
+            from pathlib import Path
+
+            p = Path(TRANSLATION_CACHE_FILE)
+            if p.exists():
+                cache = json.loads(p.read_text())
+                if cache.get(query):
+                    return cache[query]
+    except Exception:
+        pass
+
+    try:
+        from openai import AsyncOpenAI
+
+        from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL
+
+        client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+        resp = await client.chat.completions.create(
+            model=DEEPSEEK_MODEL,
+            temperature=LLM_TRANSLATE_TEMPERATURE,
+            max_tokens=LLM_TRANSLATE_MAX_TOKENS,
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        f"将以下中文学术术语翻译为英文检索关键词，只返回英文逗号分隔，不要解释：{query}"
+                    ),
+                }
+            ],
+            timeout=LLM_TRANSLATE_TIMEOUT,
+        )
+        import re
+
+        result = re.sub(r"[^a-zA-Z0-9,\- ]", "", (resp.choices[0].message.content or ""))[:100]
+        result = result.strip()
+        if not result:
+            return ""
+        try:
+            if TRANSLATION_CACHE_ENABLED:
+                from pathlib import Path
+
+                p = Path(TRANSLATION_CACHE_FILE)
+                cache = json.loads(p.read_text()) if p.exists() else {}
+                cache[query] = result
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(json.dumps(cache, ensure_ascii=False))
+        except Exception:
+            pass
+        return result
+    except Exception as e:
+        logger.warning(f"CN→EN translation failed: {e}")
+        return ""
+
 
 S2_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
 S2_FIELDS = (
@@ -170,69 +381,84 @@ async def search_papers_for_topic(
     query: str,
     keywords_en: list[str] | None = None,
     keywords_cn: list[str] | None = None,
+    related_en: list[str] | None = None,
+    related_cn: list[str] | None = None,
 ) -> list[PaperMeta]:
-    """9 源并行搜索 + Query扩展: 每源独立超时, 快源先回。参考 academic-search 的 Query 扩展策略。"""
+    """9 源并行搜索 + Query扩展: 每源独立超时, 快源先回。参考 academic-search 的 Query 扩展策略。
+    related_en/cn: 领域联想词 (策略第2层), 并入关键词池补覆盖 — 不常见选题用户措辞≠标准术语时,
+    联想词进 arXiv/OpenAlex/CORE 等 [:2]/[:3] 源检索。"""
+    try:
+        from monitor import metrics
+
+        metrics.record_search()  # /metrics 搜索计数 (接线 MetricsTracker.record_search)
+    except Exception:
+        pass
+    # 搜索缓存: 同查询+关键词+联想词重复检索秒回 (跳过策略生成 + 12 源检索)
+    _cache_key = (
+        ((query or "").strip().lower() + "|")
+        + "|".join(sorted(keywords_en or [])) + "|"
+        + "|".join(sorted(keywords_cn or [])) + "|"
+        + "|".join(sorted(related_en or [])) + "|"
+        + "|".join(sorted(related_cn or []))
+    )
+    _cached = _cache_get(_SEARCH_CACHE, _cache_key, _SEARCH_TTL)
+    if _cached is not None:
+        logger.info(f"Search cache hit: {len(_cached)} papers")
+        return [PaperMeta(**p) for p in _cached]
     if not keywords_en:
-        strategy = await generate_search_strategy(query)
-        keywords_en = strategy.get("keywords_en", [])[:2]
-        keywords_cn = strategy.get("keywords_cn", [])[:3]
+        # 策略 LLM 不可用/超时 → 降级为查询词本身, 搜索不因策略失败而中断
+        try:
+            strategy = await generate_search_strategy(query)
+            keywords_en = strategy.get("keywords_en", [])[:2]
+            keywords_cn = strategy.get("keywords_cn", [])[:3]
+            related_en = related_en or strategy.get("related_terms_en", [])
+            related_cn = related_cn or strategy.get("related_terms_cn", [])
+        except Exception as e:
+            logger.warning(f"Strategy generation failed, using query as keyword: {e}")
+            keywords_en = keywords_cn = None
+    # 修复: 关键词含中文 → 翻译为英文。不常见选题最常见的失败路径是
+    # 策略降级返回中文原文, 英文源(arXiv/S2/Crossref)搜中文=召回失败。
+    if keywords_en and any(19968 <= ord(c) <= 40869 for c in "".join(keywords_en)):
+        en = await _translate_cn_query(query)
+        if en:
+            keywords_en = [en]
+            logger.info(f"Translated query keywords → EN: {en}")
     if not keywords_en:
         keywords_en = [query]
 
-    # Query扩展: 每个关键词搜索2个变体(同义词/缩写), 覆盖提升30-50%。来源: academic-search v1.2.0
-    kw_en = keywords_en[:1]
-    kw_cn = (keywords_cn or [query])[:1]
-    # 用 related_terms 扩展搜索面(如果从策略生成了)
-    kw_en_expanded = (
-        list(
-            set(
-                kw_en
-                + (
-                    strategy.get("related_terms_en", [])[:2]
-                    if "strategy" in dir()
-                    else []
-                )
-            )
-        )
-        if keywords_en
-        else kw_en
-    )
-    kw_cn_expanded = (
-        list(
-            set(
-                kw_cn
-                + (
-                    strategy.get("related_terms_cn", [])[:2]
-                    if "strategy" in dir()
-                    else []
-                )
-            )
-        )
-        if keywords_cn
-        else kw_cn
-    )
+    # 联想词并入关键词池 (核心词在前 → [:1]源取主词, [:2]/[:3]源取主词+联想词)。
+    # 不常见选题: 用户措辞≠领域标准术语, 联想词正是标准术语的补充覆盖。
+    kw_en = (keywords_en + (related_en or [])[:2])[:3]
+    kw_cn = ((keywords_cn or [query]) + (related_cn or [])[:2])[:3]
 
-    # 每源独立超时: arXiv/OpenAlex=8s, S2/Apify=3s, CNKI=2s
+    # 每源独立超时（来自 config.py SEARCH_TIMEOUT_*）
+    import config
+
     async def _safe(fn, *a, timeout_s=10, **kw):
         try:
             return await asyncio.wait_for(fn(*a, **kw), timeout=timeout_s)
-        except:
+        except (asyncio.TimeoutError, Exception):
             return []
 
     results = await asyncio.gather(
-        _safe(_search_arxiv, kw_en, timeout_s=10),
-        _safe(_search_openalex, kw_en, timeout_s=10),
-        _safe(_search_openalex_cn, kw_cn, timeout_s=10),
-        _safe(_search_s2, kw_en, timeout_s=5),
-        _safe(_search_core, kw_en, timeout_s=8),
-        _safe(_search_crossref, kw_en, timeout_s=8),
-        _safe(_search_doaj, kw_en, timeout_s=8),
-        _safe(_search_epmc, kw_en, timeout_s=8),
-        _safe(_search_epmc, kw_en, timeout_s=8),
-        _safe(_search_pubmed, kw_en, timeout_s=8),  # PubMed — 36M biomedical+CS
-        _safe(_search_pwc, kw_en, timeout_s=8),  # PapersWithCode — CS+code
-        _safe(_search_google_scholar_apify, kw_en, timeout_s=3),
-        _safe(_make_cnki_async, query, kw_cn, timeout_s=2),
+        _safe(_search_arxiv, kw_en, timeout_s=config.SEARCH_TIMEOUT_ARXIV),
+        _safe(_search_openalex, kw_en, timeout_s=config.SEARCH_TIMEOUT_OPENALEX),
+        _safe(_search_openalex_cn, kw_cn, timeout_s=config.SEARCH_TIMEOUT_OPENALEX_CN),
+        _safe(_search_s2, kw_en, timeout_s=config.SEARCH_TIMEOUT_S2),
+        _safe(_search_core, kw_en, timeout_s=config.SEARCH_TIMEOUT_CORE),
+        _safe(_search_crossref, kw_en, timeout_s=config.SEARCH_TIMEOUT_CROSSREF),
+        _safe(_search_doaj, kw_en, timeout_s=config.SEARCH_TIMEOUT_DOAJ),
+        _safe(_search_epmc, kw_en, timeout_s=config.SEARCH_TIMEOUT_EPMC),
+        _safe(
+            _search_pubmed, kw_en, timeout_s=config.SEARCH_TIMEOUT_PUBMED
+        ),  # PubMed — 36M biomedical+CS
+        _safe(_search_pwc, kw_en, timeout_s=config.SEARCH_TIMEOUT_PWC),
+        _safe(
+            _search_google_scholar_apify,
+            kw_en,
+            timeout_s=config.SEARCH_TIMEOUT_GS_APIFY,
+        ),
+        _safe(_make_cnki_async, query, kw_cn, timeout_s=config.SEARCH_TIMEOUT_CNKI),
     )
     arxiv_papers = results[0] if not isinstance(results[0], BaseException) else []
     oa_papers = results[1] if not isinstance(results[1], BaseException) else []
@@ -262,6 +488,13 @@ async def search_papers_for_topic(
 
     seen: set[str] = set()
     papers: list[PaperMeta] = []
+
+    def _dedup_key(p: PaperMeta) -> str:
+        """去重键: DOI 优先 (唯一标识), 否则标题规范化前 60 字符 (DeepSeek 审查 #6)。"""
+        if p.doi:
+            return f"doi:{p.doi.lower().strip()}"
+        return (p.title or "").lower().strip()[:60]
+
     all_papers = (
         cnki_papers
         + gs_papers
@@ -285,7 +518,7 @@ async def search_papers_for_topic(
             p.title, strict=(cn_count_done < 30)
         ):
             continue
-        key = (p.title or "").lower().strip()[:60]
+        key = _dedup_key(p)
         if key and key not in seen:
             seen.add(key)
             papers.append(p)
@@ -300,32 +533,84 @@ async def search_papers_for_topic(
                 and _detect_cn(p.title)
                 and _cn_relevant(p.title, strict=False)
             ):
-                key = (p.title or "").lower().strip()[:60]
+                key = _dedup_key(p)
                 if key not in seen:
                     seen.add(key)
                     papers.append(p)
 
-    # 质量排序：中文高质量 > 英文高质量 > 低质量
-    for p in papers:
-        p.is_cn = _detect_cn(p.title)
-        p._score = _quality_score(p, "other")
-
-    papers.sort(
-        key=lambda p: (
-            not bool(p.is_cn),  # 中文优先
-            not p.is_oa,  # OA 优先
-            -(p._score or 0),  # 质量分降序
-            -(p.year or 0),  # 年份降序
+    def _sort_papers():
+        """质量排序：中文高质量 > 英文高质量 > 低质量。
+        用真实来源权重 (修复硬编码 "other" 导致 SOURCE_WEIGHTS 失效)。"""
+        for p in papers:
+            p.is_cn = _detect_cn(p.title)
+            p._score = _quality_score(p)
+        papers.sort(
+            key=lambda p: (
+                not bool(p.is_cn),  # 中文优先
+                not p.is_oa,  # OA 优先
+                -(p._score or 0),  # 质量分降序 (来源权重+引用+年份)
+                -(p.year or 0),  # 年份降序
+            )
         )
-    )
+
+    # 首次排序
+    _sort_papers()
+
     # Unpaywall 补充 PDF 直链
     enriched = await _enrich_via_unpaywall(papers)
     # 摘要补全：对无摘要论文，通过 Crossref/OpenAlex 补全
     abs_enriched = await _enrich_abstracts(papers)
+
+    # 补全后重排 — is_oa/摘要变化会影响排序 (修复补全在排序后失效的缺陷)
+    _sort_papers()
+
     logger.info(
         f"Search: {len(papers)} papers, {enriched} PDFs via Unpaywall, {abs_enriched} abstracts filled"
     )
+
+    # 主题相关度重排 (修复: 原仅垃圾词过滤 + 质量分排序, 无关论文混入前列;
+    # 按 query 与 标题+摘要 的嵌入余弦相似度降序, 只重排不删除)
+    # 关键: 重排查询用「原文 + 英文关键词」双语表示 — 否则中文查询对英文论文的
+    # 相似度偏低, 通用中文神经网络论文会压过真正相关的 DARTS 等英文论文。
+    rerank_query = ((query or "") + " " + " ".join(keywords_en or [])).strip()
+    papers = _rerank_by_relevance(papers, rerank_query)
+    _cache_set(_SEARCH_CACHE, _cache_key, [p.model_dump() for p in papers])
+    _save_caches()
     return papers
+
+
+def _rerank_by_relevance(papers: list, query: str, top_k: int = 0) -> list:
+    """按 query 与 标题+摘要 的语义相似度降序重排搜索结果。
+    只重排不删除 (top_k=0 保留全部); 嵌入不可用时返回原序 (鲁棒降级)。"""
+    if not papers:
+        return papers
+    try:
+        import numpy as np
+        from embedder import embed_texts
+
+        texts = [
+            (p.title or "")[:150] + " " + (p.abstract or "")[:600] for p in papers
+        ]
+        vecs = np.asarray(embed_texts([query] + texts))
+        sims = vecs[1:] @ vecs[0]
+        # 语义相似度归一化到 [0,1]
+        s_min, s_max = float(sims.min()), float(sims.max())
+        sim_norm = (sims - s_min) / (s_max - s_min + 1e-9)
+        # 引用信号: 对数压缩 (1引≈0, 100引≈0.46, 1万引≈0.85), 避免被高被引无关论文带偏
+        cits = np.array([float(p.citation_count or 0) for p in papers])
+        cit_log = np.log1p(cits) / np.log1p(10000.0)
+        # 语义为主(0.9) + 引用小幅提权(0.1): 只在同样相关的论文里让高被引的靠前,
+        # 绝不让 MapReduce(1.8万引) 这类无关论文压过真正相关的 DARTS 论文
+        scores = 0.9 * sim_norm + 0.1 * cit_log
+        # 知网占位条目沉底: 非真实论文, 只是 CNKI 跳转链接 (保留入口但不污染前列)
+        for i, p in enumerate(papers):
+            if (p.title or "").startswith("[知网]") or (p.title or "").startswith("[CNKI]"):
+                scores[i] = -1.0
+        ranked = sorted(zip(scores, papers), key=lambda x: -x[0])
+        out = [p for _, p in ranked]
+        return out[:top_k] if top_k > 0 else out
+    except Exception:
+        return papers
 
 
 async def _search_s2(keywords: list[str]) -> list[PaperMeta]:
@@ -369,6 +654,7 @@ async def _search_s2(keywords: list[str]) -> list[PaperMeta]:
                             arxiv_id=ext.get("ArXiv"),
                             pdf_url=oa.get("url"),
                             is_oa=bool(oa.get("url")),
+                            citation_count=item.get("citationCount") or 0,
                         )
                     )
                 break
@@ -440,7 +726,7 @@ async def _search_arxiv(keywords: list[str]) -> list[PaperMeta]:
                         )
                     )
             except Exception:
-                pass
+                logger.debug(f"source search failed", exc_info=True)
             await asyncio.sleep(0.05)
     return papers
 
@@ -453,7 +739,7 @@ async def _search_openalex(keywords: list[str]) -> list[PaperMeta]:
     """OpenAlex 搜索：免费、无速率限制、覆盖全面。"""
     papers: list[PaperMeta] = []
     async with httpx.AsyncClient(timeout=15.0) as client:
-        for kw in keywords[:2]:
+        for kw in keywords[:3]:  # OpenAlex 快且准, 接住核心词+联想词
             try:
                 resp = await client.get(
                     OPENALEX_URL,
@@ -489,10 +775,11 @@ async def _search_openalex(keywords: list[str]) -> list[PaperMeta]:
                             pdf_url=oa_url,
                             is_oa=bool(oa_url)
                             or (item.get("open_access", {}) or {}).get("is_oa", False),
+                            citation_count=item.get("cited_by_count") or 0,
                         )
                     )
             except Exception:
-                pass
+                logger.debug(f"source search failed", exc_info=True)
             await asyncio.sleep(0.1)
     return papers
 
@@ -540,7 +827,7 @@ async def _search_openalex_cn(keywords: list[str]) -> list[PaperMeta]:
                         )
                     )
             except Exception:
-                pass
+                logger.debug(f"source search failed", exc_info=True)
             await asyncio.sleep(0.1)
     return papers
 
@@ -550,41 +837,74 @@ APIFY_GS_URL = "https://api.apify.com/v2/acts/apify~google-scholar-scraper/runs"
 
 
 async def _search_google_scholar_apify(keywords: list[str]) -> list[PaperMeta]:
-    """通过 Apify 调用谷歌学术搜索（需要 APIFY_API_KEY）。"""
+    """通过 Apify 调用谷歌学术搜索（需要 APIFY_API_KEY）。
+
+    v5.3 修复 (DeepSeek 审查 #1): 原实现 POST 后立即解析结果——但 Apify /runs 端点
+    返回的是运行对象而非搜索结果, 导致永远拿不到论文。现改为正确流程:
+    POST 启动运行 → 轮询运行状态 → 拉取数据集结果。"""
     if not APIFY_API_KEY:
         return []
     papers: list[PaperMeta] = []
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with httpx.AsyncClient(timeout=30.0) as client:
         for kw in keywords[:2]:
             try:
+                # Step 1: 启动 Apify actor 运行 (不等待, 获取 run_id)
                 resp = await client.post(
                     APIFY_GS_URL,
                     json={"keyword": kw, "maxPages": 1, "maxResults": 20},
                     headers={"Authorization": f"Bearer {APIFY_API_KEY}"},
-                    params={"waitForFinish": 120},
-                    timeout=120.0,
                 )
-                if resp.status_code != 200:
+                if resp.status_code != 201:
+                    logger.warning(f"Apify GS start failed: HTTP {resp.status_code}")
                     continue
-                data = resp.json()
-                for item in data.get("data", [])[:20]:
-                    title = item.get("title", "")
-                    if not title:
-                        continue
-                    pid = hashlib.md5(f"gs_apify:{title}".encode()).hexdigest()[:16]
-                    papers.append(
-                        PaperMeta(
-                            paper_id=pid,
-                            title=title,
-                            authors=item.get("authors", ""),
-                            year=int(item.get("year", 0)) if item.get("year") else None,
-                            abstract=(item.get("description") or "")[:200],
-                            pdf_url=item.get("pdfUrl"),
-                            is_oa=bool(item.get("pdfUrl")),
-                        )
+                run_data = resp.json().get("data", {})
+                run_id = run_data.get("id")
+                if not run_id:
+                    logger.warning("Apify GS: no run_id in response")
+                    continue
+
+                # Step 2: 轮询运行状态 (最多 ~25s, 避免阻塞整个并行组)
+                status = None
+                for _ in range(10):
+                    await asyncio.sleep(2.5)
+                    status_resp = await client.get(
+                        f"https://api.apify.com/v2/actor-runs/{run_id}",
+                        headers={"Authorization": f"Bearer {APIFY_API_KEY}"},
                     )
-            except Exception:
-                pass
+                    if status_resp.status_code == 200:
+                        status = status_resp.json().get("data", {}).get("status")
+                        if status in ("SUCCEEDED", "FAILED", "TIMED-OUT", "ABORTED"):
+                            break
+                if status != "SUCCEEDED":
+                    logger.warning(f"Apify GS run {run_id} ended with status: {status}")
+                    continue
+
+                # Step 3: 拉取数据集结果
+                dataset_id = run_data.get("defaultDatasetId")
+                if dataset_id:
+                    items_resp = await client.get(
+                        f"https://api.apify.com/v2/datasets/{dataset_id}/items",
+                        headers={"Authorization": f"Bearer {APIFY_API_KEY}"},
+                    )
+                    if items_resp.status_code == 200:
+                        for item in items_resp.json()[:20]:
+                            title = item.get("title", "")
+                            if not title:
+                                continue
+                            pid = hashlib.md5(f"gs_apify:{title}".encode()).hexdigest()[:16]
+                            papers.append(
+                                PaperMeta(
+                                    paper_id=pid,
+                                    title=title,
+                                    authors=item.get("authors", ""),
+                                    year=int(item.get("year", 0)) if item.get("year") else None,
+                                    abstract=(item.get("description") or "")[:200],
+                                    pdf_url=item.get("pdfUrl"),
+                                    is_oa=bool(item.get("pdfUrl")),
+                                )
+                            )
+            except Exception as e:
+                logger.warning(f"Apify GS search failed: {e}")
     logger.info(f"Google Scholar (Apify): {len(papers)} papers")
     return papers
 
@@ -639,7 +959,7 @@ async def _enrich_abstracts(papers: list[PaperMeta]) -> int:
                         p.abstract = abstract
                         return 1
             except Exception:
-                pass
+                logger.debug(f"source search failed", exc_info=True)
             return 0
 
         results = await asyncio.gather(
@@ -673,14 +993,13 @@ async def _enrich_via_unpaywall(papers: list[PaperMeta]) -> int:
                         p.is_oa = True
                         return 1
             except Exception:
-                pass
+                logger.debug(f"source search failed", exc_info=True)
             return 0
 
         results = await asyncio.gather(
             *[_one(p) for p in candidates], return_exceptions=True
         )
         enriched = sum(r for r in results if isinstance(r, int))
-    return enriched
     return enriched
 
 
@@ -719,7 +1038,7 @@ async def _search_core(keywords: list[str]) -> list[PaperMeta]:
                         )
                     )
             except Exception:
-                pass
+                logger.debug(f"source search failed", exc_info=True)
     return papers
 
 
@@ -768,7 +1087,7 @@ async def _search_crossref(keywords: list[str]) -> list[PaperMeta]:
                         )
                     )
             except Exception:
-                pass
+                logger.debug(f"source search failed", exc_info=True)
     return papers
 
 
@@ -812,7 +1131,7 @@ async def _search_doaj(keywords: list[str]) -> list[PaperMeta]:
                         )
                     )
             except Exception:
-                pass
+                logger.debug(f"source search failed", exc_info=True)
     return papers
 
 
@@ -875,7 +1194,7 @@ async def _search_pubmed(keywords: list[str]) -> list[PaperMeta]:
                         )
                     )
             except Exception:
-                pass
+                logger.debug(f"source search failed", exc_info=True)
             await asyncio.sleep(0.35)  # NCBI rate limit: 3/sec without key
     return papers
 
@@ -912,7 +1231,7 @@ async def _search_pwc(keywords: list[str]) -> list[PaperMeta]:
                         )
                     )
             except Exception:
-                pass
+                logger.debug(f"source search failed", exc_info=True)
     return papers
 
 
@@ -957,5 +1276,5 @@ async def _search_epmc(keywords: list[str]) -> list[PaperMeta]:
                         )
                     )
             except Exception:
-                pass
+                logger.debug(f"source search failed", exc_info=True)
     return papers

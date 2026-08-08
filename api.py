@@ -1,6 +1,7 @@
 """FastAPI 独立服务（端口 8001）：检索策略 + 论文搜索 + PDF 上传 + 问答 + ZIP 批量下载。"""
 
 import io
+import threading
 import uuid
 import zipfile
 from pathlib import Path
@@ -14,17 +15,45 @@ from fastapi.staticfiles import StaticFiles
 
 load_dotenv()
 
+from logger import setup_logging
+
+setup_logging()
+
+# 模块级 logger (修复: 原仅 startup 函数内局部定义 → 上传/删除/搜索等错误分支
+# 调用 logger.warning 时 NameError → 坏 PDF 上传 500 崩溃而非优雅跳过)
+import logging
+
+logger = logging.getLogger(__name__)
+
 from auth import create_token, get_current_user, login_user, register_user, require_user
-from config import CN_EN_TERMS, IMAGE_DIR, PROJECT_ROOT
+from config import (
+    CN_EN_TERMS,
+    CORS_ORIGINS,
+    DEEPSEEK_MODEL,
+    DOWNLOAD_CONCURRENCY,
+    IMAGE_DIR,
+    LANCEDB_DIR,
+    LLM_GEN_MAX_TOKENS,
+    LLM_GEN_TEMPERATURE,
+    LLM_GEN_TIMEOUT,
+    LLM_QUICK_MAX_TOKENS,
+    LLM_QUICK_TEMPERATURE,
+    LLM_TRANSLATE_MAX_TOKENS,
+    LLM_TRANSLATE_TEMPERATURE,
+    LLM_TRANSLATE_TIMEOUT,
+    MAX_UPLOAD_BYTES,
+    PROJECT_ROOT,
+    RATE_LIMIT_REQUESTS_PER_SEC,
+)
 from downloader import chunk_text, parse_pdf
 from knowledge_base import build_knowledge_base, store_image_descriptions
 from models import AskRequest, CreateTopicRequest, PaperMeta, TopicStatus
 from monitor import metrics, sanitize_input
 from search import search_papers_for_topic
-from topic_manager import active_topics, create_topic
+from topic_manager import active_topics, create_topic, save_topic_state
 
 # 消息历史存储（按 topic_id）
-message_store: dict[str, list[dict]] = {}
+_translation_lock = threading.Lock()  # DeepSeek 审查 #7: 翻译缓存并发写保护
 
 app = FastAPI(title="AI Research Assistant", version="0.3.0")
 
@@ -39,7 +68,7 @@ async def startup_preload():
 
     def _do_preload():
         try:
-            from knowledge_base import _get_embed_model
+            from embedder import _get_embed_model
 
             _get_embed_model()
             logger.info("Embedding model preloaded")
@@ -48,17 +77,27 @@ async def startup_preload():
         try:
             from sentence_transformers import CrossEncoder
 
-            CrossEncoder("BAAI/bge-reranker-base", max_length=512)
+            from config import RERANK_MODEL
+
+            CrossEncoder(RERANK_MODEL, max_length=512)
             logger.info("Reranker model preloaded")
         except Exception as e:
             logger.warning(f"Reranker preload failed: {e}")
 
     asyncio.get_event_loop().run_in_executor(None, _do_preload)
 
+    # 启动后台订阅调度器 (每小时检查一次)
+    try:
+        from scheduler import start_scheduler
+
+        start_scheduler(interval_seconds=3600)
+    except Exception:
+        pass
+
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8001", "http://127.0.0.1:8001"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["Content-Type", "Authorization"],
@@ -78,18 +117,83 @@ from collections import defaultdict
 _rate_limiter: dict[str, list[float]] = defaultdict(list)
 
 
+def _list_lance_tables(db) -> list[str]:
+    """统一 LanceDB 表列举 (DeepSeek 审查 #4: 兼容不同版本 API, 去重各处脆弱代码)。"""
+    raw = db.list_tables() if hasattr(db, "list_tables") else db.table_names()
+    return list(raw.tables) if hasattr(raw, "tables") else [str(t) for t in raw]
+
+
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
-    ip = request.client.host if request.client else "unknown"
+    # 请求 ID 追踪: 每次请求生成唯一 ID, 该请求内所有日志携带 (DeepSeek 建议)
+    from logger import set_request_id
+
+    set_request_id(uuid.uuid4().hex[:8])
+
+    # DeepSeek 审查 #2: 反向代理下取 X-Forwarded-For 首个 IP, 否则用直连 IP
+    forwarded = request.headers.get("x-forwarded-for", "")
+    ip = (
+        forwarded.split(",")[0].strip()
+        if forwarded
+        else (request.client.host if request.client else "unknown")
+    )
     now = _time.time()
+
+    # 定期清理不活跃 IP, 防止 _rate_limiter 内存无限增长
+    if len(_rate_limiter) > 1024:
+        stale = [
+            k
+            for k, v in _rate_limiter.items()
+            if not v or now - v[-1] > 60.0
+        ]
+        for k in stale:
+            _rate_limiter.pop(k, None)
+
     window = [t for t in _rate_limiter[ip] if now - t < 1.0]
-    if len(window) > 30:
+    if len(window) > RATE_LIMIT_REQUESTS_PER_SEC:
         from fastapi.responses import JSONResponse
 
         return JSONResponse({"detail": "请求过于频繁，请稍后重试"}, status_code=429)
     window.append(now)
     _rate_limiter[ip] = window[-100:]  # trim old entries
-    return await call_next(request)
+    # /metrics 请求计数 + 延迟采样 (接线 MetricsTracker.record_request, 修复全零)
+    _t0 = _time.time()
+    try:
+        resp = await call_next(request)
+        # 请求日志 (结构化: IP 方法 路径 → 状态 耗时, 便于排障/演示)
+        logger.info(
+            f"[{ip}] {request.method} {request.url.path} → {resp.status_code} "
+            f"({(_time.time() - _t0) * 1000:.0f}ms)"
+        )
+        return resp
+    except Exception:
+        logger.error(
+            f"[{ip}] {request.method} {request.url.path} failed "
+            f"({(_time.time() - _t0) * 1000:.0f}ms)"
+        )
+        raise
+    finally:
+        try:
+            from monitor import metrics
+
+            metrics.record_request(latency_ms=(_time.time() - _t0) * 1000)
+        except Exception:
+            pass
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """全局异常处理器: 未捕获异常 → 统一 JSON 错误 (不暴露内部), 记录堆栈。"""
+    from fastapi.responses import JSONResponse
+
+    logger.error(
+        f"Unhandled exception on {request.method} {request.url.path}: {exc}",
+        exc_info=True,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "服务器内部错误，请稍后重试", "error_type": "internal"},
+    )
 
 
 @app.get("/")
@@ -100,6 +204,26 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/ready")
+async def ready():
+    """K8s readiness probe：验证 SQLite + LanceDB 均可用。"""
+    try:
+        from database import get_db
+
+        get_db()._ensure_tables()
+    except Exception as e:
+        raise HTTPException(503, f"database not ready: {e}")
+    try:
+        import lancedb
+
+        from config import LANCEDB_DIR
+
+        lancedb.connect(str(LANCEDB_DIR))
+    except Exception as e:
+        raise HTTPException(503, f"lancedb not ready: {e}")
+    return {"status": "ready"}
 
 
 @app.get("/metrics")
@@ -113,16 +237,10 @@ async def api_kg_data(table: str = ""):
     """知识图谱数据端点。table 可以是 topic_id 或 LanceDB table 名。"""
     import lancedb
 
-    from config import LANCEDB_DIR
     from knowledge_graph import build_graph_from_kb
 
     db = lancedb.connect(str(LANCEDB_DIR))
-    raw = db.list_tables()
-    all_tables = (
-        list(raw.tables)
-        if hasattr(raw, "tables")
-        else (list(raw[0]) if isinstance(raw, tuple) else list(raw))
-    )
+    all_tables = _list_lance_tables(db)
 
     # If table is a topic_id (12-char hex), resolve to lancedb table
     lancedb_table = table
@@ -167,14 +285,14 @@ async def api_kg_build(request: Request):
 
         db = lancedb.connect(str(LANCEDB_DIR))
         raw = db.list_tables()
-        tables = raw.tables if hasattr(raw, "tables") else []
+        tables = _list_lance_tables(db)
         best, best_n = "", 0
         for t in tables:
             try:
                 n = db.open_table(t).count_rows()
                 if n > best_n:
                     best, best_n = t, n
-            except:
+            except Exception:
                 pass
         table = str(best) if best else ""
     if not table:
@@ -187,11 +305,27 @@ async def api_kg_build(request: Request):
     if not graph["nodes"]:
         raise HTTPException(404, "知识库无数据")
 
-    # LLM 实体抽取
-    abstracts = [
-        {"paper_id": n["id"], "title": n["label"], "abstract": ""}
-        for n in graph["nodes"][:20]
-    ]
+    # LLM 实体抽取：从 LanceDB 直接查摘要（graph nodes 不含 abstract）
+    import lancedb as _lancedb
+
+    _db = _lancedb.connect(str(LANCEDB_DIR))
+    _tbl = _db.open_table(table)
+    _rows = _tbl.search().limit(200).to_list()
+    _seen = set()
+    abstracts = []
+    for r in _rows:
+        pid = r.get("paper_id", "")
+        if pid and pid not in _seen:
+            _seen.add(pid)
+            abstracts.append(
+                {
+                    "paper_id": pid,
+                    "title": r.get("title") or pid,
+                    "abstract": r.get("abstract", ""),
+                }
+            )
+            if len(abstracts) >= 20:
+                break
     extracted = await extract_entities_from_abstracts(abstracts)
 
     # 合并：论文节点 + 实体节点 + 关系边
@@ -291,26 +425,45 @@ async def api_me(user_id: str = Depends(require_user)):
 
 @app.get("/topics")
 async def api_list_topics(user_id: str = Depends(get_current_user)):
-    # 多租户：只返回该用户的课题（TODO: 在 topic_manager 中按 user_id 隔离）
+    from database import get_db
+
+    db = get_db()
+    rows = db.list_topics(user_id if user_id is not None else None)
     return [
         {
-            "topic_id": s.topic_id,
-            "query": s.query,
-            "status": s.status.value,
-            "papers": s.total_papers,
+            "topic_id": r["topic_id"],
+            "query": r["query"],
+            "status": r["status"],
+            "papers": r.get("total_papers", 0),
         }
-        for s in active_topics.values()
+        for r in rows
     ]
 
 
 @app.delete("/topic/{topic_id}")
-async def api_delete_topic(topic_id: str):
+async def api_delete_topic(topic_id: str, user_id: str = Depends(get_current_user)):
+    _assert_topic_access(topic_id, user_id)
     if topic_id not in active_topics:
         raise HTTPException(404, "Topic not found")
     del active_topics[topic_id]
     from topic_manager import _save_topics
 
     _save_topics()
+    # 持久化清理 (修复: 原只删内存 active_topics, SQLite 行残留 → 课题删后"复活"):
+    #   db.delete_topic: 删 topics 行 (FK 级联删 messages/memories)
+    #   close_memory:    释放该课题的记忆内存缓存
+    try:
+        from database import get_db
+
+        get_db().delete_topic(topic_id)
+    except Exception as e:
+        logger.warning(f"delete_topic sqlite cleanup failed: {e}")
+    try:
+        from conversation_memory import close_memory
+
+        close_memory(topic_id)
+    except Exception as e:
+        logger.warning(f"close_memory cleanup failed: {e}")
     return {"ok": True}
 
 
@@ -334,7 +487,10 @@ async def api_export_topic(topic_id: str):
         if s.get("domain_tags"):
             lines.append(f"领域: {', '.join(s['domain_tags'])}")
     lines += ["", "## 对话记录", ""]
-    msgs = message_store.get(topic_id, [])
+    from database import get_db
+
+    db = get_db()
+    msgs = db.get_messages(topic_id)
     for m in msgs:
         role = "👤 用户" if m["role"] == "user" else "🤖 AI"
         lines.append(f"### {role}")
@@ -349,43 +505,112 @@ async def api_export_topic(topic_id: str):
 
 
 async def _translate_cn_query(query: str) -> str:
+    import json
     import re
+    from pathlib import Path
+
+    import config
 
     if not any(19968 <= ord(c) <= 40869 for c in query):
         return ""
+
+    # 翻译缓存检查 (DeepSeek 对话建议: 避免重复 LLM 调用)
+    if config.TRANSLATION_CACHE_ENABLED:
+        cache_path = Path(config.TRANSLATION_CACHE_FILE)
+        if cache_path.exists():
+            try:
+                cache = json.loads(cache_path.read_text())
+                if query in cache:
+                    return cache[query]
+            except Exception:
+                pass
+
     try:
         from openai import AsyncOpenAI
 
-        from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
+        from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL
 
         client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
         resp = await client.chat.completions.create(
             model=DEEPSEEK_MODEL,
-            temperature=0,
-            max_tokens=50,
+            temperature=LLM_TRANSLATE_TEMPERATURE,
+            max_tokens=LLM_TRANSLATE_MAX_TOKENS,
             messages=[
                 {
                     "role": "user",
                     "content": f"将以下中文学术术语翻译为英文检索关键词，只返回英文逗号分隔，不要解释：{query}",
                 }
             ],
-            timeout=6,
+            timeout=LLM_TRANSLATE_TIMEOUT,
         )
         text = (resp.choices[0].message.content or "").strip()
-        return re.sub(r"[^a-zA-Z0-9,\- ]", "", text)[:100]
-    except Exception:
-        import traceback
+        result = re.sub(r"[^a-zA-Z0-9,\- ]", "", text)[:100]
 
-        traceback.print_exc()
+        # 写入缓存
+        if result and config.TRANSLATION_CACHE_ENABLED:
+            _update_translation_cache(query, result)
+
+        return result
+    except Exception:
+        import logging
+
+        logging.getLogger("api").warning(
+            "CN translation failed for query: %s", query[:50]
+        )
         return ""
+
+
+def _update_translation_cache(query: str, translation: str):
+    """更新翻译缓存 JSON 文件 (LRU 淘汰旧条目, 最多 500 条)。
+    DeepSeek 审查 #7: 加锁保护并发读写, 防止 JSON 文件损坏。"""
+    import json
+    from pathlib import Path
+
+    import config
+
+    with _translation_lock:
+        cache_path = Path(config.TRANSLATION_CACHE_FILE)
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache = {}
+        if cache_path.exists():
+            try:
+                cache = json.loads(cache_path.read_text())
+            except Exception:
+                pass
+        cache[query] = translation
+        # 超出上限时淘汰最旧的条目 (FIFO)
+        if len(cache) > config.TRANSLATION_CACHE_MAX_ENTRIES:
+            oldest = list(cache.keys())[
+                : len(cache) - config.TRANSLATION_CACHE_MAX_ENTRIES
+            ]
+            for k in oldest:
+                del cache[k]
+        cache_path.write_text(json.dumps(cache, indent=2, ensure_ascii=False))
 
 
 def _quick_keywords(query: str) -> dict:
     import re
 
+    import config
+
     words = [w.strip() for w in re.split(r"[，,、\s]+", query) if w.strip()]
     cn = [w for w in words if any(19968 <= ord(c) <= 40869 for c in w)]
     en = [w.lower() for w in words if w.isascii() and len(w) >= 2]
+
+    # jieba 分词: 中文输入自动分词，组合为多词英文查询 (DeepSeek 对话建议)
+    if config.USE_JIEBA_TOKENIZATION and cn:
+        try:
+            import jieba
+
+            tokens = list(jieba.cut(query))
+            cn = (
+                list(dict.fromkeys([t.strip() for t in tokens if len(t.strip()) >= 2]))
+                or cn
+            )
+            cn = cn[: config.CN_TOKENIZATION_TOP_K]
+        except ImportError:
+            pass  # jieba 不可用，用原分词结果
+
     en_from_dict = [v for k, v in CN_EN_TERMS.items() if k in query]
     if en_from_dict and en_from_dict[0] not in en:
         en = [en_from_dict[0]] + en
@@ -422,40 +647,71 @@ def _quick_keywords(query: str) -> dict:
 
 
 @app.post("/create_topic")
-async def api_create_topic(req: CreateTopicRequest):
-    """创建课题：本地关键词 + LLM翻译(非阻塞增强)。"""
+async def api_create_topic(
+    req: CreateTopicRequest, user_id: str = Depends(get_current_user)
+):
+    """创建课题：本地关键词 + LLM翻译(非阻塞增强)。
+    如果 topic 已存在（刷新页面恢复），保留已有策略和对话，不覆盖。"""
     query = sanitize_input(req.query)
-    state = create_topic(query, topic_id=req.topic_id if req.topic_id else "")
-    strategy = _quick_keywords(query)
-    state.search_strategy = strategy
-    message_store[state.topic_id] = [{"role": "system", "content": f"研究方向: {query}"}]
+    # 写论文模式 (reuse_kb): 已有同名/相似且已建库的课题 → 直接复用, 跳过多源检索
+    if req.reuse_kb:
+        reused_tid = _find_kb_topic(query)
+        if reused_tid:
+            state = active_topics.get(reused_tid)
+            strategy = (
+                state.search_strategy
+                if state and state.search_strategy
+                else _quick_keywords(query)
+            )
+            return {"topic_id": reused_tid, "strategy": strategy, "reused": True}
+        # 语义相似 → 确认式建议 (不自动复用; 高精度场景防错接库, 由用户决定)
+        suggest = _find_semantic_similar_topic(query)
+        if suggest:
+            return {
+                "suggest": {"topic_id": suggest[0], "query": suggest[1]},
+                "reused": False,
+            }
+    is_new = not req.topic_id or req.topic_id not in active_topics
+    state = create_topic(
+        query, topic_id=req.topic_id if req.topic_id else "", user_id=user_id
+    )
 
-    # 后台LLM翻译增强英文关键词（非阻塞）
-    async def _enhance():
-        try:
-            en_llm = await _translate_cn_query(query)
-            if en_llm:
-                terms = [t.strip() for t in en_llm.split(",") if t.strip()]
-                if terms:
-                    strategy["keywords_en"] = list(set(terms + strategy["keywords_en"]))
-                    strategy["boolean_queries"] = [
-                        bq
-                        for bq in strategy.get("boolean_queries", [])
-                        if bq.get("database") != "arXiv"
-                    ] + [
-                        {
-                            "database": "arXiv",
-                            "query": " OR ".join(strategy["keywords_en"][:4]),
-                            "note": "LLM翻译增强",
-                        }
-                    ]
-                    state.search_strategy = strategy
-        except Exception:
-            pass
+    if is_new or not state.search_strategy:
+        strategy = _quick_keywords(query)
+        state.search_strategy = strategy
+    else:
+        strategy = state.search_strategy
 
-    import asyncio
+    # 后台LLM翻译增强英文关键词（非阻塞）——仅对新课题
+    if is_new:
 
-    asyncio.create_task(_enhance())
+        async def _enhance():
+            try:
+                en_llm = await _translate_cn_query(query)
+                if en_llm:
+                    terms = [t.strip() for t in en_llm.split(",") if t.strip()]
+                    if terms:
+                        strategy["keywords_en"] = list(
+                            set(terms + strategy["keywords_en"])
+                        )
+                        strategy["boolean_queries"] = [
+                            bq
+                            for bq in strategy.get("boolean_queries", [])
+                            if bq.get("database") != "arXiv"
+                        ] + [
+                            {
+                                "database": "arXiv",
+                                "query": " OR ".join(strategy["keywords_en"][:4]),
+                                "note": "LLM翻译增强",
+                            }
+                        ]
+                        state.search_strategy = strategy
+            except Exception:
+                pass
+
+        import asyncio
+
+        asyncio.create_task(_enhance())
     return {"topic_id": state.topic_id, "strategy": strategy}
 
 
@@ -519,14 +775,17 @@ async def api_search_papers_stream(request: Request):
         async def _safe(fn, *a, to=5, **kw):
             try:
                 return await asyncio.wait_for(fn(*a, **kw), timeout=to)
-            except:
+            except Exception as e:
+                # DeepSeek 审查 #9: 记录失败源 (原静默返回空列表, 无法排查限流/超时)
+                logger.debug(f"Search source {getattr(fn, '__name__', fn)} failed: {e}")
                 return []
 
         kw_en = keywords_en[:1] if keywords_en else [query]
         kw_cn = keywords_cn[:1] if keywords_cn else [query]
+        import config
 
         # Batch 1: arXiv (fastest, ~6s)
-        batch1 = await _safe(_search_arxiv, kw_en, to=10)
+        batch1 = await _safe(_search_arxiv, kw_en, to=config.SEARCH_TIMEOUT_ARXIV)
         batch1 = [p for p in batch1 if not _should_drop(p)]
         yield s(
             "batch",
@@ -539,8 +798,8 @@ async def api_search_papers_stream(request: Request):
 
         # Batch 2: OpenAlex EN + CN (并行, ~8s)
         batch2 = await asyncio.gather(
-            _safe(_search_openalex, kw_en, to=8),
-            _safe(_search_openalex_cn, kw_cn, to=8),
+            _safe(_search_openalex, kw_en, to=config.SEARCH_TIMEOUT_OPENALEX),
+            _safe(_search_openalex_cn, kw_cn, to=config.SEARCH_TIMEOUT_OPENALEX_CN),
         )
         oa_papers = [p for p in (batch2[0] or []) if not _should_drop(p)]
         cn_papers = [p for p in (batch2[1] or []) if not _should_drop(p)]
@@ -563,8 +822,8 @@ async def api_search_papers_stream(request: Request):
         from search import _make_cnki_async, _search_s2
 
         batch3 = await asyncio.gather(
-            _safe(_search_s2, kw_en, to=3),
-            _safe(_make_cnki_async, query, kw_cn, to=2),
+            _safe(_search_s2, kw_en, to=config.SEARCH_TIMEOUT_S2),
+            _safe(_make_cnki_async, query, kw_cn, to=config.SEARCH_TIMEOUT_CNKI),
         )
         s2_papers = [p for p in (batch3[0] or []) if not _should_drop(p)]
         cnki_papers = batch3[1] or []
@@ -667,7 +926,7 @@ def _gs_search_url(title: str) -> str:
 
 
 @app.post("/download_bulk")
-async def api_download_bulk(request: Request):
+async def api_download_bulk(request: Request, user_id: str = Depends(get_current_user)):
     """一键下载 OA 论文 → 自动解析 → 构建知识库（含图表）。接收 {urls, topic_id}"""
     import asyncio
 
@@ -676,6 +935,7 @@ async def api_download_bulk(request: Request):
     req = await request.json()
     urls = req.get("urls", [])
     topic_id = req.get("topic_id", "bulk")
+    _assert_topic_access(topic_id, user_id)
     if not urls:
         raise HTTPException(400, "No URLs provided")
 
@@ -683,12 +943,12 @@ async def api_download_bulk(request: Request):
     if state:
         state.step = "downloading"
         state.status = TopicStatus.BUILDING
-        state.dl_total = len(urls)
-        state.current = 0
+        state.progress.dl_total = len(urls)
+        state.progress.current = 0
 
     pdf_contents: list[tuple[str, bytes]] = []
     async with httpx.AsyncClient(timeout=60.0) as client:
-        sem = asyncio.Semaphore(3)
+        sem = asyncio.Semaphore(DOWNLOAD_CONCURRENCY)  # DeepSeek 审查 #14: 配置化
 
         async def _fetch(i, url):
             async with sem:
@@ -704,12 +964,27 @@ async def api_download_bulk(request: Request):
             *(_fetch(i, url) for i, url in enumerate(urls[:50]))
         )
         pdf_contents = [r for r in results if r]
+        try:
+            from monitor import metrics
+
+            metrics.record_download()  # /metrics 下载计数 (接线 MetricsTracker.record_download)
+        except Exception:
+            pass
+
+    # 如果全部下载失败，更新状态让前端停止轮询
+    if not pdf_contents:
+        if state:
+            state.step = "ready"
+            state.status = TopicStatus.READY
+            state.error = f"下载失败：{len(urls)} 篇论文均无法获取（检查 OA 状态或网络连接）"
+            save_topic_state(topic_id)
+        raise HTTPException(400, "所有论文下载失败，请检查 OA 状态或网络连接")
 
     # ---- 导入知识库 ----
     imported_papers = 0
     imported_chunks = 0
     imported_images = 0
-    if state and pdf_contents:
+    if state:
         state.step = "indexing"
         papers: list[PaperMeta] = []
         fulltext_chunks: dict[str, list[str]] = {}
@@ -717,14 +992,15 @@ async def api_download_bulk(request: Request):
 
         for fname, content in pdf_contents:
             try:
-                result = parse_pdf(content, fname)
+                # DeepSeek 审查 #13: CPU 密集解析放入线程池
+                result = await asyncio.to_thread(parse_pdf, content, fname)
                 paper_id = uuid.uuid4().hex[:16]
                 papers.append(
                     PaperMeta(
                         paper_id=paper_id, title=fname.replace(".pdf", ""), is_oa=True
                     )
                 )
-                chunks = chunk_text(result["full_text"])
+                chunks = await asyncio.to_thread(chunk_text, result["full_text"])
                 if chunks:
                     fulltext_chunks[paper_id] = chunks
                 for img in result["images"]:
@@ -734,6 +1010,7 @@ async def api_download_bulk(request: Request):
                 pass
 
         # 构建文本层
+        table_name = ""
         if papers:
             table_name = await build_knowledge_base(papers, fulltext_chunks, topic_id)
             imported_papers = len(papers)
@@ -742,9 +1019,9 @@ async def api_download_bulk(request: Request):
         imported_images = len(all_images)
 
         state.lancedb_table = table_name
-        state.uploaded_papers = imported_papers
-        state.total_papers = imported_papers
-        state.total_images = imported_images
+        state.stats.uploaded_papers = imported_papers
+        state.stats.total_papers = imported_papers
+        state.stats.total_images = imported_images
         state.status = TopicStatus.READY
         save_topic_state(topic_id)
         state.step = "ready"
@@ -768,7 +1045,10 @@ async def api_download_bulk(request: Request):
 
 
 @app.post("/upload_pdf/{topic_id}")
-async def api_upload_pdf(topic_id: str, files: list[UploadFile]):
+async def api_upload_pdf(
+    topic_id: str, files: list[UploadFile], user_id: str = Depends(get_current_user)
+):
+    _assert_topic_access(topic_id, user_id)
     state = active_topics.get(topic_id)
     if not state:
         raise HTTPException(404, "Topic not found")
@@ -777,18 +1057,28 @@ async def api_upload_pdf(topic_id: str, files: list[UploadFile]):
     fulltext_chunks: dict[str, list[str]] = {}
     all_images: list[dict] = []
 
+    import asyncio
+
     for file in files:
         if not file.filename or not file.filename.endswith(".pdf"):
             continue
         pdf_bytes = await file.read()
-        result = parse_pdf(pdf_bytes, file.filename)
+        # DeepSeek 审查 #15: 大小上限 + PDF 魔数校验 (真 PDF 以 %PDF 开头)
+        if len(pdf_bytes) > MAX_UPLOAD_BYTES:
+            logger.warning(f"Upload skipped (too large): {file.filename}")
+            continue
+        if not pdf_bytes[:1024].lstrip().startswith(b"%PDF"):
+            logger.warning(f"Upload skipped (not a valid PDF): {file.filename}")
+            continue
+        # DeepSeek 审查 #13: CPU 密集解析放入线程池, 不阻塞事件循环
+        result = await asyncio.to_thread(parse_pdf, pdf_bytes, file.filename)
         paper_id = uuid.uuid4().hex[:16]
         papers.append(
             PaperMeta(
                 paper_id=paper_id, title=file.filename.replace(".pdf", ""), is_oa=True
             )
         )
-        chunks = chunk_text(result["full_text"])
+        chunks = await asyncio.to_thread(chunk_text, result["full_text"])
         if chunks:
             fulltext_chunks[paper_id] = chunks
         for img in result["images"]:
@@ -813,9 +1103,9 @@ async def api_upload_pdf(topic_id: str, files: list[UploadFile]):
         store_image_descriptions(table_name, image_records)
 
     state.lancedb_table = table_name
-    state.uploaded_papers = len(papers)
-    state.total_papers = len(papers)
-    state.total_images = len(all_images)
+    state.stats.uploaded_papers = len(papers)
+    state.stats.total_papers = len(papers)
+    state.stats.total_images = len(all_images)
     state.status = TopicStatus.READY
     save_topic_state(topic_id)
     state.step = "ready"
@@ -829,22 +1119,33 @@ async def api_upload_pdf(topic_id: str, files: list[UploadFile]):
 
 
 @app.get("/topic_status/{topic_id}")
-async def api_topic_status(topic_id: str):
+async def api_topic_status(topic_id: str, user_id: str = Depends(get_current_user)):
+    _assert_topic_access(topic_id, user_id)
     state = active_topics.get(topic_id)
     if not state:
         raise HTTPException(404, "Topic not found")
     ready = state.status == TopicStatus.READY
+    # DeepSeek 审查 #5: getattr 安全访问, 防 progress/stats 缺失时 500
+    stats = state.stats
+    progress = state.progress
+    uploaded = getattr(stats, "uploaded_papers", 0) if stats else 0
+    total_images = getattr(stats, "total_images", 0) if stats else 0
+    current = getattr(progress, "current", 0) if progress else 0
+    dl_total = getattr(progress, "dl_total", 0) if progress else 0
+    cn_papers = getattr(progress, "cn_papers", 0) if progress else 0
+    en_papers = getattr(progress, "en_papers", 0) if progress else 0
+    dl_failed = getattr(progress, "dl_failed", 0) if progress else 0
     return {
         "status": "ready" if ready else "building",
-        "progress": f"{state.uploaded_papers} 篇论文, {state.total_images} 张图片"
+        "progress": f"{uploaded} 篇论文, {total_images} 张图片"
         if ready
         else state.step,
         "step": state.step,
-        "current": state.current,
-        "total": state.dl_total,
-        "cn_papers": getattr(state, "cn_papers", 0),
-        "en_papers": getattr(state, "en_papers", 0),
-        "failed": getattr(state, "dl_failed", 0),
+        "current": current,
+        "total": dl_total,
+        "cn_papers": cn_papers,
+        "en_papers": en_papers,
+        "failed": dl_failed,
     }
 
 
@@ -855,268 +1156,227 @@ async def api_chat(request: Request):
     question = sanitize_input(req.get("question", ""))
     if not question:
         raise HTTPException(400, "需要 question 参数")
-    from openai import AsyncOpenAI
-
-    from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
-
-    client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
-    history = req.get("history", [])
-    msgs = []
-    for h in (history or [])[-8:]:
-        role = "user" if h.get("r") == "u" else "assistant"
-        msgs.append({"role": role, "content": str(h.get("c", ""))[:400]})
-    msgs.append({"role": "user", "content": question})
-    resp = await client.chat.completions.create(
-        model=DEEPSEEK_MODEL, temperature=0.3, max_tokens=500, timeout=15, messages=msgs
-    )
-    return {"answer": resp.choices[0].message.content.strip()}
-
-
-def _find_kb_table() -> str:
-    import lancedb
-
-    from config import LANCEDB_DIR
-
-    db = lancedb.connect(str(LANCEDB_DIR))
-    raw = db.list_tables()
-    all_t = raw.tables if hasattr(raw, "tables") else []
-    best, best_n = "", 0
-    for t in all_t:
-        try:
-            n = db.open_table(t).count_rows()
-        except:
-            continue
-        if n > best_n:
-            best, best_n = t, n
-    if not best or best_n <= 5:
-        raise HTTPException(404, "No knowledge base available. Upload PDFs first.")
-    return str(best)
-
-
-@app.post("/ask")
-async def api_ask(req: AskRequest):
-    import lancedb
+    _quota_guard(request)  # 按量付费闸门: 超额 → 402
     from openai import AsyncOpenAI
 
     from config import (
         DEEPSEEK_API_KEY,
         DEEPSEEK_BASE_URL,
         DEEPSEEK_MODEL,
-        LANCEDB_DIR,
-        LLM_GEN_MAX_TOKENS,
-        LLM_GEN_TEMPERATURE,
-        LLM_GEN_TIMEOUT,
+        MEMORY_HISTORY_TURNS,
     )
-    from knowledge_base import _cosine_search, _embed_texts_sync
-
-    question = sanitize_input(req.question)
-    state = active_topics.get(req.topic_id)
-    table = state.lancedb_table if state and state.lancedb_table else ""
-    if not table:
-        table = _find_kb_table()
 
     client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
-    qv = _embed_texts_sync([question])[0]
-    db = lancedb.connect(str(LANCEDB_DIR))
-    res = _cosine_search(
-        db.open_table(table), qv, 5, "is_fulltext = true AND is_image = false"
-    )
-    ctx = "\n".join([r.get("text", "")[:300] for r in (res or [])[:3]])
-
-    history = req.history or []
-    hist_text = ""
-    for h in history[-4:]:
-        role = "\u7528\u6237" if h.get("r") == "u" else "AI"
-        hist_text += f"{role}: {str(h.get('c',''))[:200]}\n"
-
-    prompt = f"\u57fa\u4e8e\u4e0a\u4e0b\u6587\u7b80\u6d01\u56de\u7b54\uff08100-300\u5b57\uff09\u3002\u5982\u679c\u4fe1\u606f\u4e0d\u8db3\u8bf7\u8bf4\u660e\u3002\n\u4e0a\u4e0b\u6587\uff1a{ctx}\n\u95ee\u9898\uff1a{question}\n\u56de\u7b54\uff1a"
-    if hist_text:
-        prompt = f"\u5bf9\u8bdd\u5386\u53f2\uff1a\n{hist_text}\n{prompt}"
+    history = req.get("history", [])
+    msgs = []
+    for h in (history or [])[-MEMORY_HISTORY_TURNS:]:
+        role = "user" if h.get("r") == "u" else "assistant"
+        msgs.append({"role": role, "content": str(h.get("c", ""))[:400]})
+    msgs.append({"role": "user", "content": question})
 
     resp = await client.chat.completions.create(
         model=DEEPSEEK_MODEL,
         temperature=LLM_GEN_TEMPERATURE,
         max_tokens=LLM_GEN_MAX_TOKENS,
         timeout=LLM_GEN_TIMEOUT,
-        messages=[{"role": "user", "content": prompt}],
+        messages=msgs,
+        extra_body={"thinking": {"type": "disabled"}},  # 推理模型禁用推理, 防输出空串
     )
+    answer = resp.choices[0].message.content.strip()
+    # 按量付费: 记录本次 LLM 用量
+    _quota_record(
+        request, "",
+        (resp.usage.prompt_tokens if resp.usage else 0)
+        + (resp.usage.completion_tokens if resp.usage else 0),
+    )
+
+    # DeepSeek 审查 #1: 保存消息移到 return 之前 (原代码在 return 后, 不可达),
+    # 且改用 SQLite 持久化 (#12: 移除未使用的 message_store)。
+    tid = req.get("topic_id")
+    if tid:
+        try:
+            from database import get_db
+
+            db = get_db()
+            db.add_message(tid, "user", question)
+            db.add_message(tid, "assistant", answer)
+        except Exception as e:
+            logger.warning(f"Failed to save chat message for {tid}: {e}")
+
+    return {"answer": answer}
+
+
+def _find_kb_topic(query: str):
+    """写论文模式复用: 找已有同名/相似且已建库的课题, 复用跳过检索。"""
+    from topic_manager import active_topics
+
+    q_norm = (query or "").strip().lower()
+    if not q_norm:
+        return None
+
+    def _bigrams(s: str) -> set:
+        s = s.replace(" ", "")
+        return {s[i : i + 2] for i in range(len(s) - 1)} if len(s) >= 2 else {s}
+
+    # 精确匹配优先
+    for tid, state in active_topics.items():
+        if state.lancedb_table and (state.query or "").strip().lower() == q_norm:
+            return tid
+    # 模糊: 子串包含 或 二元组重叠率≥0.5 (词序/措辞不同但核心相同, 如 "医学RAG" vs "RAG医学")
+    b1 = _bigrams(q_norm)
+    for tid, state in active_topics.items():
+        if not state.lancedb_table:
+            continue
+        tq = (state.query or "").strip().lower()
+        if not tq:
+            continue
+        if q_norm in tq or tq in q_norm:
+            return tid
+        b2 = _bigrams(tq)
+        if b1 and b2 and len(b1 & b2) / min(len(b1), len(b2)) >= 0.5:
+            return tid
+    return None
+
+
+def _find_semantic_similar_topic(query: str, threshold: float = 0.70):
+    """语义相似课题检测 (复用建议, 非自动 — 高精度场景确认式才安全)。
+    返回 (topic_id, query) 或 None。字符串精确匹配已在 _find_kb_topic 处理, 这里跳过。"""
+    from topic_manager import active_topics
+
+    q = (query or "").strip().lower()
+    if not q:
+        return None
+    try:
+        import numpy as np
+        from embedder import embed_texts
+    except Exception:
+        return None
+    # 候选课题查询词 (有库 + 非空 + 非精确同词 — 精确已由 _find_kb_topic 处理)
+    cands = [
+        (tid, st.query.strip().lower())
+        for tid, st in active_topics.items()
+        if st.lancedb_table and st.query and st.query.strip().lower() != q
+    ]
+    if not cands:
+        return None
+
+    def _bigrams(s: str) -> set:
+        s = s.replace(" ", "")
+        return {s[i : i + 2] for i in range(len(s) - 1)} if len(s) >= 2 else {s}
+
+    # 双重门槛: 语义相似 ≥ threshold 且 共享 ≥1 个关键词二元组 (同一核心方向才建议)。
+    # bge 绝对相似度膨胀 (脑机接口 vs 图神经网络 也 >0.7), 单靠阈值会误配跨方向课题。
+    b1 = _bigrams(q)
+    qv = np.array(embed_texts([query])[0])
+    pvs = np.asarray(embed_texts([c for _, c in cands]))
+    sims = pvs @ qv
+    for i, (tid, cq) in enumerate(cands):
+        if sims[i] >= threshold and (b1 & _bigrams(cq)):
+            return (tid, cq)
+    return None
+
+
+def _assert_topic_access(topic_id: str, user_id: str | None = None) -> None:
+    """多用户课题访问校验 (微观层面补全隔离):
+    用户专属课题(user_id 非空)仅归属者可访问; 匿名/共享课题(NULL)人人可访问。
+    与 /topics 列表级过滤构成双保险, 防止凭 topic_id 直接越权读他人课题。"""
+    try:
+        from database import get_db
+
+        row = get_db().get_topic(topic_id)
+    except Exception:
+        return  # 数据库异常不阻断, 交由端点 404
+    if row is None:
+        return  # topic 不存在, 端点自行 404
+    owner = row.get("user_id")
+    if owner and owner != user_id:
+        raise HTTPException(403, "该课题属于其他用户，无权访问")
+
+
+def _resolve_kb_table(topic_id: str) -> str:
+    """为指定 topic 解析正确的 LanceDB 表名。优先级：
+    1. active_topics 内存中的 lancedb_table
+    2. SQLite 数据库持久化的映射
+    3. 都不存在则报错
+    """
+    state = active_topics.get(topic_id)
+    if state and state.lancedb_table:
+        return state.lancedb_table
+    from database import get_db
+
+    db = get_db()
+    row = db.get_topic(topic_id)
+    if row and row.get("lancedb_table"):
+        return row["lancedb_table"]
+    raise HTTPException(
+        404,
+        f"Topic {topic_id} 尚未构建知识库。请先上传 PDF 或搜索论文后一键下载构建。",
+    )
+
+
+@app.post("/ask")
+async def api_ask(req: AskRequest, user_id: str = Depends(get_current_user)):
+    """RAG 问答：委托 qa_engine.ask_question 完整链路——
+    指代消解 → 查询改写(校验) → 自适应混合检索 → 级联重排 → 父子分块扩展 → 三层 Prompt 生成。"""
+    _assert_topic_access(req.topic_id, user_id)
+    _quota_guard(request, user_id)  # 按量付费闸门: 超额 → 402
+    from qa_engine import ask_question
+
+    question = sanitize_input(req.question)
+    table = _resolve_kb_table(req.topic_id)
+
+    result = await ask_question(
+        table, question, model=req.model or "", memory_key=req.topic_id
+    )
+    # 按量付费: 估算本次用量 (prompt 中英字符 + 输出)
+    _quota_record(request, user_id, int(len(question) / 1.5 + len(result.answer) / 1.5))
+    # 记录消息到 SQLite 供 /export 导出
+    from database import get_db
+
+    get_db().add_message(req.topic_id, "user", question)
+    get_db().add_message(req.topic_id, "assistant", result.answer)
     return {
-        "answer": resp.choices[0].message.content.strip(),
-        "references": [],
-        "supplement": [],
-        "images": [],
+        "answer": result.answer,
+        "references": result.references,
+        "supplement": result.supplement,
+        "images": result.images,
     }
 
 
-@app.post("/agent/langgraph")
-async def api_agent_langgraph(request: Request):
-    """LangGraph Agent 端点（图状工作流，支持断点续跑和人工确认）。
-    准备2 §334+§1104+§1251：StateGraph + 条件边 + 循环状态管理。"""
+@app.post("/feedback")
+async def api_feedback(request: Request):
+    """用户对回答的质量反馈（数据飞轮）。"""
     req = await request.json()
-    action = req.get("action", "run")  # run | resume
-    task = req.get("task", "")
-    thread_id = req.get("thread_id", "default")
-    max_steps = req.get("max_steps", 10)
+    question = sanitize_input(req.get("question", ""))
+    answer = req.get("answer", "")
+    rating = req.get("rating", 0)  # 1=好, -1=差
+    comment = req.get("comment", "")
+    if not question or rating == 0:
+        raise HTTPException(400, "需要 question 和 rating 参数")
+    from database import get_db
 
-    if action == "resume":
-        if not req.get("confirmed"):
-            raise HTTPException(400, "resume 需要 confirmed=true")
-        from agent.langgraph_workflow import resume_langgraph_agent
-
-        result = await resume_langgraph_agent(thread_id, confirmed=True)
-        return result
-
-    if not task:
-        raise HTTPException(400, "需要 task 参数")
-    from agent.langgraph_workflow import run_langgraph_agent
-
-    result = await run_langgraph_agent(task, max_steps=max_steps, thread_id=thread_id)
-    return result
+    get_db().record_feedback(question, answer, rating, comment)
+    return {"ok": True, "total": get_db().get_feedback_stats()["total"]}
 
 
-@app.post("/agent/watch")
-async def api_agent_watch(request: Request):
-    """Agent 监控面板 SSE：实时展示状态机流转、工具调用、Token 消耗。"""
-    import json
-    import time
+@app.get("/feedback/stats")
+async def api_feedback_stats():
+    """反馈统计数据。"""
+    from database import get_db
 
-    from fastapi.responses import StreamingResponse
-
-    req = await request.json()
-    task = req.get("task", "")
-    thread_id = req.get("thread_id", f"watch_{uuid.uuid4().hex[:6]}")
-    if not task:
-        raise HTTPException(400, "需要 task 参数")
-
-    async def stream():
-        s = (
-            lambda e, d: f"data: {json.dumps({'event': e, **d}, ensure_ascii=False)}\n\n"
-        )
-        t0 = time.time()
-        tokens_total = 0
-
-        yield s(
-            "init", {"task": task, "thread": thread_id, "ts": f"{time.time()-t0:.1f}s"}
-        )
-
-        # 用 LangGraph 流式执行
-        from agent.langgraph_workflow import get_agent_graph
-
-        graph = get_agent_graph()
-        config = {"configurable": {"thread_id": thread_id}}
-        initial = {
-            "messages": [{"role": "user", "content": f"调研任务：{task}"}],
-            "max_steps": 10,
-            "steps": 0,
-            "result": "",
-            "confirmed": False,
-            "need_confirm": None,
-        }
-
-        try:
-            node_count = 0
-            async for chunk in graph.astream(initial, config, stream_mode="updates"):
-                node_count += 1
-                elapsed = f"{time.time() - t0:.1f}s"
-                for node_name, node_output in chunk.items():
-                    # 估算 token
-                    est = (
-                        sum(len(str(v)) for v in node_output.values()) // 4
-                        if isinstance(node_output, dict)
-                        else len(str(node_output)) // 4
-                    )
-                    tokens_total += est
-
-                    if node_name == "agent":
-                        msgs = node_output.get("messages", [])
-                        last = msgs[-1] if msgs else {}
-                        has_tool = (
-                            hasattr(last, "tool_calls") and last.tool_calls
-                            if hasattr(last, "tool_calls")
-                            else False
-                        )
-                        yield s(
-                            "node_enter",
-                            {
-                                "node": "agent",
-                                "step": node_count,
-                                "tool_calls": bool(has_tool),
-                                "tokens": tokens_total,
-                                "elapsed": elapsed,
-                            },
-                        )
-                    elif node_name == "tools":
-                        yield s(
-                            "node_enter",
-                            {
-                                "node": "tools",
-                                "step": node_count,
-                                "tokens": tokens_total,
-                                "elapsed": elapsed,
-                            },
-                        )
-                    elif node_name == "reflect":
-                        result_text = str(node_output.get("result", ""))[:200]
-                        yield s(
-                            "node_enter",
-                            {
-                                "node": "reflect",
-                                "step": node_count,
-                                "tokens": tokens_total,
-                                "elapsed": elapsed,
-                                "result_preview": result_text,
-                            },
-                        )
-
-                    yield s(
-                        "node_done",
-                        {
-                            "node": node_name,
-                            "step": node_count,
-                            "tokens": tokens_total,
-                            "elapsed": elapsed,
-                        },
-                    )
-
-        except Exception as e:
-            yield s("error", {"error": str(e), "elapsed": f"{time.time()-t0:.1f}s"})
-
-        yield s(
-            "done",
-            {
-                "steps": node_count,
-                "tokens": tokens_total,
-                "total_elapsed": f"{time.time()-t0:.1f}s",
-            },
-        )
-
-    return StreamingResponse(stream(), media_type="text/event-stream")
+    return get_db().get_feedback_stats()
 
 
-@app.post("/agent/multi")
-async def api_agent_multi(request: Request):
-    """Planner->Workers->Synthesizer."""
-    req = await request.json()
-    task = req.get("task", "")
-    table = req.get("table", "")
-    if not task:
-        raise HTTPException(400, "需要 task 参数")
-    from agent.langgraph_workflow import run_multi_agent
-
-    return await run_multi_agent(task, table)
-
-
-@app.get("/agent/report")
-async def api_agent_report():
-    """Agent评估报告：成功率/推理步数/工具准确率/影子测试."""
-    from agent.langgraph_workflow import get_agent_evaluator
-
-    return get_agent_evaluator().report()
-
+# ===== 已合并: LangGraph 全部并入 pi_agent =====
+# 原 /agent/langgraph (断点续跑) + /agent/watch (SSE 监控) + /agent/multi
+# (Planner-Workers-Synthesizer) + /agent/report (评估器) 已全部移除:
+# - ReAct 循环 / 人工确认门 / 实时 trace → pi_agent (run_id + /agent/pi/approve + trace.steps)
+# - 多 agent 调研 → research_team (13 agent + 三审批闸门)
+# 前端统一走 /agent/pi。
 
 @app.post("/ask/stream")
 async def api_ask_stream(request: Request):
-    """流式 RAG 问答：SSE 逐 token 返回，用户即时看到生成内容。"""
+    """流式 RAG 问答：走 ask_question 完整检索链路，流式返回生成 token。"""
     from fastapi.responses import StreamingResponse
 
     req = await request.json()
@@ -1125,40 +1385,67 @@ async def api_ask_stream(request: Request):
     if not topic_id or not question:
         raise HTTPException(400, "需要 topic_id 和 question")
 
-    state = active_topics.get(topic_id)
-    if not state or not state.lancedb_table:
-        raise HTTPException(404, "Topic not found or not ready")
+    table = _resolve_kb_table(topic_id)
 
     async def generate():
+        import json
+
         from openai import AsyncOpenAI
 
         from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
-        from knowledge_base import retrieve_with_images
         from qa_engine import _expand_query
 
         client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
-        # Quick retrieval
-        expanded = await _expand_query(question) if len(question) > 15 else question
-        text_res, _, _ = retrieve_with_images(state.lancedb_table, expanded, top_k=5)
-        ctx = "\n".join([r.get("text", "")[:500] for r in (text_res or list())[:3]])
 
-        prompt = f"基于上下文简洁回答（100-200字）：\n{ctx}\n问题：{question}\n回答："
-        import json
+        # 复用 qa_engine 的完整检索链路
+        try:
+            from hybrid_retriever import AdaptiveHybridRetriever
+
+            # 查询改写
+            expanded = (
+                await _expand_query(question) if len(question) >= 15 else question
+            )
+            hr = AdaptiveHybridRetriever(table)
+            text_res, _ = hr.search(
+                expanded, top_k=5, filter_expr="is_fulltext = true AND is_image = false"
+            )
+        except Exception:
+            from knowledge_base import retrieve_with_images
+
+            text_res, _, _ = retrieve_with_images(table, question, top_k=5)
+
+        ctx = "\n".join(
+            f"[{i+1}] {r.get('title', 'N/A')}\n{r.get('text', '')[:2000]}"
+            for i, r in enumerate((text_res or [])[:3])
+        )
+        prompt = f"基于上下文回答（100-300字）。信息不足请说明。\n上下文：{ctx}\n问题：{question}\n回答："
 
         try:
             stream = await client.chat.completions.create(
                 model=DEEPSEEK_MODEL,
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-                max_tokens=500,
+                temperature=LLM_GEN_TEMPERATURE,
+                max_tokens=LLM_GEN_MAX_TOKENS,
                 stream=True,
+                extra_body={"thinking": {"type": "disabled"}},
             )
+            full_answer: list[str] = []
             async for chunk in stream:
                 if chunk.choices[0].delta.content:
-                    yield f"data: {json.dumps({'token': chunk.choices[0].delta.content})}\n\n"
+                    token = chunk.choices[0].delta.content
+                    full_answer.append(token)
+                    yield f"data: {json.dumps({'token': token})}\n\n"
             yield f"data: {json.dumps({'done': True})}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+        # DeepSeek 审查 #3: 保存完整答案, 原代码 add_turn(question, "") 污染记忆
+        try:
+            from conversation_memory import get_memory
+
+            get_memory(topic_id).add_turn(question, "".join(full_answer))
+        except Exception:
+            pass
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -1187,15 +1474,14 @@ async def api_ask_trace(request: Request):
         from config import LANCEDB_DIR
 
         db = lancedb.connect(str(LANCEDB_DIR))
-        raw = db.list_tables()
-        all_t = raw.tables if hasattr(raw, "tables") else []
+        all_t = _list_lance_tables(db)
         best, best_n = "", 0
         for t in all_t:
             try:
                 n = db.open_table(t).count_rows()
                 if n > best_n:
                     best, best_n = t, n
-            except:
+            except Exception:
                 pass
         kb_table = str(best) if best_n > 100 else None
     if not kb_table:
@@ -1356,10 +1642,11 @@ async def api_ask_trace(request: Request):
         try:
             stream = await client.chat.completions.create(
                 model=DEEPSEEK_MODEL,
-                temperature=0.3,
-                max_tokens=500,
+                temperature=LLM_GEN_TEMPERATURE,
+                max_tokens=LLM_GEN_MAX_TOKENS,
                 messages=[{"role": "user", "content": prompt}],
                 stream=True,
+                extra_body={"thinking": {"type": "disabled"}},
             )
             tokens = []
             async for chunk in stream:
@@ -1389,6 +1676,7 @@ async def api_agent_quick(request: Request):
     """Agent 快速模式：直接用 KB 问答 + DeepSeek 总结，<10s。"""
     req = await request.json()
     question = sanitize_input(req.get("question", ""))
+    _quota_guard(request)  # 按量付费闸门: 超额 → 402
     from config import DEEPSEEK_MODEL
 
     model = req.get("model", "") or DEEPSEEK_MODEL
@@ -1401,12 +1689,7 @@ async def api_agent_quick(request: Request):
 
     # 找最大的 KB
     db = lancedb.connect(str(LANCEDB_DIR))
-    raw = db.list_tables() if hasattr(db, "list_tables") else db.table_names()
-    tables = (
-        raw.tables
-        if hasattr(raw, "tables")
-        else (raw[0] if isinstance(raw, tuple) else raw)
-    )
+    tables = _list_lance_tables(db)
     # 找最大的知识库（按行数）
     best_kb, best_rows = "", 0
     for t in tables:
@@ -1440,13 +1723,632 @@ async def api_agent_quick(request: Request):
 
     resp = await client.chat.completions.create(
         model=model,
-        temperature=0.3,
-        max_tokens=400,
+        temperature=LLM_QUICK_TEMPERATURE,
+        max_tokens=LLM_QUICK_MAX_TOKENS,
         messages=[{"role": "user", "content": prompt}],
     )
     answer = resp.choices[0].message.content.strip()
+    # 按量付费: 记录本次 LLM 用量
+    _quota_record(
+        request, "",
+        (resp.usage.prompt_tokens if resp.usage else 0)
+        + (resp.usage.completion_tokens if resp.usage else 0),
+    )
 
     return {"result": answer, "kb_used": kb}
+
+
+# ===== Pi-Agent 端点 (v3.0 Hook 驱动 + 上下文工程 + 工具管理) =====
+
+
+@app.post("/agent/pi")
+async def api_agent_pi(request: Request):
+    """Pi-Agent 风格主循环: trace→turn 生命周期 + 10 个 hook 节点 + 上下文压缩。
+    危险工具 (need_confirm) 会暂停并返回 run_id, 由 /agent/pi/approve 确认后续跑。"""
+    req = await request.json()
+    task = sanitize_input(req.get("task", ""))
+    if not task:
+        raise HTTPException(400, "需要 task 参数")
+    _quota_guard(request)  # 按量付费闸门: 超额 → 402
+
+    max_steps = req.get("max_steps", 20)
+    max_time = req.get("max_time", 300)
+    goal = req.get("goal", "")
+    skills = req.get("skills") or None  # 显式技能名数组, None=auto 意图选择
+
+    from agent.pi_agent import get_agent
+
+    agent = get_agent(
+        max_steps=max_steps,
+        max_time_seconds=max_time,
+        goal=goal,
+        enable_tool_check=True,
+        enable_context_compaction=True,
+        skills=skills,
+    )
+    result = await agent.run(task)
+    result["run_id"] = agent.run_id
+    # 按量付费: 记录本次 Agent 用量 (trace.total_tokens)
+    _quota_record(request, "", result.get("trace", {}).get("total_tokens", 0))
+    return result
+
+
+@app.post("/agent/pi/stream")
+async def api_agent_pi_stream(request: Request):
+    """Agent 流式执行: SSE 推送每步工具调用事件 + 最终结果。
+    人工确认门暂停时推送 paused 事件 (run_id), 前端用 /agent/pi/approve 续跑。"""
+    import asyncio
+    import json as _json
+
+    from fastapi.responses import StreamingResponse
+
+    req = await request.json()
+    task = sanitize_input(req.get("task", ""))
+    if not task:
+        raise HTTPException(400, "需要 task 参数")
+    max_steps = req.get("max_steps", 20)
+    max_time = req.get("max_time", 300)
+    goal = req.get("goal", "")
+    skills = req.get("skills") or None
+
+    from agent.pi_agent import get_agent
+
+    queue = asyncio.Queue()
+
+    async def step_cb(ev):
+        await queue.put(ev)
+
+    # get_agent("") 创建并注册新实例 → resume (approve) 可续跑
+    agent = get_agent(
+        "",
+        max_steps=max_steps,
+        max_time_seconds=max_time,
+        goal=goal,
+        skills=skills,
+        step_cb=step_cb,
+    )
+
+    async def generate():
+        run_task = asyncio.ensure_future(agent.run(task))
+        while True:
+            try:
+                ev = await asyncio.wait_for(queue.get(), timeout=0.5)
+                yield f"data: {_json.dumps(ev, ensure_ascii=False)}\n\n"
+            except asyncio.TimeoutError:
+                if run_task.done():
+                    break
+        result = await run_task
+        result["run_id"] = agent.run_id
+        yield (
+            f"data: {_json.dumps({'event': 'result', **result}, ensure_ascii=False, default=str)}\n\n"
+        )
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.post("/agent/pi/approve")
+async def api_agent_pi_approve(request: Request):
+    """人工确认 pi-agent 暂停的危险工具, 恢复执行。
+    POST {run_id, confirmed: true|false}"""
+    req = await request.json()
+    run_id = req.get("run_id", "")
+    if not run_id:
+        raise HTTPException(400, "需要 run_id 参数")
+    confirmed = bool(req.get("confirmed", True))
+    from agent.pi_agent import get_agent
+
+    try:
+        agent = get_agent(run_id)
+    except KeyError:
+        raise HTTPException(404, f"run 不存在或已过期: {run_id}")
+    result = await agent.resume(confirmed)
+    result["run_id"] = run_id
+    return result
+
+
+@app.get("/agent/pi/stats")
+async def api_agent_pi_stats():
+    """Pi-Agent 运行时统计: hooks 调用次数 + 上下文压缩次数 + 工具错误统计。"""
+    from agent.context_engine import get_context_engine
+    from agent.hooks import get_hooks
+    from agent.tool_manager import get_tool_manager
+
+    return {
+        "hooks": get_hooks().get_stats(),
+        "context": get_context_engine().get_stats(),
+        "tools": get_tool_manager().get_stats(),
+    }
+
+
+@app.get("/agent/skills")
+async def api_agent_skills():
+    """获取所有可用技能及状态。"""
+    from agent.skills import get_skills
+
+    return {"skills": get_skills().list_all()}
+
+
+@app.get("/suggest")
+async def api_suggest(topic_id: str = "", user_id: str = Depends(get_current_user)):
+    """阶段感知主动建议: 预判用户在「选题→初稿」旅程的位置, 递上下一步。
+    这是"知用户、预判下一步"的智能路由第一版。"""
+    from topic_manager import active_topics
+
+    from suggestions import rank_candidates
+
+    state = active_topics.get(topic_id) if topic_id else None
+    if not state:
+        return {
+            "stage": "idle",
+            "suggest": "输入研究方向，先做研究空白分析，确认这个选题有没有人做过",
+            "action": "new_topic",
+            "alternatives": [],
+        }
+
+    has_kb = bool(state.lancedb_table)
+    has_papers = int(getattr(state.stats, "total_papers", 0) or 0) > 0
+    has_msgs = 0
+    try:
+        from database import get_db
+
+        has_msgs = len(get_db().get_messages(topic_id))
+    except Exception:
+        pass
+
+    if not has_kb and not has_papers:
+        stage, candidates = "created", [
+            {"action": "search", "suggest": "查看论文卡片，看有没有相关文献"},
+            {"action": "build_kb", "suggest": "直接下载 OA 论文建库"},
+        ]
+    elif not has_kb:
+        stage, candidates = "searched", [
+            {"action": "build_kb", "suggest": "下载 OA 全文构建知识库"},
+            {"action": "ask", "suggest": "先基于摘要问几个问题"},
+        ]
+    elif has_msgs < 2:
+        stage, candidates = "kb_ready", [
+            {"action": "ask", "suggest": "直接提问，基于知识库回答"},
+            {"action": "write", "suggest": "让 Agent 写综述/初稿"},
+        ]
+    else:
+        stage, candidates = "writing", [
+            {"action": "write", "suggest": "让 Agent 写初稿，写完做质量清单验收"},
+            {"action": "ask", "suggest": "继续追问细节"},
+        ]
+
+    ranked = rank_candidates(stage, candidates)
+    top = ranked[0]
+    return {
+        "stage": stage,
+        "suggest": top["suggest"],
+        "action": top["action"],
+        "alternatives": [
+            {"action": c["action"], "suggest": c["suggest"]} for c in ranked[1:]
+        ],
+    }
+
+
+@app.post("/suggest/accept")
+async def api_suggest_accept(request: Request):
+    """记录用户接受了某阶段建议 — 主动路由的自我进化数据。"""
+    from suggestions import record_accept
+
+    req = await request.json()
+    stage, action = req.get("stage", ""), req.get("action", "")
+    if stage and action:
+        record_accept(stage, action)
+    return {"ok": True}
+
+
+@app.get("/suggest/stats")
+async def api_suggest_stats():
+    """主动路由学习统计: 各阶段建议被接受次数 (越接受越优先推)。"""
+    from suggestions import get_stats
+
+    return {"stats": get_stats()}
+
+
+@app.get("/agent/tools")
+async def api_agent_tools():
+    """列出所有已注册工具 + 被哪些技能引用 (含 tools_extra 插件动态加载)。"""
+    from agent.skills import get_skills
+    from agent.tool_registry import get_tools_schema
+
+    skill_map: dict[str, list[str]] = {}
+    for sk in get_skills().list_all():
+        for t in sk.get("tools", []):
+            skill_map.setdefault(t, []).append(sk["name"])
+
+    tools = []
+    for s in get_tools_schema():
+        name = s["function"]["name"]
+        tools.append(
+            {
+                "name": name,
+                "description": s["function"]["description"][:120],
+                "required": s["function"]["parameters"].get("required", []),
+                "used_by_skills": skill_map.get(name, []),
+            }
+        )
+    return {"total": len(tools), "tools": tools}
+
+
+@app.post("/agent/tools/reload")
+async def api_agent_tools_reload():
+    """重新扫描 tools_extra/ 插件目录 — 新增插件文件无需重启即注册生效。"""
+    from agent.tool_registry import _load_plugin_tools, get_tools_schema
+
+    added = _load_plugin_tools()
+    return {"ok": True, "added": added, "total": len(get_tools_schema())}
+
+
+# ===== 按量付费配额 (免费额度 → 用量追踪 → 充值) =====
+
+def _quota_key(request: Request, user_id: str = "") -> str:
+    """配额记账键: 登录按 user_id, 匿名按 IP。"""
+    from quota import get_user_key
+
+    ip = (
+        (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+        or (request.client.host if request.client else "unknown")
+    )
+    return get_user_key(user_id=user_id, ip=ip)
+
+
+def _quota_guard(request: Request, user_id: str = "") -> str:
+    """配额闸门: 超额 → 402; 否则返回记账键。"""
+    from quota import check_quota
+
+    key = _quota_key(request, user_id)
+    if check_quota(key)["blocked"]:
+        raise HTTPException(402, "免费额度已用完，请充值后继续使用")
+    return key
+
+
+def _quota_record(request: Request, user_id: str, tokens: int) -> None:
+    try:
+        from quota import record_usage
+
+        record_usage(_quota_key(request, user_id), int(tokens or 0))
+    except Exception:
+        pass
+
+
+@app.get("/quota")
+async def api_quota(request: Request, user_id: str = Depends(get_current_user)):
+    """当前配额状态 (免费额度 / 已用 / 剩余)。"""
+    from quota import check_quota
+
+    q = check_quota(_quota_key(request, user_id))
+    return {"user_key": _quota_key(request, user_id), **q}
+
+
+@app.post("/quota/topup")
+async def api_quota_topup(request: Request, user_id: str = Depends(get_current_user)):
+    """充值占位: 增加可用额度。真实支付 (Stripe/支付宝) 接入后, 由支付回调调用此逻辑。"""
+    from quota import top_up
+
+    req = await request.json()
+    tokens = int(req.get("tokens", 0))
+    if tokens <= 0:
+        raise HTTPException(400, "tokens 需为正整数")
+    q = top_up(_quota_key(request, user_id), tokens)
+    return {"ok": True, "top_up_tokens": tokens, **q}
+
+
+@app.post("/quota/checkout")
+async def api_quota_checkout(request: Request, user_id: str = Depends(get_current_user)):
+    """创建 Stripe Checkout 会话 — 充值 tokens → 跳转 Stripe 托管支付页。"""
+    import stripe
+    from config import STRIPE_PRICE_PER_1000_TOKENS, STRIPE_SECRET_KEY
+
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(503, "支付未配置 (STRIPE_SECRET_KEY)")
+    stripe.api_key = STRIPE_SECRET_KEY
+    req = await request.json()
+    tokens = int(req.get("tokens", 0))
+    if tokens <= 0:
+        raise HTTPException(400, "tokens 需为正整数")
+    amount_cents = int(tokens / 1000.0 * STRIPE_PRICE_PER_1000_TOKENS * 100)
+    amount_cents = max(50, amount_cents)  # Stripe 最低 $0.50
+    user_key = _quota_key(request, user_id)
+    try:
+        session = stripe.checkout.Session.create(
+            payment_method_types=["card"],
+            line_items=[
+                {
+                    "price_data": {
+                        "currency": "usd",
+                        "product_data": {"name": f"PaperLink LLM 额度 {tokens} tokens"},
+                        "unit_amount": amount_cents,
+                    },
+                    "quantity": 1,
+                }
+            ],
+            mode="payment",
+            success_url="http://localhost:8001/quota/success?session_id={CHECKOUT_SESSION_ID}",
+            cancel_url="http://localhost:8001/quota/cancel",
+            metadata={"user_key": user_key, "tokens": str(tokens)},
+        )
+        return {
+            "ok": True,
+            "checkout_url": session.url,
+            "session_id": session.id,
+            "tokens": tokens,
+            "amount_cents": amount_cents,
+        }
+    except Exception as e:
+        raise HTTPException(500, f"Stripe 会话创建失败: {e}")
+
+
+@app.post("/stripe/webhook")
+async def stripe_webhook(request: Request):
+    """Stripe webhook: 支付成功 (checkout.session.completed) → 按 metadata 给用户充值。"""
+    import stripe
+    from config import STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
+
+    payload = await request.body()
+    sig = request.headers.get("stripe-signature", "")
+    if not STRIPE_WEBHOOK_SECRET:
+        return {"ok": False, "error": "STRIPE_WEBHOOK_SECRET 未配置 (用 stripe listen 获取)"}
+    stripe.api_key = STRIPE_SECRET_KEY
+    try:
+        event = stripe.Webhook.construct_event(payload, sig, STRIPE_WEBHOOK_SECRET)
+    except Exception as e:
+        raise HTTPException(400, f"Webhook 签名校验失败: {e}")
+    if event["type"] == "checkout.session.completed":
+        session = event["data"]["object"]
+        meta = session.get("metadata", {}) or {}
+        user_key = meta.get("user_key", "")
+        tokens = int(meta.get("tokens", 0) or 0)
+        if user_key and tokens:
+            from quota import top_up
+
+            top_up(user_key, tokens)
+            logger.info(f"Stripe payment credited: +{tokens} tokens → {user_key}")
+            return {"ok": True, "credited": tokens, "to": user_key}
+    return {"ok": True, "received": event["type"]}
+
+
+@app.get("/eval/results")
+async def api_eval_results():
+    """读取评估产物 (data/*.json) 聚合返回 — 供开发者中心可视化。"""
+    import json as _json
+    from pathlib import Path
+
+    reports = {}
+    for name in [
+        "eval_result",
+        "rag_standards_report",
+        "rag_faithfulness_report",
+        "embedding_benchmark",
+        "e2e_report",
+    ]:
+        p = Path("data") / f"{name}.json"
+        if p.exists():
+            try:
+                reports[name] = _json.loads(p.read_text())
+            except Exception:
+                reports[name] = {"error": "解析失败"}
+    return {"reports": reports, "hint": "运行 run_eval.py / evaluate_rag_standards.py 生成"}
+
+
+@app.get("/quota/success")
+async def quota_success():
+    return {"ok": True, "message": "充值成功，额度已到账"}
+
+
+@app.get("/quota/cancel")
+async def quota_cancel():
+    return {"ok": True, "message": "充值已取消"}
+
+
+@app.post("/agent/skills/toggle")
+async def api_agent_skills_toggle(request: Request):
+    """启用/禁用技能。POST {name: "literature_review", enabled: true}"""
+    req = await request.json()
+    name = req.get("name", "")
+    enabled = req.get("enabled", True)
+    from agent.skills import get_skills
+
+    skills = get_skills()
+    if enabled:
+        skills.enable(name)
+    else:
+        skills.disable(name)
+    return {"ok": True, "active": sorted(skills.active)}
+
+
+# ===== 虚拟科研团队 (13 Agent + 双轨审批) =====
+
+
+@app.post("/team/start")
+async def api_team_start(request: Request):
+    """启动虚拟科研团队执行完整研究流程。
+    每次 start 创建独立 run_id (多用户隔离)。返回含 run_id, 前端 /team/approve 必须携带。
+    返回: {status, run_id, agent, name} 或 {status, run_id, result, history}"""
+    req = await request.json()
+    task = sanitize_input(req.get("task", ""))
+    if not task:
+        raise HTTPException(400, "需要 task 参数")
+    from agent.research_team import get_team
+
+    team = get_team()  # 每次 start 独立实例, 不再全局单例互踩
+    result = await team.execute(task)
+    result["run_id"] = team.run_id
+    return result
+
+
+@app.post("/team/approve")
+async def api_team_approve(request: Request):
+    """人工确认审批闸门，继续执行后续流程。
+    POST {run_id, feedback: "修正意见" (可选)}"""
+    req = await request.json()
+    run_id = req.get("run_id", "")
+    if not run_id:
+        raise HTTPException(400, "需要 run_id 参数")
+    feedback = req.get("feedback", "")
+    from agent.research_team import get_team
+
+    try:
+        team = get_team(run_id)
+    except KeyError:
+        raise HTTPException(404, f"run 不存在或已过期: {run_id}")
+    result = await team.approve_and_continue(feedback)
+    result["run_id"] = run_id
+    return result
+
+
+@app.get("/team/status")
+async def api_team_status(run_id: str = ""):
+    """查看指定 run 的当前状态和审批历史。GET /team/status?run_id=..."""
+    if not run_id:
+        raise HTTPException(400, "需要 run_id 查询参数")
+    from agent.research_team import get_team
+
+    try:
+        team = get_team(run_id)
+    except KeyError:
+        raise HTTPException(404, f"run 不存在: {run_id}")
+    return {
+        "run_id": run_id,
+        "current_stage": team.current_stage,
+        "pending_approval": (
+            {
+                "gate": team.pending_approval.gate.value,
+                "title": team.pending_approval.title,
+                "summary": team.pending_approval.summary[:300],
+            }
+            if team.pending_approval
+            else None
+        ),
+        "history": team.history,
+        "completed_count": len(team.history),
+    }
+
+
+# ===== 论文导出 (DOCX / LaTeX / BibTeX / Markdown) =====
+
+
+@app.post("/export/paper")
+async def api_export_paper(request: Request):
+    """导出论文为指定格式 (借鉴 OpenDraft 多格式导出)。
+    POST {title, sections, references, format: "docx"|"latex"|"markdown"|"bibtex"}"""
+    req = await request.json()
+    title = req.get("title", "论文标题")
+    sections = req.get("sections", {})
+    references = req.get("references", [])
+    fmt = req.get("format", "markdown")
+
+    from exporter import export_bibtex, export_docx, export_latex, export_markdown
+
+    exporters = {
+        "markdown": export_markdown,
+        "docx": export_docx,
+        "latex": export_latex,
+        "bibtex": export_bibtex,
+    }
+    if fmt not in exporters:
+        raise HTTPException(400, f"不支持的格式: {fmt}，可选: {list(exporters.keys())}")
+
+    filepath = exporters[fmt](title, sections, references)
+    return {"ok": True, "format": fmt, "filepath": filepath}
+
+
+@app.get("/export/download")
+async def api_export_download(filepath: str = ""):
+    """下载导出的论文文件。"""
+    from pathlib import Path
+
+    p = Path(filepath)
+    if not p.exists():
+        raise HTTPException(404, "文件不存在，请先调用 /export/paper 生成")
+    return FileResponse(p, filename=p.name, media_type="application/octet-stream")
+
+
+# ===== Zotero Bridge (借鉴 LitScribe + 生态衔接) =====
+
+
+@app.post("/zotero/import")
+async def api_zotero_import(request: Request):
+    """Zotero 论文导入：接收 Zotero metadata JSON，自动创建课题。
+    可通过 Zotero Plugin 或 Better BibTeX 导出 JSON 调用。"""
+    req = await request.json()
+    from integrations import import_from_zotero
+
+    result = await import_from_zotero(req, req.get("topic_id", ""))
+    return result
+
+
+@app.get("/zotero/scan")
+async def api_zotero_scan():
+    """扫描本地 Zotero 数据库 (macOS: ~/Zotero/zotero.sqlite)。"""
+    from integrations import scan_zotero_library
+
+    return await scan_zotero_library()
+
+
+# ===== Citation Chain (借鉴 ScholarFlow 引文链扩展) =====
+
+
+@app.post("/citation/chain")
+async def api_citation_chain(request: Request):
+    """引文链扩展：从一篇论文出发，沿引用关系发现上下游论文。
+    POST {paper_id: "DOI or arXiv or S2 ID", direction: "citations|references|both", depth: 1}
+    """
+    req = await request.json()
+    paper_id = req.get("paper_id", "")
+    direction = req.get("direction", "both")
+    depth = req.get("depth", 1)
+    if not paper_id:
+        raise HTTPException(400, "需要 paper_id 参数")
+    from integrations import expand_citation_chain
+
+    return await expand_citation_chain(paper_id, direction, depth)
+
+
+# ===== Paper Subscription (借鉴 arxiv-tracker-agent) =====
+
+
+@app.post("/subscribe")
+async def api_subscribe(request: Request):
+    """订阅研究方向，每天自动检索新论文。"""
+    req = await request.json()
+    query = sanitize_input(req.get("query", ""))
+    if not query:
+        raise HTTPException(400, "需要 query 参数")
+    from integrations import subscribe_topic
+
+    return subscribe_topic(
+        query,
+        keywords_en=req.get("keywords_en"),
+        keywords_cn=req.get("keywords_cn"),
+        interval_hours=req.get("interval_hours", 24),
+    )
+
+
+@app.get("/subscribe")
+async def api_list_subscriptions():
+    """查看所有订阅。"""
+    from integrations import list_subscriptions
+
+    return {"subscriptions": list_subscriptions()}
+
+
+@app.delete("/subscribe/{sub_id}")
+async def api_delete_subscription(sub_id: str):
+    """删除订阅。"""
+    from integrations import delete_subscription
+
+    return {"ok": delete_subscription(sub_id)}
+
+
+@app.post("/subscribe/{sub_id}/run")
+async def api_run_subscription(sub_id: str):
+    """手动触发一次订阅检索。"""
+    from integrations import run_subscription
+
+    return await run_subscription(sub_id)
 
 
 if __name__ == "__main__":

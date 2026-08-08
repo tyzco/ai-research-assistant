@@ -10,16 +10,26 @@
     results = retriever.search("什么是ArcFace算法？", top_k=5)
 """
 
+import logging
 import re
+import threading
 
 import numpy as np
 from sentence_transformers import CrossEncoder, SentenceTransformer
 
+from config import RERANK_MODEL, RERANK_STAGE1_MODEL
 from knowledge_base import _cosine_search, _embed_texts_sync
+
+logger = logging.getLogger(__name__)
 
 
 class AdaptiveHybridRetriever:
     """自适应多路召回 + RRF 融合 + 两级级联重排。"""
+
+    # 类级别模型缓存——多个 topic 共享，避免重复加载
+    _stage1_model = None
+    _stage2_model = None
+    _model_lock = threading.Lock()  # DeepSeek 审查 #1: 防并发重复加载
 
     def __init__(self, table_name: str):
         import lancedb
@@ -30,19 +40,24 @@ class AdaptiveHybridRetriever:
         self.table = db.open_table(table_name)
         self.table_name = table_name
 
-        # 模型延迟加载（Stage1+Stage2），避免每次实例化都连 HF
-        self._stage1 = None
-        self._stage2 = None
-
     def _get_stage1(self):
-        if self._stage1 is None:
-            self._stage1 = SentenceTransformer(RERANK_STAGE1_MODEL)
-        return self._stage1
+        # 双检锁: 线程安全加载 (DeepSeek 审查 #1)
+        if AdaptiveHybridRetriever._stage1_model is None:
+            with AdaptiveHybridRetriever._model_lock:
+                if AdaptiveHybridRetriever._stage1_model is None:
+                    AdaptiveHybridRetriever._stage1_model = SentenceTransformer(
+                        RERANK_STAGE1_MODEL
+                    )
+        return AdaptiveHybridRetriever._stage1_model
 
     def _get_stage2(self):
-        if self._stage2 is None:
-            self._stage2 = CrossEncoder(RERANK_MODEL, max_length=512)
-        return self._stage2
+        if AdaptiveHybridRetriever._stage2_model is None:
+            with AdaptiveHybridRetriever._model_lock:
+                if AdaptiveHybridRetriever._stage2_model is None:
+                    AdaptiveHybridRetriever._stage2_model = CrossEncoder(
+                        RERANK_MODEL, max_length=512
+                    )
+        return AdaptiveHybridRetriever._stage2_model
 
     # ---- 自适应权重推理 ----
     def _compute_adaptive_weight(self, query: str) -> float:
@@ -115,27 +130,37 @@ class AdaptiveHybridRetriever:
 
     # ---- 两阶段级联排序 ----
     def _cascade_rerank(
-        self, query: str, chunks: list[dict], top_k: int = 5
+        self, query: str, chunks: list[dict], top_k: int = 5, stage1_k: int = None
     ) -> list[dict]:
-        """Stage1: MiniLM 快速预筛 → Stage2: CrossEncoder 精排。"""
+        """Stage1: MiniLM 快速预筛 → Stage2: CrossEncoder 精排。
+
+        v5.3 (DeepSeek 审查 #2): stage1_k 可配置, 默认 max(top_k*3, 15)。
+        #8: 点积前 L2 归一化, 保证余弦相似度。"""
         if len(chunks) <= top_k:
             return chunks
 
-        # Stage 1: 轻量语义相似度预筛 (top-20 → top-15)
+        stage1_keep = stage1_k or max(top_k * 3, 15)
+        stage1_keep = min(stage1_keep, len(chunks))
+
+        # Stage 1: 轻量语义相似度预筛
         try:
             stage1 = self._get_stage1()
             texts = [c.get("text", "")[:512] for c in chunks]
             q_emb = stage1.encode([query])[0]
             c_embs = stage1.encode(texts)
-            scores = np.dot(c_embs, q_emb)
+            # 归一化后点积 = 余弦相似度 (DeepSeek 审查 #8)
+            q_norm = q_emb / (np.linalg.norm(q_emb) + 1e-12)
+            c_norm = c_embs / (np.linalg.norm(c_embs, axis=1, keepdims=True) + 1e-12)
+            scores = np.dot(c_norm, q_norm)
             stage1_indices = sorted(
                 range(len(scores)), key=lambda i: scores[i], reverse=True
-            )[:15]
+            )[:stage1_keep]
             stage1_chunks = [chunks[i] for i in stage1_indices]
-        except Exception:
-            return chunks[:top_k]  # Stage1 fail → truncate
+        except Exception as e:
+            logger.error(f"Stage1 rerank failed: {e}")  # DeepSeek 审查 #5
+            return chunks[:top_k]
 
-        # Stage 2: CrossEncoder 精排 (top-15 → top_k)
+        # Stage 2: CrossEncoder 精排
         try:
             reranker = self._get_stage2()
             pairs = [[query, c.get("text", "")[:512]] for c in stage1_chunks]
@@ -144,7 +169,8 @@ class AdaptiveHybridRetriever:
                 range(len(scores2)), key=lambda i: scores2[i], reverse=True
             )[:top_k]
             return [stage1_chunks[i] for i in stage2_indices]
-        except Exception:
+        except Exception as e:
+            logger.error(f"Stage2 rerank failed: {e}")  # DeepSeek 审查 #5
             return stage1_chunks[:top_k]
 
     # ---- 主入口 ----

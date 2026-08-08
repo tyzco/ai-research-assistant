@@ -7,7 +7,7 @@
 
 import json
 import logging
-from pathlib import Path
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,13 @@ async def extract_entities_from_abstracts(abstracts: list[dict[str, str]]) -> di
     """用 DeepSeek 从论文摘要批量抽取实体关系。"""
     from openai import AsyncOpenAI
 
-    from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
+    from config import (
+        DEEPSEEK_API_KEY,
+        DEEPSEEK_BASE_URL,
+        DEEPSEEK_MODEL,
+        LLM_STRATEGY_MAX_TOKENS,
+        LLM_STRATEGY_TEMPERATURE,
+    )
     from monitor import safe_call
 
     if not abstracts:
@@ -52,15 +58,15 @@ async def extract_entities_from_abstracts(abstracts: list[dict[str, str]]) -> di
         resp = await safe_call(
             client.chat.completions.create,
             model=DEEPSEEK_MODEL,
-            temperature=0.1,
-            max_tokens=2000,
+            temperature=LLM_STRATEGY_TEMPERATURE,
+            max_tokens=LLM_STRATEGY_MAX_TOKENS,
             messages=[
                 {
                     "role": "user",
                     "content": EXTRACT_PROMPT.format(abstracts=text[:8000]),
                 }
             ],
-            max_retries=1,
+            max_retries=2,
             timeout=30.0,
             source="llm",
         )
@@ -78,7 +84,14 @@ async def extract_entities_from_abstracts(abstracts: list[dict[str, str]]) -> di
 
 def build_graph_from_kb(table_name: str) -> dict:
     """从 LanceDB 知识库构建图谱（同步，不含 LLM 抽取）。
-    返回 D3.js 兼容的 force-graph JSON。"""
+    返回 D3.js 兼容的 force-graph JSON。
+
+    DeepSeek 审查:
+      #1: 补充共同作者关系边, 使图谱成为真实的合作网络 (原实现 edges 恒空,
+          只有孤立论文节点, 不成其为知识图谱)。
+      #2: 简化 LanceDB 表列举兼容逻辑 (去掉脆弱的 tuple 解构)。
+      #6: 用 is_fulltext=false 过滤扫描取"每篇论文一条摘要", 替代无查询 search()。
+    """
     import lancedb
 
     from config import LANCEDB_DIR
@@ -86,11 +99,7 @@ def build_graph_from_kb(table_name: str) -> dict:
     db = lancedb.connect(str(LANCEDB_DIR))
     try:
         raw = db.list_tables() if hasattr(db, "list_tables") else db.table_names()
-        tables = (
-            raw.tables
-            if hasattr(raw, "tables")
-            else (raw[0] if isinstance(raw, tuple) else raw)
-        )
+        tables = list(raw.tables) if hasattr(raw, "tables") else list(raw)
     except Exception:
         return _empty_graph()
 
@@ -99,25 +108,19 @@ def build_graph_from_kb(table_name: str) -> dict:
 
     try:
         tbl = db.open_table(table_name)
-        # 查前 200 行构建节点
-        rows = tbl.search().limit(200).to_list()
-        # 按 paper_id 去重
-        seen = set()
-        deduped = []
-        for r in rows:
-            pid = r.get("paper_id", "")
-            if pid and pid not in seen:
-                seen.add(pid)
-                deduped.append(r)
-        rows = deduped
+        # 每篇论文恰好一条摘要记录 (is_fulltext=false) → 确定性过滤扫描, 无需去重
+        rows = tbl.search().where("is_fulltext = false").limit(200).to_list()
     except Exception as e:
-        logger.warning(f"KG build failed for {table_name}: {e}")
+        logger.warning(f"KG build failed for {table_name}: {e}", exc_info=True)
         return _empty_graph()
 
-    # 构建节点
-    nodes, edges = [], []
+    # 构建节点 + 共同作者关系边
+    nodes, links = [], []
+    author_to_papers: dict[str, list[str]] = {}
     for r in rows:
         pid = r.get("paper_id", "")
+        if not pid:
+            continue
         title = (r.get("title") or pid)[:80]
         year = r.get("year", "")
         nodes.append(
@@ -128,24 +131,43 @@ def build_graph_from_kb(table_name: str) -> dict:
                 "year": str(year) if year else "",
             }
         )
+        # 作者索引 (逗号/分号/and 分隔)
+        for a in re.split(r"[,;]|\band\b", (r.get("authors") or "")):
+            a = a.strip().strip(".")
+            if len(a) < 2 or not any(c.isalpha() for c in a):
+                continue
+            author_to_papers.setdefault(a, []).append(pid)
 
-    return {"nodes": nodes, "links": edges}
+    # 共同作者边 (上限 300, 防 D3 force-graph 卡顿)
+    seen_edges: set[tuple[str, str]] = set()
+    for author, pids in author_to_papers.items():
+        if len(pids) < 2:
+            continue
+        for i in range(len(pids)):
+            for j in range(i + 1, len(pids)):
+                key = tuple(sorted([pids[i], pids[j]]))
+                if key in seen_edges:
+                    continue
+                seen_edges.add(key)
+                links.append(
+                    {
+                        "source": pids[i],
+                        "target": pids[j],
+                        "relation": "shared_author",
+                        "label": author,
+                    }
+                )
+                if len(links) >= 300:
+                    break
+            if len(links) >= 300:
+                break
+        if len(links) >= 300:
+            break
+
+    return {"nodes": nodes, "links": links}
 
 
 def _empty_graph():
     return {"nodes": [], "links": []}
 
 
-def save_graph_json(graph: dict, path: str = "data/knowledge_graph.json"):
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    Path(path).write_text(json.dumps(graph, indent=2, ensure_ascii=False))
-    logger.info(
-        f"Graph saved to {path} ({len(graph['nodes'])} nodes, {len(graph['links'])} edges)"
-    )
-
-
-def load_graph_json(path: str = "data/knowledge_graph.json") -> dict:
-    p = Path(path)
-    if p.exists():
-        return json.loads(p.read_text())
-    return _empty_graph()

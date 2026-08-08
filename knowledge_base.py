@@ -6,15 +6,8 @@ import logging
 
 import lancedb
 import pyarrow as pa
-from sentence_transformers import SentenceTransformer
 
-from config import (
-    IMAGE_DIR,
-    LANCEDB_DIR,
-    LOCAL_EMBEDDING_DIM,
-    LOCAL_EMBEDDING_MODEL,
-    RETRIEVAL_TOP_K,
-)
+from config import IMAGE_DIR, LANCEDB_DIR, LOCAL_EMBEDDING_DIM, RETRIEVAL_TOP_K
 from models import PaperMeta
 
 logger = logging.getLogger(__name__)
@@ -23,26 +16,8 @@ LANCEDB_DIR.mkdir(parents=True, exist_ok=True)
 IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 # ---- 嵌入模型 ----
-
-_embed_model = None
-
-
-def _get_embed_model() -> SentenceTransformer:
-    global _embed_model
-    if _embed_model is None:
-        logger.info(f"Loading local embedding model: {LOCAL_EMBEDDING_MODEL}")
-        _embed_model = SentenceTransformer(LOCAL_EMBEDDING_MODEL)
-    return _embed_model
-
-
-def _embed_texts_sync(texts: list[str]) -> list[list[float]]:
-    """本地批量编码（sentence-transformers, CPU, 免费）。"""
-    if not texts:
-        return []
-    model = _get_embed_model()
-    embeddings = model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
-    return embeddings.tolist()
-
+# 嵌入模型已迁移到 embedder.py，此处保留向后兼容别名
+from embedder import _embed_texts_sync
 
 # ---- LanceDB 表管理 ----
 
@@ -50,7 +25,10 @@ def _embed_texts_sync(texts: list[str]) -> list[list[float]]:
 def _get_table(db, table_name: str):
     try:
         return db.open_table(table_name)
-    except Exception:
+    except ValueError as e:
+        # LanceDB 表不存在抛 ValueError (DeepSeek 审查 #1: 精确捕获, 其他异常向上抛避免数据丢失)
+        if "not found" not in str(e).lower():
+            raise
         dim = LOCAL_EMBEDDING_DIM
         return db.create_table(
             table_name,
@@ -179,6 +157,12 @@ async def build_knowledge_base(
     logger.info(
         f"Knowledge base built: {n} abstracts + {total_chunks} fulltext chunks in {table_name}"
     )
+    # 创建全文索引——LanceDB 的 BM25/FTS 依赖此索引，缺失则全部 BM25 查询静默失败
+    try:
+        table.create_fts_index("text", replace=True)
+        logger.info(f"FTS index created on {table_name}")
+    except Exception as e:
+        logger.warning(f"FTS index creation failed on {table_name}: {e}")
     return table_name
 
 
@@ -195,8 +179,12 @@ def store_image_descriptions(
     db = lancedb.connect(str(LANCEDB_DIR))
     try:
         table = db.open_table(table_name)
-    except Exception:
-        return
+    except ValueError as e:
+        if "not found" not in str(e).lower():
+            raise
+        # 表不存在 → 自动创建 (DeepSeek 审查 #4: 原静默 return 丢数据无感知)
+        logger.warning(f"Table {table_name} not found, creating for image descriptions")
+        table = _get_table(db, table_name)
 
     texts = [r["text"] for r in image_records]
     vecs = _embed_texts_sync(texts)
@@ -235,25 +223,16 @@ def _cosine_search(
         return []
 
 
-async def dual_retrieve(
-    table_name: str,
-    query: str,
-    top_k: int = RETRIEVAL_TOP_K,
-) -> tuple[list[dict], list[dict]]:
-    """
-    双层检索：全文层 top-k + 摘要层 top-k。
-    返回 (fulltext_results, abstract_results)。
-    """
-    db = lancedb.connect(str(LANCEDB_DIR))
-    try:
-        table = db.open_table(table_name)
-    except Exception:
-        return [], []
-
-    query_vec = _embed_texts_sync([query])[0]
-    ft_res = _cosine_search(table, query_vec, top_k, "is_fulltext = true")
-    abs_res = _cosine_search(table, query_vec, top_k, "is_fulltext = false")
-    return ft_res, abs_res
+def _stable_key(r: dict, rank: int) -> str:
+    """稳定 RRF 键 (DeepSeek 审查 #6): chunk_id 优先, 否则 paper_id+chunk_index 组合。"""
+    cid = r.get("chunk_id", "")
+    if cid:
+        return cid
+    pid = r.get("paper_id", "")
+    ci = r.get("chunk_index", "")
+    if pid:
+        return f"{pid}#{ci}"
+    return f"rank#{rank}"
 
 
 def _hybrid_search(table, q_str, q_vec, top_k, flt=None):
@@ -272,20 +251,16 @@ def _hybrid_search(table, q_str, q_vec, top_k, flt=None):
 
     fused = {}
     for rank, r in enumerate(vec):
-        fused[r.get("chunk_id", str(rank))] = fused.get(
-            r.get("chunk_id", str(rank)), 0
-        ) + rrf(rank)
+        k = _stable_key(r, rank)
+        fused[k] = fused.get(k, 0) + rrf(rank)
     for rank, r in enumerate(bm25):
-        fused[r.get("chunk_id", str(rank))] = fused.get(
-            r.get("chunk_id", str(rank)), 0
-        ) + rrf(rank)
+        k = _stable_key(r, rank)
+        fused[k] = fused.get(k, 0) + rrf(rank)
 
     sorted_ids = sorted(fused.items(), key=lambda x: x[1], reverse=True)[:top_k]
-    result, vm, bm = (
-        [],
-        {r.get("chunk_id", ""): r for r in vec},
-        {r.get("chunk_id", ""): r for r in bm25},
-    )
+    vm = {_stable_key(r, i): r for i, r in enumerate(vec)}
+    bm = {_stable_key(r, i): r for i, r in enumerate(bm25)}
+    result = []
     for cid, _ in sorted_ids:
         result.append(vm.get(cid) or bm.get(cid) or {"chunk_id": cid})
     return result

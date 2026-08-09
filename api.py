@@ -2050,7 +2050,9 @@ async def api_quota_checkout(request: Request, user_id: str = Depends(get_curren
     if tokens <= 0:
         raise HTTPException(400, "tokens 需为正整数")
     amount_cents = int(tokens / 1000.0 * STRIPE_PRICE_PER_1000_TOKENS * 100)
-    amount_cents = max(50, amount_cents)  # Stripe 最低 $0.50
+    # Stripe 各币种最低金额不同 (USD $0.50 / HKD $4.00≈$0.51USD); 统一抬到 $1.00 兜底,
+    # 否则 HKD 账户下 $0.50 换算后低于 HKD 下限 → 建单失败 (实测)
+    amount_cents = max(100, amount_cents)
     user_key = _quota_key(request, user_id)
     try:
         session = stripe.checkout.Session.create(

@@ -1562,7 +1562,8 @@ async def api_ask_stream(request: Request):
                     yield f"data: {json.dumps({'token': token})}\n\n"
             yield f"data: {json.dumps({'done': True})}\n\n"
         except Exception as e:
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            logger.exception("ask stream failed: %s", e)
+            yield f"data: {json.dumps({'error': '生成失败，请稍后重试'})}\n\n"
 
         # DeepSeek 审查 #3: 保存完整答案, 原代码 add_turn(question, "") 污染记忆
         try:
@@ -1791,7 +1792,8 @@ async def api_ask_trace(request: Request):
                 },
             )
         except Exception as e:
-            yield s("generate_done", {"error": str(e), "elapsed": "fail"})
+            logger.exception("ask trace generation failed: %s", e)
+            yield s("generate_done", {"error": "生成失败，请稍后重试", "elapsed": "fail"})
 
         yield s("done", {"total_elapsed": f"{time.time()-t0:.2f}s"})
 

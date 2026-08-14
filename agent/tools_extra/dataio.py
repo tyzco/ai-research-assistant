@@ -8,7 +8,6 @@
 
 边界: 仅处理用户上传/生成的数据文件, 不触碰付费/盗版内容。
 """
-import asyncio
 import csv
 import io
 import logging
@@ -56,11 +55,16 @@ async def _read_csv(filepath: str = "", content: str = "") -> dict:
         if content:
             text = content
         elif filepath:
-            import os
+            from pathlib import Path
 
-            if not os.path.exists(filepath):
+            # 路径穿越防护: 仅允许读取 data_uploads/ 目录内的文件
+            upload_dir = Path("data_uploads").resolve()
+            target = Path(filepath).resolve()
+            if target.parent != upload_dir and upload_dir not in target.parents:
+                return {"error": f"文件路径不在 data_uploads/ 目录内: {filepath}"}
+            if not target.exists():
                 return {"error": f"文件不存在: {filepath}"}
-            with open(filepath, "rb") as f:
+            with open(target, "rb") as f:
                 text = _decode(f.read())
         else:
             return {"error": "需要 filepath (上传的数据文件) 或 content (内联 CSV 文本) 参数"}
@@ -114,7 +118,9 @@ async def _export_references_xlsx(references: list, filename: str = "") -> dict:
         for i in range(1, len(cols) + 1):
             ws.column_dimensions[get_column_letter(i)].width = 42
 
-        safe = re.sub(r"[^\w\-]+", "_", (filename or "references").strip()) or "references"
+        safe = (
+            re.sub(r"[^\w\-]+", "_", (filename or "references").strip()) or "references"
+        )
         path = EXPORT_DIR / f"{safe}.xlsx"
         # 防覆盖: 已存在 → 追加时间戳 (Date 不可用, 用递增后缀)
         n = 2
@@ -150,7 +156,10 @@ TOOLS = [
                     "items": {"type": "object"},
                     "description": "参考文献列表, 每项含 title/authors/year/venue/doi",
                 },
-                "filename": {"type": "string", "description": "文件名 (可选, 默认 references)"},
+                "filename": {
+                    "type": "string",
+                    "description": "文件名 (可选, 默认 references)",
+                },
             },
             "required": ["references"],
         },

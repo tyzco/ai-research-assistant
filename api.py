@@ -1213,6 +1213,27 @@ async def api_topic_status(topic_id: str, user_id: str = Depends(get_current_use
     }
 
 
+@app.post("/research_gap")
+async def api_research_gap(request: Request, user_id: str = Depends(get_current_user)):
+    """一键选题可行性判断 (蓝海钩子): 输入选题 → 真实检索 → 研究空白+可行性报告。
+
+    返回 {topic, n_papers, papers, report, markdown}。markdown 为格式化后的报告,
+    前端直接渲染。诚实声明: 报告基于检索到的文献, 不确定性已标注。
+    """
+    req = await request.json()
+    topic = sanitize_input(req.get("topic", ""))
+    if not topic:
+        raise HTTPException(400, "需要 topic 参数")
+    if (blk := await _scope_gate(topic)) is not None:
+        return blk
+    _quota_guard(request, user_id)
+    from research_gap import _fmt, analyze_gap
+
+    result = await analyze_gap(topic)
+    result["markdown"] = _fmt(result)
+    return result
+
+
 @app.post("/chat")
 async def api_chat(request: Request):
     """通用 AI 聊天：直接调 DeepSeek，无 RAG 检索。与知识库共享对话历史。"""

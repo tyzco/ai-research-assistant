@@ -1251,7 +1251,9 @@ async def api_research_gap(request: Request, user_id: str = Depends(get_current_
                 result = await analyze_gap(topic, progress_cb=progress_cb)
                 await q.put(("done", result))
             except Exception as e:
-                await q.put(("error", str(e)))
+                # 完整异常进服务端日志, 客户端只给通用话术 (防泄露内部细节/密钥)
+                logger.exception("research_gap worker failed: %s", e)
+                await q.put(("error", "分析失败，请稍后重试"))
 
         task = asyncio.create_task(worker())
         while True:

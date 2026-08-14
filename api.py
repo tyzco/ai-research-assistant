@@ -207,10 +207,12 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
-async def _scope_gate(query: str):
+async def _scope_gate(query: str, topic_mode: bool = False):
     """学术范围白名单: 非论文/学术问题 → 422 拒绝 (锁定工具用途, 防滥用)。
 
-    异步内嵌, 嵌入层经线程池不阻塞事件循环。可被 SCOPE_GATE_ENABLED=0 关闭。"""
+    异步内嵌, 嵌入层经线程池不阻塞事件循环。可被 SCOPE_GATE_ENABLED=0 关闭。
+    topic_mode=True: 选题判断模式, 只拦硬非学术词 (裸选题短语天然是学术意图)。
+    """
     from fastapi.responses import JSONResponse
 
     from config import SCOPE_GATE_ENABLED
@@ -221,7 +223,7 @@ async def _scope_gate(query: str):
 
     from scope_gate import gate_query
 
-    allowed, reason, level = await asyncio.to_thread(gate_query, query)
+    allowed, reason, level = await asyncio.to_thread(gate_query, query, topic_mode)
     if allowed:
         return None
     logger.info(f"scope_gate reject ({level}): {str(query)[:50]}")
@@ -1228,7 +1230,7 @@ async def api_research_gap(request: Request, user_id: str = Depends(get_current_
     topic = sanitize_input(req.get("topic", ""))
     if not topic:
         raise HTTPException(400, "需要 topic 参数")
-    if (blk := await _scope_gate(topic)) is not None:
+    if (blk := await _scope_gate(topic, topic_mode=True)) is not None:
         return blk
     _quota_guard(request, user_id)
     from research_gap import _fmt, analyze_gap

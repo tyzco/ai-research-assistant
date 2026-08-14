@@ -48,7 +48,11 @@ def _synth(topic: str, papers: list, n_papers: int) -> dict:
     for i, p in enumerate(papers[:15], 1):
         lines.append(
             f"[{i}] {p.get('title','')} ({p.get('year','')}) · {p.get('source','')}"
-            + (f"\n    abstract: {(p.get('abstract') or '')[:200]}" if p.get("abstract") else "")
+            + (
+                f"\n    abstract: {(p.get('abstract') or '')[:200]}"
+                if p.get("abstract")
+                else ""
+            )
         )
     papers_txt = "\n".join(lines) or "（检索无结果）"
     prompt = _SYNTH_PROMPT.format(topic=topic, papers=papers_txt, n_papers=n_papers)
@@ -58,13 +62,16 @@ def _synth(topic: str, papers: list, n_papers: int) -> dict:
         from config import (
             DEEPSEEK_API_KEY,
             DEEPSEEK_BASE_URL,
-            DEEPSEEK_MODEL,
+            DEEPSEEK_FALLBACK_API_KEY,
             LLM_STRATEGY_MAX_TOKENS,
+            RESEARCH_GAP_MODEL,
         )
 
-        client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+        # 选题判断钩子用 pro 模型 + pro key (兜底 key 优先), flash 省钱留给后台/推送
+        _gap_key = DEEPSEEK_FALLBACK_API_KEY or DEEPSEEK_API_KEY
+        client = OpenAI(api_key=_gap_key, base_url=DEEPSEEK_BASE_URL)
         resp = client.chat.completions.create(
-            model=DEEPSEEK_MODEL,
+            model=RESEARCH_GAP_MODEL,
             temperature=0.3,
             max_tokens=LLM_STRATEGY_MAX_TOKENS,
             messages=[{"role": "user", "content": prompt}],
@@ -72,7 +79,7 @@ def _synth(topic: str, papers: list, n_papers: int) -> dict:
             timeout=60,
         )
         raw = resp.choices[0].message.content or ""
-        data = json.loads(raw[raw.find("{"): raw.rfind("}") + 1])
+        data = json.loads(raw[raw.find("{") : raw.rfind("}") + 1])
         if not isinstance(data, dict):
             raise ValueError("non-dict")
         return data

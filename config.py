@@ -58,6 +58,8 @@ LLM_MAX_RETRIES = _env("LLM_MAX_RETRIES", 2, int)
 DEEPSEEK_FALLBACK_MODEL = _env("DEEPSEEK_FALLBACK_MODEL", "", str)
 DEEPSEEK_FALLBACK_BASE_URL = _env("DEEPSEEK_FALLBACK_BASE_URL", "", str)
 DEEPSEEK_FALLBACK_API_KEY = os.getenv("DEEPSEEK_FALLBACK_API_KEY", "")
+# 选题判断 (钩子) 用 pro 模型保质量 (第一印象, 值得花 pro 的钱; flash 省钱给后台/推送)
+RESEARCH_GAP_MODEL = _env("RESEARCH_GAP_MODEL", "deepseek-v4-pro")
 
 # ===================================================================
 # Embedding (本地模型)

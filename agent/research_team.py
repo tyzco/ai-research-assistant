@@ -25,15 +25,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional
 
-from openai import AsyncOpenAI
-
-from config import (
-    AGENT_MAX_TOKENS,
-    AGENT_TEMPERATURE,
-    DEEPSEEK_API_KEY,
-    DEEPSEEK_BASE_URL,
-    DEEPSEEK_MODEL,
-)
+from config import AGENT_MAX_TOKENS, AGENT_TEMPERATURE, DEEPSEEK_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -378,20 +370,11 @@ class ResearchTeam:
         """创建团队实例。run_id 为空 → 自动生成 (每个 /team/start 独立 run)。
         DeepSeek 审查 #7: 弃用全局单例, 按 run_id 隔离多用户并发。"""
         self.run_id: str = run_id or f"run_{uuid.uuid4().hex[:12]}"
-        self._client: Optional[AsyncOpenAI] = None
         self.state: dict[str, Any] = {}  # agent_key → output
         self.pending_approval: Optional[ApprovalRequest] = None
         self.current_stage: str = "idle"
         self.history: list[dict] = []  # 执行日志
         self._lock = asyncio.Lock()  # 并发防护: 同一 run 禁止并发执行/审批
-
-    @property
-    def client(self):
-        if self._client is None:
-            self._client = AsyncOpenAI(
-                api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL
-            )
-        return self._client
 
     def get_agents_by_layer(self, layer: str) -> list[str]:
         return [k for k, v in AGENT_DEFINITIONS.items() if v["layer"] == layer]
@@ -457,7 +440,9 @@ class ResearchTeam:
                 agent_output=p.get("agent_output", ""),
                 created_at=p.get("created_at", ""),
             )
-        logger.info(f"Team {run_id} restored from snapshot (stage={team.current_stage})")
+        logger.info(
+            f"Team {run_id} restored from snapshot (stage={team.current_stage})"
+        )
         return team
 
     async def _run_pipeline(self, start_idx: int) -> dict:
@@ -539,7 +524,11 @@ class ResearchTeam:
 
             # 从当前 agent 的下一个开始继续
             current_idx = next(
-                (i for i, (k, _, _) in enumerate(self.PIPELINE) if k == self.current_stage),
+                (
+                    i
+                    for i, (k, _, _) in enumerate(self.PIPELINE)
+                    if k == self.current_stage
+                ),
                 -1,
             )
             return await self._run_pipeline(current_idx + 1)
@@ -589,14 +578,12 @@ class ResearchTeam:
 
             declared = set(agent_def.get("tools", []))
             tools_schema = [
-                s
-                for s in get_tools_schema()
-                if s["function"]["name"] in declared
+                s for s in get_tools_schema() if s["function"]["name"] in declared
             ] or None
 
             # 工具调用循环: 上限 8 轮, 防止模型死循环
             for _ in range(8):
-                resp = await self.client.chat.completions.create(
+                resp = await chat_with_retry(
                     model=DEEPSEEK_MODEL,
                     messages=messages,
                     tools=tools_schema,
@@ -618,7 +605,7 @@ class ResearchTeam:
                             _cont.append(
                                 {"role": "user", "content": "（回答被截断，请从断点继续，不要重复已写内容）"}
                             )
-                            _r2 = await self.client.chat.completions.create(
+                            _r2 = await chat_with_retry(
                                 model=DEEPSEEK_MODEL,
                                 messages=messages + _cont,
                                 temperature=AGENT_TEMPERATURE,

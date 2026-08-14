@@ -135,22 +135,18 @@ class ConversationMemory:
         if len(self._pending_compress) < 3 and len(self.summary) < 200:
             return
         try:
-            from openai import AsyncOpenAI
-
             from config import (
-                DEEPSEEK_API_KEY,
-                DEEPSEEK_BASE_URL,
                 DEEPSEEK_MODEL,
                 LLM_COREF_MAX_TOKENS,
                 LLM_COREF_TEMPERATURE,
             )
+            from llm_client import chat_with_retry
 
             # 合并待压缩内容
             pending_text = "\n".join(self._pending_compress)[-2000:]
             to_compress = f"已有摘要: {self.summary}\n\n新内容: {pending_text}"
 
-            client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
-            resp = await client.chat.completions.create(
+            resp = await chat_with_retry(
                 model=DEEPSEEK_MODEL,
                 temperature=LLM_COREF_TEMPERATURE,
                 max_tokens=LLM_COREF_MAX_TOKENS,
@@ -193,6 +189,7 @@ class ConversationMemory:
             )
             parts.append(f"[{role}]: {m['content'][:300]}")
         return "\n".join(parts)
+
 
 # ===== 记忆缓存 (TTL 惰性清理, 防内存泄漏) =====
 

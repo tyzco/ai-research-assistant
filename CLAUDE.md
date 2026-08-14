@@ -23,7 +23,7 @@ user input → static/index.html (SPA, ~45KB, IIFE, zero-build)
   ├─ /citation/chain → integrations.expand_citation_chain (Semantic Scholar)
   ├─ /subscribe → integrations.subscribe_topic (auto-scheduled via scheduler.py)
   ├─ /zotero/import + /zotero/scan → Zotero bridge
-  ├─ /export/paper + /export/download → Markdown/DOCX/LaTeX/BibTeX
+  ├─ /export/paper + /file/download → Markdown/DOCX/LaTeX/BibTeX (下载走 /file/download: 避免被 GET /export/{topic_id} 遮蔽)
   ├─ /kg_data → knowledge_graph → D3.js force-graph
   └─ /feedback → learning_feedback table (data flywheel)
 ```

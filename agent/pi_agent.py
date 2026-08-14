@@ -20,16 +20,15 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Optional
 
-from openai import AsyncOpenAI
-
 from config import (
     AGENT_MAX_TOKENS,
+    AGENT_PLAN_ENABLED,
+    AGENT_PLAN_MIN_CHARS,
     AGENT_REFLEXION_ENABLED,
     AGENT_TEMPERATURE,
-    DEEPSEEK_API_KEY,
-    DEEPSEEK_BASE_URL,
     DEEPSEEK_MODEL,
 )
+from llm_client import chat_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +77,7 @@ class PiAgent:
         run_id: str = "",
         step_cb=None,
         enable_reflexion: bool | None = None,
+        enable_plan: bool | None = None,
     ):
         self.max_steps = max_steps
         self.max_time = max_time_seconds
@@ -94,9 +94,10 @@ class PiAgent:
             AGENT_REFLEXION_ENABLED if enable_reflexion is None else enable_reflexion
         )
         self._reflexed = False
+        # 可选 plan 阶段 (规划层): 长任务先拆步骤再执行, 防纯 ReAct 跑偏
+        self.enable_plan = AGENT_PLAN_ENABLED if enable_plan is None else enable_plan
 
         # 延迟加载
-        self._client: Optional[AsyncOpenAI] = None
         self._hooks = None
         self._ctx_engine = None
         self._tool_mgr = None
@@ -106,15 +107,9 @@ class PiAgent:
         self._messages: list[dict] = []
         self._state: dict = {}
         self._tools_schema: list[dict] = []
-        self._pending_confirm: Optional[dict] = None  # {tool_name, tool_args, tool_call_id}
-
-    @property
-    def client(self):
-        if self._client is None:
-            self._client = AsyncOpenAI(
-                api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL
-            )
-        return self._client
+        self._pending_confirm: Optional[
+            dict
+        ] = None  # {tool_name, tool_args, tool_call_id}
 
     @property
     def hooks(self):
@@ -172,14 +167,15 @@ class PiAgent:
 
         self._trace = TraceState(goal=self.goal or task[:80], start_time=time.time())
         self._messages = [
-            {"role": "system", "content": self._build_system_prompt(skill_prompt, task)},
+            {
+                "role": "system",
+                "content": self._build_system_prompt(skill_prompt, task),
+            },
             {"role": "user", "content": task},
         ]
 
         # === HOOK: trace_start ===
-        hook_result = self._fire_hook(
-            "trace_start", {"task": task, "goal": self.goal}
-        )
+        hook_result = self._fire_hook("trace_start", {"task": task, "goal": self.goal})
         if hook_result.block:
             return {
                 "success": False,
@@ -188,6 +184,17 @@ class PiAgent:
             }
         if hook_result.inject:
             self._messages.extend(hook_result.inject)
+
+        # === 可选 plan 阶段: 长任务先规划 (防跑偏), 短问答跳过 (省延迟) ===
+        if self.enable_plan and len(task.strip()) >= AGENT_PLAN_MIN_CHARS:
+            plan = await self._plan(task)
+            if plan:
+                self._messages.append(
+                    {
+                        "role": "assistant",
+                        "content": f"任务计划：\n{plan}",
+                    }
+                )
 
         self._state = {
             "messages": self._messages,
@@ -210,10 +217,38 @@ class PiAgent:
             pass
         return result
 
+    async def _plan(self, task: str) -> str | None:
+        """可选 plan 阶段 (规划层): 长任务先让 LLM 拆 3-6 步计划, 防纯 ReAct 跑偏。
+
+        只输出步骤列表不执行; 失败静默降级 (返回 None, 不影响主循环)。
+        """
+        try:
+            resp = await chat_with_retry(
+                model=DEEPSEEK_MODEL,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "你是任务规划器。把用户任务拆成 3-6 个有序步骤, "
+                            "每步一句, 用编号列表输出。只输出计划, 不执行、不解释。"
+                        ),
+                    },
+                    {"role": "user", "content": task},
+                ],
+                temperature=0.1,
+                max_tokens=300,
+                extra_body={"thinking": {"type": "disabled"}},
+            )
+            plan = (resp.choices[0].message.content or "").strip()
+            return plan[:500] if plan else None
+        except Exception as e:
+            logger.debug(f"Plan stage failed: {e}")
+            return None
+
     async def _reflexion_critique(self, messages: list[dict]) -> str:
         """轻量自批判: 评估回答是否完整满足任务。返回批判 (非空=需修订) 或 '' (通过)。"""
         try:
-            resp = await self.client.chat.completions.create(
+            resp = await chat_with_retry(
                 model=DEEPSEEK_MODEL,
                 messages=messages
                 + [
@@ -274,8 +309,7 @@ class PiAgent:
                 if removed:
                     trace.total_tokens = max(
                         0,
-                        trace.total_tokens
-                        - self.ctx.estimate_messages_tokens(removed),
+                        trace.total_tokens - self.ctx.estimate_messages_tokens(removed),
                     )
                 state["messages"] = messages
                 self._messages = messages
@@ -298,7 +332,7 @@ class PiAgent:
 
             # === LLM 调用 ===
             try:
-                resp = await self.client.chat.completions.create(
+                resp = await chat_with_retry(
                     model=DEEPSEEK_MODEL,
                     messages=messages,
                     tools=tools,
@@ -403,9 +437,7 @@ class PiAgent:
                                 "turns": len(trace.turns),
                                 "tools_used": trace.tools_used,
                                 "total_tokens": trace.total_tokens,
-                                "elapsed": round(
-                                    time.time() - trace.start_time, 1
-                                ),
+                                "elapsed": round(time.time() - trace.start_time, 1),
                                 "steps": [
                                     {
                                         "turn": t.index + 1,
@@ -429,9 +461,7 @@ class PiAgent:
                             json.dumps({"tool": tool_name, "args": tool_args}),
                         )
                         if hr.block:
-                            tool_result = (
-                                f"工具 {tool_name} 被安全策略拦截: {hr.block_reason}"
-                            )
+                            tool_result = f"工具 {tool_name} 被安全策略拦截: {hr.block_reason}"
                             turn.tool_success = False
                         elif self.enable_tool_check:
                             safe, reason = self.tool_mgr.security_check(
@@ -445,9 +475,7 @@ class PiAgent:
                     if tool_result is None and tool_def is not None:
                         # DeepSeek 审查 #6: 用剩余时间做超时保护, 工具卡住可中止
                         try:
-                            remaining = self.max_time - (
-                                time.time() - trace.start_time
-                            )
+                            remaining = self.max_time - (time.time() - trace.start_time)
                             if remaining <= 0:
                                 tool_result = "任务超时, 跳过工具执行"
                                 turn.tool_success = False
@@ -487,9 +515,7 @@ class PiAgent:
                     self._fire_hook(
                         "after_tool",
                         state,
-                        json.dumps(
-                            {"tool": tool_name, "success": turn.tool_success}
-                        ),
+                        json.dumps({"tool": tool_name, "success": turn.tool_success}),
                     )
 
                     # 记录调用
@@ -517,7 +543,7 @@ class PiAgent:
                         _cont.append(
                             {"role": "user", "content": "（回答被截断，请从断点继续，不要重复已写内容）"}
                         )
-                        _r2 = await self.client.chat.completions.create(
+                        _r2 = await chat_with_retry(
                             model=DEEPSEEK_MODEL,
                             messages=messages + _cont,
                             temperature=AGENT_TEMPERATURE,
@@ -674,9 +700,8 @@ class PiAgent:
 
             lessons = get_failure_lessons()
             if lessons:
-                lessons_txt = (
-                    "\n\n【历史反馈教训（用户对下列问题类型给过低分，务必避免同类错误）】\n"
-                    + "\n".join(f"- {l}" for l in lessons)
+                lessons_txt = "\n\n【历史反馈教训（用户对下列问题类型给过低分，务必避免同类错误）】\n" + "\n".join(
+                    f"- {l}" for l in lessons
                 )
         except Exception:
             pass

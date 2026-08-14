@@ -12,6 +12,14 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parent
 load_dotenv(PROJECT_ROOT / ".env")
 
+# HF/Transformers 强制离线: 所有模型本地缓存, 禁止联网检查。
+# 修复: 以前只在 embedder.py 设 HF_HUB_OFFLINE, 任何不先 import embedder 的模型加载
+# (如 reranker) 都会尝试连 huggingface.co → 本机网络抖, 挂起 30-60s。config 被所有模块先导入,
+# 在此全局设默认值 (尊重用户显式 env 覆盖)。
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+
 
 def _env(name: str, default, cast=str):
     """读环境变量; 缺失/非法时回退默认。统一 cast, 消除 os.getenv 样板。"""
@@ -43,6 +51,14 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = _env("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 DEEPSEEK_MODEL = _env("DEEPSEEK_MODEL", "deepseek-v4-pro")
 
+# LLM 容错 (企业级第一条: 单点故障容错)。单 DeepSeek 端点抖动即失败 →
+# 超时 + 指数退避重试 + 可选降级模型。fallback 三项留空 = 不降级 (仅重试)。
+LLM_TIMEOUT = _env("LLM_TIMEOUT", 60, int)
+LLM_MAX_RETRIES = _env("LLM_MAX_RETRIES", 2, int)
+DEEPSEEK_FALLBACK_MODEL = _env("DEEPSEEK_FALLBACK_MODEL", "", str)
+DEEPSEEK_FALLBACK_BASE_URL = _env("DEEPSEEK_FALLBACK_BASE_URL", "", str)
+DEEPSEEK_FALLBACK_API_KEY = os.getenv("DEEPSEEK_FALLBACK_API_KEY", "")
+
 # ===================================================================
 # Embedding (本地模型)
 # ===================================================================
@@ -63,6 +79,8 @@ RERANK_STAGE1_MODEL = _env("RERANK_STAGE1_MODEL", "all-MiniLM-L6-v2")
 # ===================================================================
 ENABLE_VISION = _env_bool("ENABLE_VISION", False)
 VISION_MODEL = _env("VISION_MODEL", "qwen-vl-max")
+# 学术范围白名单闸门 (锁定用户只能问论文/学术相关问题, 默认开启)
+SCOPE_GATE_ENABLED = _env_bool("SCOPE_GATE_ENABLED", True)
 VISION_API_KEY = os.getenv("VISION_API_KEY", "")
 VISION_BASE_URL = _env(
     "VISION_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -175,13 +193,19 @@ AGENT_CONTEXT_RESERVE_TOKENS = _env("AGENT_CONTEXT_RESERVE_TOKENS", 8192, int)
 # Agent 反思重试闭环 (loop-engineering 第一环): 直答后轻量自批判,
 # 答案不完整 → 带批判意见重试一轮 (有界, 最多 1 次)。false=关闭 (省一次 LLM 调用)。
 AGENT_REFLEXION_ENABLED = _env_bool("AGENT_REFLEXION_ENABLED", True)
+# Agent 可选 plan 阶段 (loop-engineering 规划层): 长任务先让 LLM 拆 3-6 步计划
+# 再执行, 防纯 ReAct 长任务 (整篇论文) 跑偏。仅对长度 ≥ 阈值的任务触发 (短问答不规划省延迟)。
+AGENT_PLAN_ENABLED = _env_bool("AGENT_PLAN_ENABLED", True)
+AGENT_PLAN_MIN_CHARS = _env("AGENT_PLAN_MIN_CHARS", 60, int)
 
 # Hook BEFORE_EMIT 敏感词表 (空列表 = 不拦截)。默认仅保留高危命令类,
 # 不含 "execute arbitrary code" 等学术安全论文常见词组 (避免误杀)。
 HOOK_SENSITIVE_WORDS = _env_list("HOOK_SENSITIVE_WORDS", ["rm -rf /", "DROP TABLE"])
 # 工具安全: 非白名单域名是否直接阻止 (True = 严格模式; 默认 False 仅告警,
 # 避免阻断出版商等非白名单合法下载源)
-TOOL_SECURITY_BLOCK_NON_WHITELIST = _env_bool("TOOL_SECURITY_BLOCK_NON_WHITELIST", False)
+TOOL_SECURITY_BLOCK_NON_WHITELIST = _env_bool(
+    "TOOL_SECURITY_BLOCK_NON_WHITELIST", False
+)
 
 # ===================================================================
 # Upload / Download 资源限制 (DeepSeek 审查 #14/#15)
@@ -194,9 +218,15 @@ DOWNLOAD_CONCURRENCY = _env("DOWNLOAD_CONCURRENCY", 3, int)
 # ===================================================================
 # Conversation Memory
 # ===================================================================
-MEMORY_MAX_RECENT = _env("MEMORY_MAX_RECENT", 5, int)  # max recent turns kept in full text
-MEMORY_HISTORY_TURNS = _env("MEMORY_HISTORY_TURNS", 8, int)  # max history turns sent to LLM
-MEMORY_KG_HISTORY_TURNS = _env("MEMORY_KG_HISTORY_TURNS", 4, int)  # max history turns for KB mode
+MEMORY_MAX_RECENT = _env(
+    "MEMORY_MAX_RECENT", 5, int
+)  # max recent turns kept in full text
+MEMORY_HISTORY_TURNS = _env(
+    "MEMORY_HISTORY_TURNS", 8, int
+)  # max history turns sent to LLM
+MEMORY_KG_HISTORY_TURNS = _env(
+    "MEMORY_KG_HISTORY_TURNS", 4, int
+)  # max history turns for KB mode
 
 # ===================================================================
 # Rate Limiting
@@ -212,7 +242,9 @@ QUOTA_FREE_TOKENS = _env("QUOTA_FREE_TOKENS", 100_000, int)  # 免费额度 (LLM
 # Stripe 支付 (真实收款: 充值配额)
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
-STRIPE_PRICE_PER_1000_TOKENS = _env("STRIPE_PRICE_PER_1000_TOKENS", 0.05, float)  # $ / 千 token
+STRIPE_PRICE_PER_1000_TOKENS = _env(
+    "STRIPE_PRICE_PER_1000_TOKENS", 0.05, float
+)  # $ / 千 token
 
 # ===================================================================
 # CORS
@@ -224,7 +256,9 @@ CORS_ORIGINS = _env_list(
 # ===================================================================
 # Frontend Model Options
 # ===================================================================
-AVAILABLE_LLM_MODELS = _env_list("AVAILABLE_LLM_MODELS", ["deepseek-v4-pro", "deepseek-v4-flash"])
+AVAILABLE_LLM_MODELS = _env_list(
+    "AVAILABLE_LLM_MODELS", ["deepseek-v4-pro", "deepseek-v4-flash"]
+)
 AVAILABLE_VISION_MODELS = _env_list(
     "AVAILABLE_VISION_MODELS", ["qwen-vl-max", "qwen-vl-plus", "glm-4v"]
 )
@@ -294,10 +328,18 @@ RERANK_LIGHT_INTENT_MAX = _env("RERANK_LIGHT_INTENT_MAX", 0.79, float)
 # Adaptive Retrieval Parameters
 # ===================================================================
 # _compute_adaptive_weight coefficients
-ADAPTIVE_SHORT_QUERY_BOOST = _env("ADAPTIVE_SHORT_QUERY_BOOST", 0.2, float)  # <15 chars → BM25 boost
-ADAPTIVE_ACRONYM_BOOST = _env("ADAPTIVE_ACRONYM_BOOST", 0.15, float)  # acronyms → BM25 boost
-ADAPTIVE_QUESTION_PENALTY = _env("ADAPTIVE_QUESTION_PENALTY", -0.15, float)  # question-form → BM25 penalty
-ADAPTIVE_LONG_QUERY_PENALTY = _env("ADAPTIVE_LONG_QUERY_PENALTY", -0.1, float)  # >40 chars → BM25 penalty
+ADAPTIVE_SHORT_QUERY_BOOST = _env(
+    "ADAPTIVE_SHORT_QUERY_BOOST", 0.2, float
+)  # <15 chars → BM25 boost
+ADAPTIVE_ACRONYM_BOOST = _env(
+    "ADAPTIVE_ACRONYM_BOOST", 0.15, float
+)  # acronyms → BM25 boost
+ADAPTIVE_QUESTION_PENALTY = _env(
+    "ADAPTIVE_QUESTION_PENALTY", -0.15, float
+)  # question-form → BM25 penalty
+ADAPTIVE_LONG_QUERY_PENALTY = _env(
+    "ADAPTIVE_LONG_QUERY_PENALTY", -0.1, float
+)  # >40 chars → BM25 penalty
 ADAPTIVE_SHORT_THRESHOLD = _env("ADAPTIVE_SHORT_THRESHOLD", 15, int)
 ADAPTIVE_LONG_THRESHOLD = _env("ADAPTIVE_LONG_THRESHOLD", 40, int)
 ADAPTIVE_DEFAULT_ALPHA = _env("ADAPTIVE_DEFAULT_ALPHA", 0.5, float)  # balanced default
@@ -318,8 +360,12 @@ IMAGE_FILTER_SKIP_FIRST_PAGE = _env_bool("IMAGE_FILTER_SKIP_FIRST_PAGE", True)
 IMAGE_FILTER_SKIP_LAST_PAGE = _env_bool("IMAGE_FILTER_SKIP_LAST_PAGE", True)
 IMAGE_FILTER_EDGE_MARGIN_RATIO = _env("IMAGE_FILTER_EDGE_MARGIN_RATIO", 0.30, float)
 # Stage 3: 颜色复杂度 — 单调色 (logo/图标/分割线) 跳过
-IMAGE_FILTER_MIN_COLORS_MODE = _env("IMAGE_FILTER_MIN_COLORS_MODE", "quantize")  # "quantize" | "histogram"
-IMAGE_FILTER_MAX_WHITESPACE_RATIO = _env("IMAGE_FILTER_MAX_WHITESPACE_RATIO", 0.85, float)
+IMAGE_FILTER_MIN_COLORS_MODE = _env(
+    "IMAGE_FILTER_MIN_COLORS_MODE", "quantize"
+)  # "quantize" | "histogram"
+IMAGE_FILTER_MAX_WHITESPACE_RATIO = _env(
+    "IMAGE_FILTER_MAX_WHITESPACE_RATIO", 0.85, float
+)
 # Stage 4: 去重 (同一论文内相似图只保留一张)
 IMAGE_FILTER_DEDUPLICATE = _env_bool("IMAGE_FILTER_DEDUPLICATE", True)
 IMAGE_DEDUP_SIMILARITY_THRESHOLD = _env("IMAGE_DEDUP_SIMILARITY_THRESHOLD", 0.92, float)
@@ -423,7 +469,9 @@ CN_TOKENIZATION_TOP_K = _env("CN_TOKENIZATION_TOP_K", 5, int)
 # Query Expansion — 自适应语义校验阈值
 # ===================================================================
 # 基础阈值 (原 EXPANSION_SIMILARITY_THRESHOLD)
-EXPANSION_SIMILARITY_THRESHOLD_BASE = _env("EXPANSION_SIMILARITY_THRESHOLD_BASE", 0.75, float)
+EXPANSION_SIMILARITY_THRESHOLD_BASE = _env(
+    "EXPANSION_SIMILARITY_THRESHOLD_BASE", 0.75, float
+)
 # 自适应调整: 短查询 (<10字) → 更严格 (0.85), 长查询 (>50字) → 更宽松 (0.60)
 EXPANSION_SIMILARITY_ADAPTIVE = {
     "short": {"threshold": 0.85, "max_len": 10},

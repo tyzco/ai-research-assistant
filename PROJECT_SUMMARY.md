@@ -55,7 +55,7 @@ Agent: pi_agent (Hook 驱动) / research_team (13 Agent)
 **12 演示模块**（`demo/`，独立可跑、真实调用、可串联）：
 检索/研究空白/建库/问答/Agent/团队/写作/质量/审稿/自我进化/主动路由/引用链
 
-**8 份文档**（`docs/`）：
+**11 份文档**（`docs/`）：
 | 文档 | 作用 |
 |---|---|
 | `PITCH_FACTS.md` | 宣传怎么说、什么不能说（面试/融资）|
@@ -63,6 +63,9 @@ Agent: pi_agent (Hook 驱动) / research_team (13 Agent)
 | `DELIVERY.md` | 交付状态 + 启动 |
 | `SELF_EVOLUTION.md` | 自我进化三环 |
 | `REVIEW_DEEPSEEK.md` | 链接驱动修复清单 |
+| `AGENT_ENGINEERING.md` | Agent 工程原理 × 本项目落地对照手册（面试/技术答辩）|
+| `GAP_AUDIT.md` | 未实现项重新审视（忘了做/替代/故意不做/预留）|
+| `BLUE_OCEAN.md` | 蓝海定位 + 冷启动路径（研究记忆伴侣 MVP 边界/PMF 验证）|
 | `DEMO_SCRIPT.md` / `ARCHITECTURE.md` / `COMPETITIVE_ANALYSIS.md` | 演示/架构/竞品 |
 
 **诚实数据**：检索基准 MRR 0.72 / R@top5 0.78（43 篇 / 30 题 / 5 主题，`data/benchmark_report.json`）

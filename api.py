@@ -66,6 +66,17 @@ async def startup_preload():
 
     logger = logging.getLogger("startup")
 
+    # 生产配置校验 (企业级: 启动即暴露缺失配置, 而非等用户请求才 500)
+    from config import DEEPSEEK_API_KEY, JWT_SECRET_KEY
+
+    if not DEEPSEEK_API_KEY:
+        logger.error(
+            "DEEPSEEK_API_KEY 未配置! 所有 LLM 端点 (/chat /ask /agent) 将失败。"
+            " 复制 .env.example 为 .env 并填入密钥。"
+        )
+    if "development-key" in JWT_SECRET_KEY or "change-me" in JWT_SECRET_KEY:
+        logger.warning("JWT_SECRET_KEY 仍为默认值, 生产环境必须改为随机字符串 (否则可伪造 token)。")
+
     def _do_preload():
         try:
             from embedder import _get_embed_model
@@ -141,11 +152,7 @@ async def rate_limit_middleware(request: Request, call_next):
 
     # 定期清理不活跃 IP, 防止 _rate_limiter 内存无限增长
     if len(_rate_limiter) > 1024:
-        stale = [
-            k
-            for k, v in _rate_limiter.items()
-            if not v or now - v[-1] > 60.0
-        ]
+        stale = [k for k, v in _rate_limiter.items() if not v or now - v[-1] > 60.0]
         for k in stale:
             _rate_limiter.pop(k, None)
 
@@ -196,6 +203,30 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
+async def _scope_gate(query: str):
+    """学术范围白名单: 非论文/学术问题 → 422 拒绝 (锁定工具用途, 防滥用)。
+
+    异步内嵌, 嵌入层经线程池不阻塞事件循环。可被 SCOPE_GATE_ENABLED=0 关闭。"""
+    from fastapi.responses import JSONResponse
+
+    from config import SCOPE_GATE_ENABLED
+
+    if not SCOPE_GATE_ENABLED:
+        return None
+    import asyncio
+
+    from scope_gate import gate_query
+
+    allowed, reason, level = await asyncio.to_thread(gate_query, query)
+    if allowed:
+        return None
+    logger.info(f"scope_gate reject ({level}): {str(query)[:50]}")
+    return JSONResponse(
+        status_code=422,
+        content={"detail": reason, "code": "SCOPE_REJECTED", "level": level},
+    )
+
+
 @app.get("/")
 async def root():
     return FileResponse(STATIC_DIR / "index.html")
@@ -208,7 +239,7 @@ async def health():
 
 @app.get("/ready")
 async def ready():
-    """K8s readiness probe：验证 SQLite + LanceDB 均可用。"""
+    """K8s readiness probe：验证 SQLite + LanceDB + DEEPSEEK_API_KEY 均可用。"""
     try:
         from database import get_db
 
@@ -223,6 +254,11 @@ async def ready():
         lancedb.connect(str(LANCEDB_DIR))
     except Exception as e:
         raise HTTPException(503, f"lancedb not ready: {e}")
+    # LLM 密钥缺失 → 核心功能不可用, 判未就绪 (这是生产最常见的"忘了配"故障)
+    from config import DEEPSEEK_API_KEY
+
+    if not DEEPSEEK_API_KEY:
+        raise HTTPException(503, "DEEPSEEK_API_KEY not configured")
     return {"status": "ready"}
 
 
@@ -526,12 +562,9 @@ async def _translate_cn_query(query: str) -> str:
                 pass
 
     try:
-        from openai import AsyncOpenAI
+        from llm_client import chat_with_retry
 
-        from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL
-
-        client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
-        resp = await client.chat.completions.create(
+        resp = await chat_with_retry(
             model=DEEPSEEK_MODEL,
             temperature=LLM_TRANSLATE_TEMPERATURE,
             max_tokens=LLM_TRANSLATE_MAX_TOKENS,
@@ -653,6 +686,8 @@ async def api_create_topic(
     """创建课题：本地关键词 + LLM翻译(非阻塞增强)。
     如果 topic 已存在（刷新页面恢复），保留已有策略和对话，不覆盖。"""
     query = sanitize_input(req.query)
+    if (blk := await _scope_gate(query)) is not None:
+        return blk
     # 写论文模式 (reuse_kb): 已有同名/相似且已建库的课题 → 直接复用, 跳过多源检索
     if req.reuse_kb:
         reused_tid = _find_kb_topic(query)
@@ -1118,6 +1153,37 @@ async def api_upload_pdf(
     }
 
 
+@app.post("/upload/data")
+async def api_upload_data(request: Request, user_id: str = Depends(get_current_user)):
+    """上传数据文件 (CSV/XLSX/JSON/TXT) 供 read_csv 等工具读取。
+    仅允许数据类扩展名, 存到 data_uploads/, 返回 filepath 供 agent 工具使用。"""
+    import re as _re
+    from pathlib import Path
+
+    form = await request.form()
+    file = form.get("file")
+    if not file or not getattr(file, "filename", ""):
+        raise HTTPException(400, "需要 file 字段")
+    allowed = {".csv", ".xlsx", ".xls", ".json", ".txt", ".tsv"}
+    ext = Path(file.filename).suffix.lower()
+    if ext not in allowed:
+        raise HTTPException(400, f"仅支持数据文件: {sorted(allowed)}")
+    content = await file.read()
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(400, "文件过大 (限 10MB)")
+    upload_dir = Path("data_uploads")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = _re.sub(r"[^\w\-\.]", "_", Path(file.filename).name)
+    dest = upload_dir / safe_name
+    dest.write_bytes(content)
+    return {
+        "ok": True,
+        "filepath": str(dest),
+        "filename": safe_name,
+        "size": len(content),
+    }
+
+
 @app.get("/topic_status/{topic_id}")
 async def api_topic_status(topic_id: str, user_id: str = Depends(get_current_user)):
     _assert_topic_access(topic_id, user_id)
@@ -1137,9 +1203,7 @@ async def api_topic_status(topic_id: str, user_id: str = Depends(get_current_use
     dl_failed = getattr(progress, "dl_failed", 0) if progress else 0
     return {
         "status": "ready" if ready else "building",
-        "progress": f"{uploaded} 篇论文, {total_images} 张图片"
-        if ready
-        else state.step,
+        "progress": f"{uploaded} 篇论文, {total_images} 张图片" if ready else state.step,
         "step": state.step,
         "current": current,
         "total": dl_total,
@@ -1156,17 +1220,12 @@ async def api_chat(request: Request):
     question = sanitize_input(req.get("question", ""))
     if not question:
         raise HTTPException(400, "需要 question 参数")
+    if (blk := await _scope_gate(question)) is not None:
+        return blk
     _quota_guard(request)  # 按量付费闸门: 超额 → 402
-    from openai import AsyncOpenAI
+    from config import DEEPSEEK_MODEL, MEMORY_HISTORY_TURNS
+    from llm_client import chat_with_retry
 
-    from config import (
-        DEEPSEEK_API_KEY,
-        DEEPSEEK_BASE_URL,
-        DEEPSEEK_MODEL,
-        MEMORY_HISTORY_TURNS,
-    )
-
-    client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
     history = req.get("history", [])
     msgs = []
     for h in (history or [])[-MEMORY_HISTORY_TURNS:]:
@@ -1174,7 +1233,7 @@ async def api_chat(request: Request):
         msgs.append({"role": role, "content": str(h.get("c", ""))[:400]})
     msgs.append({"role": "user", "content": question})
 
-    resp = await client.chat.completions.create(
+    resp = await chat_with_retry(
         model=DEEPSEEK_MODEL,
         temperature=LLM_GEN_TEMPERATURE,
         max_tokens=LLM_GEN_MAX_TOKENS,
@@ -1185,7 +1244,8 @@ async def api_chat(request: Request):
     answer = resp.choices[0].message.content.strip()
     # 按量付费: 记录本次 LLM 用量
     _quota_record(
-        request, "",
+        request,
+        "",
         (resp.usage.prompt_tokens if resp.usage else 0)
         + (resp.usage.completion_tokens if resp.usage else 0),
     )
@@ -1248,6 +1308,7 @@ def _find_semantic_similar_topic(query: str, threshold: float = 0.70):
         return None
     try:
         import numpy as np
+
         from embedder import embed_texts
     except Exception:
         return None
@@ -1323,6 +1384,8 @@ async def api_ask(req: AskRequest, user_id: str = Depends(get_current_user)):
     from qa_engine import ask_question
 
     question = sanitize_input(req.question)
+    if (blk := await _scope_gate(question)) is not None:
+        return blk
     table = _resolve_kb_table(req.topic_id)
 
     result = await ask_question(
@@ -1374,6 +1437,7 @@ async def api_feedback_stats():
 # - 多 agent 调研 → research_team (13 agent + 三审批闸门)
 # 前端统一走 /agent/pi。
 
+
 @app.post("/ask/stream")
 async def api_ask_stream(request: Request):
     """流式 RAG 问答：走 ask_question 完整检索链路，流式返回生成 token。"""
@@ -1384,6 +1448,8 @@ async def api_ask_stream(request: Request):
     question = sanitize_input(req.get("question", ""))
     if not topic_id or not question:
         raise HTTPException(400, "需要 topic_id 和 question")
+    if (blk := await _scope_gate(question)) is not None:
+        return blk
 
     table = _resolve_kb_table(topic_id)
 
@@ -1464,6 +1530,8 @@ async def api_ask_trace(request: Request):
     topic_id = req.get("topic_id", "")
     if not question:
         raise HTTPException(400, "需要 question 参数")
+    if (blk := await _scope_gate(question)) is not None:
+        return blk
 
     state = active_topics.get(topic_id) if topic_id else None
     kb_table = state.lancedb_table if state else None
@@ -1682,6 +1750,8 @@ async def api_agent_quick(request: Request):
     model = req.get("model", "") or DEEPSEEK_MODEL
     if not question:
         raise HTTPException(400, "需要 question 参数")
+    if (blk := await _scope_gate(question)) is not None:
+        return blk
 
     import lancedb
 
@@ -1713,15 +1783,11 @@ async def api_agent_quick(request: Request):
     ctx = "\n".join([r.get("text", "")[:500] for r in (res or list())[:3]])
 
     # 单次 DeepSeek 调用生成
-    from openai import AsyncOpenAI
-
-    from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL
-
-    client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+    from llm_client import chat_with_retry
 
     prompt = f"基于上下文简洁回答（100-200字）。如果信息不足请说明。\n上下文：{ctx}\n问题：{question}\n回答："
 
-    resp = await client.chat.completions.create(
+    resp = await chat_with_retry(
         model=model,
         temperature=LLM_QUICK_TEMPERATURE,
         max_tokens=LLM_QUICK_MAX_TOKENS,
@@ -1730,7 +1796,8 @@ async def api_agent_quick(request: Request):
     answer = resp.choices[0].message.content.strip()
     # 按量付费: 记录本次 LLM 用量
     _quota_record(
-        request, "",
+        request,
+        "",
         (resp.usage.prompt_tokens if resp.usage else 0)
         + (resp.usage.completion_tokens if resp.usage else 0),
     )
@@ -1749,6 +1816,8 @@ async def api_agent_pi(request: Request):
     task = sanitize_input(req.get("task", ""))
     if not task:
         raise HTTPException(400, "需要 task 参数")
+    if (blk := await _scope_gate(task)) is not None:
+        return blk
     _quota_guard(request)  # 按量付费闸门: 超额 → 402
 
     max_steps = req.get("max_steps", 20)
@@ -1786,6 +1855,8 @@ async def api_agent_pi_stream(request: Request):
     task = sanitize_input(req.get("task", ""))
     if not task:
         raise HTTPException(400, "需要 task 参数")
+    if (blk := await _scope_gate(task)) is not None:
+        return blk
     max_steps = req.get("max_steps", 20)
     max_time = req.get("max_time", 300)
     goal = req.get("goal", "")
@@ -1872,9 +1943,8 @@ async def api_agent_skills():
 async def api_suggest(topic_id: str = "", user_id: str = Depends(get_current_user)):
     """阶段感知主动建议: 预判用户在「选题→初稿」旅程的位置, 递上下一步。
     这是"知用户、预判下一步"的智能路由第一版。"""
-    from topic_manager import active_topics
-
     from suggestions import rank_candidates
+    from topic_manager import active_topics
 
     state = active_topics.get(topic_id) if topic_id else None
     if not state:
@@ -1984,13 +2054,13 @@ async def api_agent_tools_reload():
 
 # ===== 按量付费配额 (免费额度 → 用量追踪 → 充值) =====
 
+
 def _quota_key(request: Request, user_id: str = "") -> str:
     """配额记账键: 登录按 user_id, 匿名按 IP。"""
     from quota import get_user_key
 
-    ip = (
-        (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
-        or (request.client.host if request.client else "unknown")
+    ip = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip() or (
+        request.client.host if request.client else "unknown"
     )
     return get_user_key(user_id=user_id, ip=ip)
 
@@ -2037,9 +2107,12 @@ async def api_quota_topup(request: Request, user_id: str = Depends(get_current_u
 
 
 @app.post("/quota/checkout")
-async def api_quota_checkout(request: Request, user_id: str = Depends(get_current_user)):
+async def api_quota_checkout(
+    request: Request, user_id: str = Depends(get_current_user)
+):
     """创建 Stripe Checkout 会话 — 充值 tokens → 跳转 Stripe 托管支付页。"""
     import stripe
+
     from config import STRIPE_PRICE_PER_1000_TOKENS, STRIPE_SECRET_KEY
 
     if not STRIPE_SECRET_KEY:
@@ -2087,6 +2160,7 @@ async def api_quota_checkout(request: Request, user_id: str = Depends(get_curren
 async def stripe_webhook(request: Request):
     """Stripe webhook: 支付成功 (checkout.session.completed) → 按 metadata 给用户充值。"""
     import stripe
+
     from config import STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
 
     payload = await request.body()
@@ -2173,6 +2247,8 @@ async def api_team_start(request: Request):
     task = sanitize_input(req.get("task", ""))
     if not task:
         raise HTTPException(400, "需要 task 参数")
+    if (blk := await _scope_gate(task)) is not None:
+        return blk
     from agent.research_team import get_team
 
     team = get_team()  # 每次 start 独立实例, 不再全局单例互踩
@@ -2257,15 +2333,28 @@ async def api_export_paper(request: Request):
     return {"ok": True, "format": fmt, "filepath": filepath}
 
 
-@app.get("/export/download")
+@app.get("/file/download")
 async def api_export_download(filepath: str = ""):
-    """下载导出的论文文件。"""
+    """下载导出的论文文件 (仅限 data/exports/ 目录, 防路径穿越)。
+    路径用 /file/download 而非 /export/download: 避免被先注册的 GET /export/{topic_id} 路由遮蔽。"""
     from pathlib import Path
 
-    p = Path(filepath)
-    if not p.exists():
+    from exporter import EXPORT_DIR
+
+    if not filepath:
+        raise HTTPException(400, "缺少 filepath")
+    if Path(filepath).is_absolute():
+        raise HTTPException(400, "非法路径")
+    root = EXPORT_DIR.resolve()
+    target = Path(filepath).resolve()  # 相对 CWD 解析 (前端传 data/exports/xxx)
+    # 穿越防护: 目标必须位于导出目录内 (resolve 已去 .. / 符号链接逃逸)
+    if target != root and root not in target.parents:
+        raise HTTPException(403, "路径不在导出目录内")
+    if not target.exists() or not target.is_file():
         raise HTTPException(404, "文件不存在，请先调用 /export/paper 生成")
-    return FileResponse(p, filename=p.name, media_type="application/octet-stream")
+    return FileResponse(
+        target, filename=target.name, media_type="application/octet-stream"
+    )
 
 
 # ===== Zotero Bridge (借鉴 LitScribe + 生态衔接) =====
@@ -2319,6 +2408,8 @@ async def api_subscribe(request: Request):
     query = sanitize_input(req.get("query", ""))
     if not query:
         raise HTTPException(400, "需要 query 参数")
+    if (blk := await _scope_gate(query)) is not None:
+        return blk
     from integrations import subscribe_topic
 
     return subscribe_topic(

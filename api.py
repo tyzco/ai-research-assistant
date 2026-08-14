@@ -67,14 +67,18 @@ async def startup_preload():
     logger = logging.getLogger("startup")
 
     # 生产配置校验 (企业级: 启动即暴露缺失配置, 而非等用户请求才 500)
-    from config import DEEPSEEK_API_KEY, JWT_SECRET_KEY
+    import os
+
+    from config import DEEPSEEK_API_KEY
 
     if not DEEPSEEK_API_KEY:
         logger.error(
             "DEEPSEEK_API_KEY 未配置! 所有 LLM 端点 (/chat /ask /agent) 将失败。"
             " 复制 .env.example 为 .env 并填入密钥。"
         )
-    if "development-key" in JWT_SECRET_KEY or "change-me" in JWT_SECRET_KEY:
+    # JWT_SECRET_KEY 由 auth.py 直接从 env 读, 不在 config (修复: 原 from config import 崩启动)
+    _jwt = os.getenv("JWT_SECRET_KEY", "")
+    if "development-key" in _jwt or "change-me" in _jwt:
         logger.warning("JWT_SECRET_KEY 仍为默认值, 生产环境必须改为随机字符串 (否则可伪造 token)。")
 
     def _do_preload():

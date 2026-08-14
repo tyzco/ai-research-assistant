@@ -94,21 +94,32 @@ def _synth(topic: str, papers: list, n_papers: int) -> dict:
         }
 
 
-async def analyze_gap(topic: str, top_k: int = 15) -> dict:
+async def analyze_gap(topic: str, top_k: int = 15, progress_cb=None) -> dict:
     """选题 → 研究空白报告。返回 {topic, n_papers, papers, report}。
 
+    progress_cb: 可选 async 回调, 在关键里程碑调用 (供 SSE 流式进度推送)。
     检索失败时优雅降级: 返回空报告并标注, 不中断。
     """
     from search import search_papers_for_topic
 
+    async def _notify(msg: str) -> None:
+        if progress_cb:
+            try:
+                await progress_cb(msg)
+            except Exception:
+                pass
+
+    await _notify(f"正在检索「{topic}」相关文献…")
     papers = []
     try:
         papers = await search_papers_for_topic(topic)
     except Exception as e:
         logger.warning(f"Search failed for gap analysis: {e}")
 
+    await _notify(f"检索到 {len(papers)} 篇，正在综合分析研究空白…")
     meta = [p.model_dump() for p in papers[:top_k]] if papers else []
-    report = _synth(topic, meta, len(papers))
+    # _synth 是同步阻塞 (OpenAI sync client), 放线程池避免阻塞事件循环
+    report = await asyncio.to_thread(_synth, topic, meta, len(papers))
     return {
         "topic": topic,
         "n_papers": len(papers),

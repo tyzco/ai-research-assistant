@@ -1223,9 +1223,14 @@ async def api_topic_status(topic_id: str, user_id: str = Depends(get_current_use
 async def api_research_gap(request: Request, user_id: str = Depends(get_current_user)):
     """一键选题可行性判断 (蓝海钩子): 输入选题 → 真实检索 → 研究空白+可行性报告。
 
-    返回 {topic, n_papers, papers, report, markdown}。markdown 为格式化后的报告,
-    前端直接渲染。诚实声明: 报告基于检索到的文献, 不确定性已标注。
+    SSE 流式: 立即推送进度 (正在检索/检索到N篇), 最后推送完整报告。
+    解决「首次响应太久」——用户立刻看到反馈, 而非 30 秒白屏。
     """
+    import asyncio
+    import json as _json
+
+    from fastapi.responses import StreamingResponse
+
     req = await request.json()
     topic = sanitize_input(req.get("topic", ""))
     if not topic:
@@ -1235,9 +1240,34 @@ async def api_research_gap(request: Request, user_id: str = Depends(get_current_
     _quota_guard(request, user_id)
     from research_gap import _fmt, analyze_gap
 
-    result = await analyze_gap(topic)
-    result["markdown"] = _fmt(result)
-    return result
+    async def gen():
+        q: asyncio.Queue = asyncio.Queue()
+
+        async def progress_cb(msg: str):
+            await q.put(("status", msg))
+
+        async def worker():
+            try:
+                result = await analyze_gap(topic, progress_cb=progress_cb)
+                await q.put(("done", result))
+            except Exception as e:
+                await q.put(("error", str(e)))
+
+        task = asyncio.create_task(worker())
+        while True:
+            kind, payload = await q.get()
+            if kind == "status":
+                yield f"data: {_json.dumps({'event': 'status', 'message': payload}, ensure_ascii=False)}\n\n"
+            elif kind == "done":
+                markdown = _fmt(payload)
+                yield f"data: {_json.dumps({'event': 'done', 'markdown': markdown, 'n_papers': payload['n_papers']}, ensure_ascii=False)}\n\n"
+                break
+            else:  # error
+                yield f"data: {_json.dumps({'event': 'error', 'message': payload}, ensure_ascii=False)}\n\n"
+                break
+        await task
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
 
 
 @app.post("/chat")

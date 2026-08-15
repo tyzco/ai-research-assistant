@@ -13,7 +13,6 @@
 """
 
 import asyncio
-import json
 import logging
 import os
 
@@ -22,19 +21,15 @@ os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 logger = logging.getLogger(__name__)
 
-_SYNTH_PROMPT = """你是学术研究选题顾问。基于以下【检索到的真实文献】，对选题「{topic}」做研究空白与可行性分析。
-只输出 JSON，不要解释。要求：每个空白判断必须基于检索到的文献，并标注不确定性；宁可说"未覆盖/不确定"，也不编造空白。
+_SYNTH_PROMPT_MD = """你是学术研究选题顾问。基于以下【检索到的真实文献】，对选题「{topic}」做研究空白与可行性分析。
+直接输出 Markdown 报告（不要 JSON、不要额外解释），必须包含以下章节（用 ## 二级标题）：
+- ## 已有工作概览：1-2 句，基于真实文献
+- ## 已覆盖的子问题：列表，已充分研究的方向
+- ## 研究空白（候选方向）：每个空白写「方向 + 依据哪些文献/未覆盖哪方面 + 置信度(高/中/低)」
+- ## 可行性：数据可得性 / 方法成熟度 / 主要风险
+- ## 不确定性声明：检索局限（如"基于检索到的 N 篇，需扩大检索/人工复核确认"）
 
-输出格式:
-{{
-  "existing_summary": "已有工作概览（1-2 句，基于真实文献）",
-  "covered_areas": ["已充分研究的子问题", ...],
-  "research_gaps": [
-    {{"gap": "候选空白方向", "evidence": "基于哪些文献/未覆盖哪方面", "confidence": "高|中|低"}}
-  ],
-  "feasibility": {{"data": "数据可得性", "method": "方法成熟度", "risk": "主要风险"}},
-  "uncertainty": "检索局限与不确定性声明（如: 本分析基于检索到的 N 篇, 需扩大检索/加人工复核确认）"
-}}
+要求：每个空白判断必须基于检索到的文献，并标注不确定性；宁可说"未覆盖/不确定"，也不编造空白。
 
 【检索到的文献】
 {papers}
@@ -43,7 +38,7 @@ _SYNTH_PROMPT = """你是学术研究选题顾问。基于以下【检索到的�
 """
 
 
-def _synth(topic: str, papers: list, n_papers: int) -> dict:
+def _papers_txt(papers: list) -> str:
     lines = []
     for i, p in enumerate(papers[:15], 1):
         lines.append(
@@ -54,48 +49,45 @@ def _synth(topic: str, papers: list, n_papers: int) -> dict:
                 else ""
             )
         )
-    papers_txt = "\n".join(lines) or "（检索无结果）"
-    prompt = _SYNTH_PROMPT.format(topic=topic, papers=papers_txt, n_papers=n_papers)
-    try:
-        from openai import OpenAI
+    return "\n".join(lines) or "（检索无结果）"
 
-        from config import (
-            DEEPSEEK_API_KEY,
-            DEEPSEEK_BASE_URL,
-            DEEPSEEK_FALLBACK_API_KEY,
-            LLM_STRATEGY_MAX_TOKENS,
-            RESEARCH_GAP_MODEL,
-        )
 
-        # 选题判断钩子用 pro 模型 + pro key (兜底 key 优先), flash 省钱留给后台/推送
-        _gap_key = DEEPSEEK_FALLBACK_API_KEY or DEEPSEEK_API_KEY
-        client = OpenAI(api_key=_gap_key, base_url=DEEPSEEK_BASE_URL)
-        resp = client.chat.completions.create(
-            model=RESEARCH_GAP_MODEL,
+async def _synthesize(topic: str, papers: list, stream: bool = False):
+    """生成 markdown 报告 (用 llm_client flash 模型 + 高上限避免截断)。
+
+    stream=True → 返回 async generator 逐 token (供 SSE 逐字推送);
+    stream=False → 返回完整 markdown 字符串。
+    """
+    from config import DEEPSEEK_MODEL
+    from llm_client import get_client
+
+    prompt = _SYNTH_PROMPT_MD.format(topic=topic, papers=_papers_txt(papers))
+    client = get_client()
+
+    async def _gen():
+        resp = await client.chat.completions.create(
+            model=DEEPSEEK_MODEL,
             temperature=0.3,
-            max_tokens=LLM_STRATEGY_MAX_TOKENS,
+            max_tokens=4096,  # 高上限, 避免报告截断
             messages=[{"role": "user", "content": prompt}],
+            stream=True,
             extra_body={"thinking": {"type": "disabled"}},
-            timeout=60,
         )
-        raw = resp.choices[0].message.content or ""
-        data = json.loads(raw[raw.find("{") : raw.rfind("}") + 1])
-        if not isinstance(data, dict):
-            raise ValueError("non-dict")
-        return data
-    except Exception as e:
-        logger.warning(f"Gap synthesis failed: {e}")
-        return {
-            "existing_summary": "文献检索结果见上，LLM 综合不可用",
-            "covered_areas": [],
-            "research_gaps": [],
-            "feasibility": {},
-            "uncertainty": "LLM 综合失败，请人工判断",
-        }
+        async for chunk in resp:
+            if chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+
+    if stream:
+        return _gen()
+
+    full = []
+    async for token in _gen():
+        full.append(token)
+    return "".join(full).strip()
 
 
 async def analyze_gap(topic: str, top_k: int = 15, progress_cb=None) -> dict:
-    """选题 → 研究空白报告。返回 {topic, n_papers, papers, report}。
+    """选题 → 研究空白报告 (markdown)。返回 {topic, n_papers, papers, report, markdown}。
 
     progress_cb: 可选 async 回调, 在关键里程碑调用 (供 SSE 流式进度推送)。
     检索失败时优雅降级: 返回空报告并标注, 不中断。
@@ -118,47 +110,51 @@ async def analyze_gap(topic: str, top_k: int = 15, progress_cb=None) -> dict:
 
     await _notify(f"检索到 {len(papers)} 篇，正在综合分析研究空白…")
     meta = [p.model_dump() for p in papers[:top_k]] if papers else []
-    # _synth 是同步阻塞 (OpenAI sync client), 放线程池避免阻塞事件循环
-    report = await asyncio.to_thread(_synth, topic, meta, len(papers))
+    try:
+        markdown = await _synthesize(topic, meta, stream=False)
+    except Exception as e:
+        logger.exception(f"Gap synthesis failed: {e}")
+        markdown = f"## 检索结果\n检索到 {len(papers)} 篇文献。LLM 综合失败，请稍后重试或人工判断。"
     return {
         "topic": topic,
         "n_papers": len(papers),
         "papers": meta,
-        "report": report,
+        "report": markdown,
+        "markdown": markdown,
     }
 
 
-def _fmt(report: dict) -> str:
-    r = report.get("report", {})
-    lines = [
-        "## 已有工作概览",
-        r.get("existing_summary", ""),
-        "\n## 已覆盖的子问题",
-    ]
-    lines += ["- " + a for a in r.get("covered_areas", [])] or ["- （无）"]
-    lines.append("\n## 研究空白（候选方向）")
-    for g in r.get("research_gaps", []):
-        lines.append(
-            f"- {g.get('gap','')} —— 依据: {g.get('evidence','')} · 置信度: {g.get('confidence','')}"
-        )
-    if not r.get("research_gaps"):
-        lines.append("- （未识别到明确空白，需扩大检索/人工判断）")
-    f = r.get("feasibility", {})
-    lines += [
-        "\n## 可行性",
-        f"- 数据: {f.get('data','')}",
-        f"- 方法: {f.get('method','')}",
-        f"- 风险: {f.get('risk','')}",
-        "\n## 不确定性声明",
-        r.get("uncertainty", ""),
-    ]
-    return "\n".join(lines)
+async def stream_analyze(topic: str, top_k: int = 15):
+    """流式选题分析: async generator, yield (kind, payload)。
+
+    kind ∈ {status, token, done, error}。供 SSE 端点逐块推送 (进度 + 逐字报告)。
+    """
+    from search import search_papers_for_topic
+
+    yield ("status", f"正在检索「{topic}」相关文献…")
+    papers = []
+    try:
+        papers = await search_papers_for_topic(topic)
+    except Exception as e:
+        logger.warning(f"Search failed: {e}")
+
+    yield ("status", f"检索到 {len(papers)} 篇，正在综合分析研究空白…")
+    meta = [p.model_dump() for p in papers[:top_k]] if papers else []
+    try:
+        gen = await _synthesize(topic, meta, stream=True)
+        async for token in gen:
+            yield ("token", token)
+    except Exception as e:
+        logger.exception(f"Synthesis failed: {e}")
+        yield ("error", "分析失败，请稍后重试")
+        return
+    yield ("done", len(papers))
 
 
 async def _main(topic: str):
     res = await analyze_gap(topic)
     print(f"选题: {res['topic']}  ·  检索 {res['n_papers']} 篇\n")
-    print(_fmt(res))
+    print(res["markdown"])
 
 
 if __name__ == "__main__":

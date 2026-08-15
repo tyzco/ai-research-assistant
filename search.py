@@ -75,7 +75,7 @@ _STRATEGY_CACHE: dict[str, tuple[float, dict]] = {}
 _SEARCH_CACHE: dict[str, tuple[float, list]] = {}
 _CACHE_FILE = _Path(__file__).resolve().parent / "data" / "search_cache.json"
 _STRATEGY_TTL = 3600  # 策略缓存 1 小时
-_SEARCH_TTL = 600     # 搜索结果缓存 10 分钟
+_SEARCH_TTL = 600  # 搜索结果缓存 10 分钟
 _CACHE_MAX = 100
 
 
@@ -120,7 +120,9 @@ def _save_caches():
             },
         }
         _CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _CACHE_FILE.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        _CACHE_FILE.write_text(
+            json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+        )
     except Exception:
         pass
 
@@ -135,9 +137,7 @@ async def generate_search_strategy(query: str) -> dict:
     if cached is not None:
         # 缓存里的旧坏策略 (英文关键词混中文) 也做校验过滤
         en = cached.get("keywords_en", [])
-        en_clean = [
-            k for k in en if k and not any(19968 <= ord(c) <= 40869 for c in k)
-        ]
+        en_clean = [k for k in en if k and not any(19968 <= ord(c) <= 40869 for c in k)]
         if en_clean:
             cached["keywords_en"] = en_clean
         logger.info("Strategy cache hit")
@@ -186,8 +186,7 @@ async def _generate_strategy_uncached(query: str) -> dict:
             # 过滤掉含中文的条目; 若全中文 → 视为策略失败, 触发重试
             en = parsed.get("keywords_en", [])
             en_clean = [
-                k for k in en
-                if k and not any(19968 <= ord(c) <= 40869 for c in k)
+                k for k in en if k and not any(19968 <= ord(c) <= 40869 for c in k)
             ]
             if not en_clean:
                 return None
@@ -214,7 +213,9 @@ async def _generate_strategy_uncached(query: str) -> dict:
         return parsed
 
     # 重试一次 (DeepSeek 审查 #2: 降低温度提高结构化输出稳定性)
-    logger.warning(f"Strategy JSON parse failed, retrying with lower temp: {text[:200]}")
+    logger.warning(
+        f"Strategy JSON parse failed, retrying with lower temp: {text[:200]}"
+    )
     try:
         retry = await client.chat.completions.create(
             model=DEEPSEEK_MODEL,
@@ -279,13 +280,21 @@ def _infer_source(p: PaperMeta) -> str:
 
 
 def _quality_score(p: PaperMeta, source: str = "") -> float:
-    """综合质量评分：来源可信度 + 引用数 + 年份加权。"""
+    """综合质量评分：来源可信度 + 引用数 + 年份加权。
+
+    年份项权重从 0.1 提到 0.5: 修复「结果总是旧论文」——原来引用数(最高40分)碾压年份,
+    导致 2003 高引旧文排在 2023 新文之前。0.5 让近期论文有真实竞争力, 又不淹没经典。
+    """
     # 来源权重：显式 source 优先，否则从 paper 推断 (修复硬编码 "other" 问题)
-    w = SOURCE_WEIGHTS.get(source) if source else SOURCE_WEIGHTS.get(_infer_source(p), 2)
+    w = (
+        SOURCE_WEIGHTS.get(source)
+        if source
+        else SOURCE_WEIGHTS.get(_infer_source(p), 2)
+    )
     # 引用数信号: 0~1000 → 0~5
     cit = p.citation_count or 0
     cit_signal = min(cit / 1000.0, 5.0)
-    return w * 10 + cit_signal * 8 + max(0, (p.year or 2000) - 2000) * 0.1
+    return w * 10 + cit_signal * 8 + max(0, (p.year or 2000) - 2000) * 0.5
 
 
 def _should_drop(p: PaperMeta) -> bool:
@@ -302,16 +311,17 @@ def _should_drop(p: PaperMeta) -> bool:
 
 # ---------- 论文搜索（并行 S2 + arXiv + CNKI 链接）----------
 
+
 async def _translate_cn_query(query: str) -> str:
     """中文学术语 → 英文检索词 (LLM 翻译 + 本地缓存)。无中文/失败返回空。"""
     if not any(19968 <= ord(c) <= 40869 for c in query):
         return ""
     from config import (
+        LLM_TRANSLATE_MAX_TOKENS,
+        LLM_TRANSLATE_TEMPERATURE,
+        LLM_TRANSLATE_TIMEOUT,
         TRANSLATION_CACHE_ENABLED,
         TRANSLATION_CACHE_FILE,
-        LLM_TRANSLATE_TEMPERATURE,
-        LLM_TRANSLATE_MAX_TOKENS,
-        LLM_TRANSLATE_TIMEOUT,
     )
 
     # 缓存
@@ -340,16 +350,16 @@ async def _translate_cn_query(query: str) -> str:
             messages=[
                 {
                     "role": "user",
-                    "content": (
-                        f"将以下中文学术术语翻译为英文检索关键词，只返回英文逗号分隔，不要解释：{query}"
-                    ),
+                    "content": (f"将以下中文学术术语翻译为英文检索关键词，只返回英文逗号分隔，不要解释：{query}"),
                 }
             ],
             timeout=LLM_TRANSLATE_TIMEOUT,
         )
         import re
 
-        result = re.sub(r"[^a-zA-Z0-9,\- ]", "", (resp.choices[0].message.content or ""))[:100]
+        result = re.sub(
+            r"[^a-zA-Z0-9,\- ]", "", (resp.choices[0].message.content or "")
+        )[:100]
         result = result.strip()
         if not result:
             return ""
@@ -396,9 +406,12 @@ async def search_papers_for_topic(
     # 搜索缓存: 同查询+关键词+联想词重复检索秒回 (跳过策略生成 + 12 源检索)
     _cache_key = (
         ((query or "").strip().lower() + "|")
-        + "|".join(sorted(keywords_en or [])) + "|"
-        + "|".join(sorted(keywords_cn or [])) + "|"
-        + "|".join(sorted(related_en or [])) + "|"
+        + "|".join(sorted(keywords_en or []))
+        + "|"
+        + "|".join(sorted(keywords_cn or []))
+        + "|"
+        + "|".join(sorted(related_en or []))
+        + "|"
         + "|".join(sorted(related_cn or []))
     )
     _cached = _cache_get(_SEARCH_CACHE, _cache_key, _SEARCH_TTL)
@@ -586,11 +599,10 @@ def _rerank_by_relevance(papers: list, query: str, top_k: int = 0) -> list:
         return papers
     try:
         import numpy as np
+
         from embedder import embed_texts
 
-        texts = [
-            (p.title or "")[:150] + " " + (p.abstract or "")[:600] for p in papers
-        ]
+        texts = [(p.title or "")[:150] + " " + (p.abstract or "")[:600] for p in papers]
         vecs = np.asarray(embed_texts([query] + texts))
         sims = vecs[1:] @ vecs[0]
         # 语义相似度归一化到 [0,1]
@@ -604,7 +616,9 @@ def _rerank_by_relevance(papers: list, query: str, top_k: int = 0) -> list:
         scores = 0.9 * sim_norm + 0.1 * cit_log
         # 知网占位条目沉底: 非真实论文, 只是 CNKI 跳转链接 (保留入口但不污染前列)
         for i, p in enumerate(papers):
-            if (p.title or "").startswith("[知网]") or (p.title or "").startswith("[CNKI]"):
+            if (p.title or "").startswith("[知网]") or (p.title or "").startswith(
+                "[CNKI]"
+            ):
                 scores[i] = -1.0
         ranked = sorted(zip(scores, papers), key=lambda x: -x[0])
         out = [p for _, p in ranked]
@@ -726,7 +740,7 @@ async def _search_arxiv(keywords: list[str]) -> list[PaperMeta]:
                         )
                     )
             except Exception:
-                logger.debug(f"source search failed", exc_info=True)
+                logger.debug("source search failed", exc_info=True)
             await asyncio.sleep(0.05)
     return papers
 
@@ -779,7 +793,7 @@ async def _search_openalex(keywords: list[str]) -> list[PaperMeta]:
                         )
                     )
             except Exception:
-                logger.debug(f"source search failed", exc_info=True)
+                logger.debug("source search failed", exc_info=True)
             await asyncio.sleep(0.1)
     return papers
 
@@ -827,7 +841,7 @@ async def _search_openalex_cn(keywords: list[str]) -> list[PaperMeta]:
                         )
                     )
             except Exception:
-                logger.debug(f"source search failed", exc_info=True)
+                logger.debug("source search failed", exc_info=True)
             await asyncio.sleep(0.1)
     return papers
 
@@ -891,13 +905,17 @@ async def _search_google_scholar_apify(keywords: list[str]) -> list[PaperMeta]:
                             title = item.get("title", "")
                             if not title:
                                 continue
-                            pid = hashlib.md5(f"gs_apify:{title}".encode()).hexdigest()[:16]
+                            pid = hashlib.md5(f"gs_apify:{title}".encode()).hexdigest()[
+                                :16
+                            ]
                             papers.append(
                                 PaperMeta(
                                     paper_id=pid,
                                     title=title,
                                     authors=item.get("authors", ""),
-                                    year=int(item.get("year", 0)) if item.get("year") else None,
+                                    year=int(item.get("year", 0))
+                                    if item.get("year")
+                                    else None,
                                     abstract=(item.get("description") or "")[:200],
                                     pdf_url=item.get("pdfUrl"),
                                     is_oa=bool(item.get("pdfUrl")),
@@ -959,7 +977,7 @@ async def _enrich_abstracts(papers: list[PaperMeta]) -> int:
                         p.abstract = abstract
                         return 1
             except Exception:
-                logger.debug(f"source search failed", exc_info=True)
+                logger.debug("source search failed", exc_info=True)
             return 0
 
         results = await asyncio.gather(
@@ -993,7 +1011,7 @@ async def _enrich_via_unpaywall(papers: list[PaperMeta]) -> int:
                         p.is_oa = True
                         return 1
             except Exception:
-                logger.debug(f"source search failed", exc_info=True)
+                logger.debug("source search failed", exc_info=True)
             return 0
 
         results = await asyncio.gather(
@@ -1038,7 +1056,7 @@ async def _search_core(keywords: list[str]) -> list[PaperMeta]:
                         )
                     )
             except Exception:
-                logger.debug(f"source search failed", exc_info=True)
+                logger.debug("source search failed", exc_info=True)
     return papers
 
 
@@ -1087,7 +1105,7 @@ async def _search_crossref(keywords: list[str]) -> list[PaperMeta]:
                         )
                     )
             except Exception:
-                logger.debug(f"source search failed", exc_info=True)
+                logger.debug("source search failed", exc_info=True)
     return papers
 
 
@@ -1131,7 +1149,7 @@ async def _search_doaj(keywords: list[str]) -> list[PaperMeta]:
                         )
                     )
             except Exception:
-                logger.debug(f"source search failed", exc_info=True)
+                logger.debug("source search failed", exc_info=True)
     return papers
 
 
@@ -1194,7 +1212,7 @@ async def _search_pubmed(keywords: list[str]) -> list[PaperMeta]:
                         )
                     )
             except Exception:
-                logger.debug(f"source search failed", exc_info=True)
+                logger.debug("source search failed", exc_info=True)
             await asyncio.sleep(0.35)  # NCBI rate limit: 3/sec without key
     return papers
 
@@ -1231,7 +1249,7 @@ async def _search_pwc(keywords: list[str]) -> list[PaperMeta]:
                         )
                     )
             except Exception:
-                logger.debug(f"source search failed", exc_info=True)
+                logger.debug("source search failed", exc_info=True)
     return papers
 
 
@@ -1276,5 +1294,5 @@ async def _search_epmc(keywords: list[str]) -> list[PaperMeta]:
                         )
                     )
             except Exception:
-                logger.debug(f"source search failed", exc_info=True)
+                logger.debug("source search failed", exc_info=True)
     return papers

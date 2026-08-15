@@ -62,8 +62,8 @@ def _papers_txt(papers: list) -> str:
 
 
 def _references_md(papers: list) -> str:
-    """参考文献清单: 每条带可点击 Markdown 链接。OA 优先直链 PDF, 否则 DOI/arXiv。"""
-    lines = ["\n## 参考文献（点击直达原文）"]
+    """参考文献清单: 每条带可点击链接 + 摘要预览 (不用点进去逐个看)。OA 优先直链 PDF, 否则 DOI/arXiv。"""
+    lines = ["\n## 参考文献（点击直达原文，附摘要预览）"]
     for i, p in enumerate(papers[:50], 1):
         title = (p.get("title") or "无标题")[:80]
         link = ""
@@ -74,9 +74,13 @@ def _references_md(papers: list) -> str:
         elif p.get("arxiv_id"):
             link = f"https://arxiv.org/abs/{p['arxiv_id']}"
         if link:
-            lines.append(f"[{i}] [{title}]({link}) ({p.get('year','')})")
+            line = f"[{i}] [{title}]({link}) ({p.get('year','')})"
         else:
-            lines.append(f"[{i}] {title} ({p.get('year','')}) · 闭源，需学校账号下载")
+            line = f"[{i}] {title} ({p.get('year','')}) · 闭源，需学校账号下载"
+        abstract = (p.get("abstract") or "").strip()[:120]
+        if abstract:
+            line += f"\n   > {abstract}"
+        lines.append(line)
     return "\n".join(lines)
 
 

@@ -213,7 +213,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','PingFang SC'
     <div id="suggestBar" style="font-size:11px;color:var(--muted);padding:2px 4px;margin-bottom:4px;display:none">💡 建议: <span id="suggestText"></span> <button class="chip" id="suggestGo" onclick="doSuggest(S._suggestAction)" style="display:none;font-size:11px;margin-left:6px">执行 →</button></div>
     <div id="actionBar" style="display:none;gap:8px;margin-bottom:6px">
       <button class="chip" onclick="nextSearch()" style="background:var(--brand);color:#fff;border-color:var(--brand);font-weight:600">🔍 搜索相关论文</button>
-      <button class="chip" onclick="nextWrite()">✍️ 辅助写初稿</button>
       <button class="chip" onclick="nextUpload()">📤 上传 PDF 建库</button>
     </div>
     <textarea id="ui" rows="1" placeholder="输入研究方向，先看这题值不值得做…" onkeydown="if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();X()}" oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px'" oncompositionstart="this.dataset.composing='1'" oncompositionend="this.dataset.composing='0'"></textarea>
@@ -456,7 +455,7 @@ function renderPapers(){
   var h = '<button onclick="window._papersVisible=false;var e=document.getElementById(\x27papers-panel\x27);if(e)e.remove()" style="float:right;background:none;border:none;color:var(--muted);cursor:pointer;font-size:20px">&times;</button>';
   h += '<div style="font-weight:600;font-size:13px;margin-bottom:8px">'+S.pps.length+' papers ('+oa+' OA downloadable)</div>';
   h += '<div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap"><button class="tag green" onclick="B()" style="cursor:pointer;font-size:11px;padding:5px 10px">Download & Build</button><button class="tag gray" onclick="copyDOIs()" style="cursor:pointer;font-size:11px;padding:5px 10px">Copy DOIs</button></div>';
-  h += '<div style="font-size:10px;color:var(--muted);background:var(--hover);border-radius:6px;padding:8px 10px;margin-bottom:10px;line-height:1.6"><b>Get PDFs:</b> <a href="https://sci-hub.se" target="_blank">Sci-Hub</a> · <a href="https://sci-hub.st" target="_blank">Mirror</a> · <a href="https://scholar.google.com" target="_blank">GS</a> · university proxy &rarr; drag PDF to upload</div>';
+  h += '<div style="font-size:10px;color:var(--muted);background:var(--hover);border-radius:6px;padding:8px 10px;margin-bottom:10px;line-height:1.6"><b>获取全文:</b> OA 论文可直接下载建库；闭源论文请用学校图书馆账号下载后拖拽上传（遵守版权，不碰盗版源）</div>';
   if (cn.length) { h += '<div class="cn-header">Chinese <span class="badge">'+cn.length+'</span></div>'; for(var i=0;i<Math.min(sh,cn.length);i++) h+=PR(cn[i]) }
   if (en.length) { var se = Math.max(0,sh-(cn.length?Math.min(sh,cn.length):0)); h += '<div class="en-header">English <span class="badge">'+en.length+'</span></div>'; for(var j=0;j<se;j++) h+=PR(en[j]) }
   if (S.pps.length>sh) h += '<div style="text-align:center;margin-top:6px"><button class="tag gray" onclick="S.pg++;renderPapers()" style="cursor:pointer;font-size:11px;padding:5px 14px">Load more ('+(S.pps.length-sh)+')</button></div>';

@@ -294,7 +294,7 @@ def _quality_score(p: PaperMeta, source: str = "") -> float:
     # 引用数信号: 0~1000 → 0~5
     cit = p.citation_count or 0
     cit_signal = min(cit / 1000.0, 5.0)
-    return w * 10 + cit_signal * 8 + max(0, (p.year or 2000) - 2000) * 0.5
+    return w * 10 + cit_signal * 8 + max(0, (p.year or 2000) - 2000) * 0.8
 
 
 def _should_drop(p: PaperMeta) -> bool:

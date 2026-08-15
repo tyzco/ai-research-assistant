@@ -80,6 +80,25 @@ def _references_md(papers: list) -> str:
     return "\n".join(lines)
 
 
+async def _fast_search(topic: str):
+    """快速检索: 跳过慢的 LLM 策略生成 (generate_search_strategy), 用缓存翻译。
+
+    降低首字延迟: generate_search_strategy 生成复杂 JSON (关键词/领域/提示) 慢,
+    这里只用缓存翻译 (中文→英文关键词) 直接喂给 search_papers_for_topic。
+    """
+    from search import _translate_cn_query, search_papers_for_topic
+
+    keywords_en = None
+    if any(19968 <= ord(c) <= 40869 for c in topic):  # 含中文 → 缓存翻译
+        try:
+            en_txt = await _translate_cn_query(topic)
+            if en_txt:
+                keywords_en = [k.strip() for k in en_txt.split(",") if k.strip()]
+        except Exception:
+            keywords_en = None
+    return await search_papers_for_topic(topic, keywords_en=keywords_en)
+
+
 async def _synthesize(topic: str, papers: list, stream: bool = False):
     """生成 markdown 报告 (用 llm_client flash 模型 + 高上限避免截断)。
 
@@ -120,7 +139,6 @@ async def analyze_gap(topic: str, top_k: int = 50, progress_cb=None) -> dict:
     progress_cb: 可选 async 回调, 在关键里程碑调用 (供 SSE 流式进度推送)。
     检索失败时优雅降级: 返回空报告并标注, 不中断。
     """
-    from search import search_papers_for_topic
 
     async def _notify(msg: str) -> None:
         if progress_cb:
@@ -132,7 +150,7 @@ async def analyze_gap(topic: str, top_k: int = 50, progress_cb=None) -> dict:
     await _notify(f"正在检索「{topic}」相关文献…")
     papers = []
     try:
-        papers = await search_papers_for_topic(topic)
+        papers = await _fast_search(topic)
     except Exception as e:
         logger.warning(f"Search failed for gap analysis: {e}")
 
@@ -158,12 +176,11 @@ async def stream_analyze(topic: str, top_k: int = 50):
 
     kind ∈ {status, token, done, error}。供 SSE 端点逐块推送 (进度 + 逐字报告)。
     """
-    from search import search_papers_for_topic
 
     yield ("status", f"正在检索「{topic}」相关文献…")
     papers = []
     try:
-        papers = await search_papers_for_topic(topic)
+        papers = await _fast_search(topic)
     except Exception as e:
         logger.warning(f"Search failed: {e}")
 

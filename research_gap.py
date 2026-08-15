@@ -61,6 +61,25 @@ def _papers_txt(papers: list) -> str:
     return "\n".join(lines) or "（检索无结果）"
 
 
+def _references_md(papers: list) -> str:
+    """参考文献清单: 每条带可点击 Markdown 链接。OA 优先直链 PDF, 否则 DOI/arXiv。"""
+    lines = ["\n## 参考文献（点击直达原文）"]
+    for i, p in enumerate(papers[:15], 1):
+        title = (p.get("title") or "无标题")[:80]
+        link = ""
+        if p.get("pdf_url"):
+            link = p["pdf_url"]
+        elif p.get("doi"):
+            link = f"https://doi.org/{p['doi']}"
+        elif p.get("arxiv_id"):
+            link = f"https://arxiv.org/abs/{p['arxiv_id']}"
+        if link:
+            lines.append(f"[{i}] [{title}]({link}) ({p.get('year','')})")
+        else:
+            lines.append(f"[{i}] {title} ({p.get('year','')}) · 闭源，需学校账号下载")
+    return "\n".join(lines)
+
+
 async def _synthesize(topic: str, papers: list, stream: bool = False):
     """生成 markdown 报告 (用 llm_client flash 模型 + 高上限避免截断)。
 
@@ -124,6 +143,7 @@ async def analyze_gap(topic: str, top_k: int = 15, progress_cb=None) -> dict:
     except Exception as e:
         logger.exception(f"Gap synthesis failed: {e}")
         markdown = f"## 检索结果\n检索到 {len(papers)} 篇文献。LLM 综合失败，请稍后重试或人工判断。"
+    markdown += _references_md(meta)
     return {
         "topic": topic,
         "n_papers": len(papers),
@@ -157,6 +177,7 @@ async def stream_analyze(topic: str, top_k: int = 15):
         logger.exception(f"Synthesis failed: {e}")
         yield ("error", "分析失败，请稍后重试")
         return
+    yield ("token", _references_md(meta))
     yield ("done", len(papers))
 
 

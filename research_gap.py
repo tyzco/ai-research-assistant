@@ -30,6 +30,7 @@ _SYNTH_PROMPT_MD = """你是学术研究选题顾问。基于以下【检索到�
 - ## 不确定性声明：检索局限（如"基于检索到的 N 篇，需扩大检索/人工复核确认"）
 
 要求：每个空白判断必须基于检索到的文献，并标注不确定性；宁可说"未覆盖/不确定"，也不编造空白。
+引用文献时用 [编号] 标注，并在首次提及时附上该文献的链接（Markdown 格式，方便点击直达原文）。
 
 【检索到的文献】
 {papers}
@@ -41,8 +42,16 @@ _SYNTH_PROMPT_MD = """你是学术研究选题顾问。基于以下【检索到�
 def _papers_txt(papers: list) -> str:
     lines = []
     for i, p in enumerate(papers[:15], 1):
+        link = ""
+        if p.get("doi"):
+            link = f"https://doi.org/{p['doi']}"
+        elif p.get("arxiv_id"):
+            link = f"https://arxiv.org/abs/{p['arxiv_id']}"
+        elif p.get("pdf_url"):
+            link = p["pdf_url"]
         lines.append(
             f"[{i}] {p.get('title','')} ({p.get('year','')}) · {p.get('source','')}"
+            + (f" · {link}" if link else "")
             + (
                 f"\n    abstract: {(p.get('abstract') or '')[:200]}"
                 if p.get("abstract")

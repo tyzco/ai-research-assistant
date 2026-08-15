@@ -41,7 +41,7 @@ _SYNTH_PROMPT_MD = """你是学术研究选题顾问。基于以下【检索到�
 
 def _papers_txt(papers: list) -> str:
     lines = []
-    for i, p in enumerate(papers[:15], 1):
+    for i, p in enumerate(papers[:50], 1):
         link = ""
         if p.get("doi"):
             link = f"https://doi.org/{p['doi']}"
@@ -64,7 +64,7 @@ def _papers_txt(papers: list) -> str:
 def _references_md(papers: list) -> str:
     """参考文献清单: 每条带可点击 Markdown 链接。OA 优先直链 PDF, 否则 DOI/arXiv。"""
     lines = ["\n## 参考文献（点击直达原文）"]
-    for i, p in enumerate(papers[:15], 1):
+    for i, p in enumerate(papers[:50], 1):
         title = (p.get("title") or "无标题")[:80]
         link = ""
         if p.get("pdf_url"):
@@ -114,7 +114,7 @@ async def _synthesize(topic: str, papers: list, stream: bool = False):
     return "".join(full).strip()
 
 
-async def analyze_gap(topic: str, top_k: int = 15, progress_cb=None) -> dict:
+async def analyze_gap(topic: str, top_k: int = 50, progress_cb=None) -> dict:
     """选题 → 研究空白报告 (markdown)。返回 {topic, n_papers, papers, report, markdown}。
 
     progress_cb: 可选 async 回调, 在关键里程碑调用 (供 SSE 流式进度推送)。
@@ -153,7 +153,7 @@ async def analyze_gap(topic: str, top_k: int = 15, progress_cb=None) -> dict:
     }
 
 
-async def stream_analyze(topic: str, top_k: int = 15):
+async def stream_analyze(topic: str, top_k: int = 50):
     """流式选题分析: async generator, yield (kind, payload)。
 
     kind ∈ {status, token, done, error}。供 SSE 端点逐块推送 (进度 + 逐字报告)。

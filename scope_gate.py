@@ -392,19 +392,19 @@ def gate_query(query: str, topic_mode: bool = False) -> tuple[bool, str, str]:
     if any(k in ql for k in NON_ACADEMIC_KEYWORDS):
         return False, _REASON, "rule_reject"
 
-    # L2 语义: 嵌入 margin (规则未覆盖的模糊请求)
+    # L2 语义: 嵌入 margin (规则未覆盖的模糊请求)。
+    # 放宽: fail-open —— 只有「明显非学术」(非学术分显著高于学术分) 才拒绝;
+    # 模糊/弱学术一律放行, 避免误杀「情感分析」这类合法选题。
     try:
         from embedder import embed_query
 
         qe = embed_query(q)
         acad = _max_sim(qe, _proto_emb("acad"))
         non = _max_sim(qe, _proto_emb("non"))
-        if acad - non >= MARGIN:
-            return True, "", "semantic_pass"
-        if acad >= ACAD_FLOOR and acad >= non:
-            return True, "", "semantic_pass"
-        # 非学术占优 或 学术太弱 → 拒绝 (白名单: 不明确即不放行)
-        return False, _REASON, "semantic_reject"
+        # 只有非学术明显占优才拒绝 (non - acad >= MARGIN); 其余一律放行
+        if non - acad >= MARGIN:
+            return False, _REASON, "semantic_reject"
+        return True, "", "semantic_pass"
     except Exception as e:
         # 降级: 嵌入不可用 → 规则闸兜底 (放行, 防服务不可用)
         logger.warning(f"scope_gate semantic layer unavailable: {e}")

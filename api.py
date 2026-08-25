@@ -763,6 +763,7 @@ async def api_create_topic(
                     query,
                     keywords_en=strategy.get("keywords_en"),
                     keywords_cn=strategy.get("keywords_cn"),
+                    user_id=user_id or "",
                 )
             except Exception:
                 pass
@@ -2482,11 +2483,10 @@ async def api_list_subscriptions():
 
 
 @app.get("/updates")
-async def api_updates():
-    """主动推送 (蓝海核心): 返回订阅的每日检索新进展 (最近有新论文的记录)。
+async def api_updates(user_id: str = Depends(get_current_user)):
+    """主动推送 (蓝海核心): 返回当前用户订阅的每日检索新进展 (最近有新论文的记录)。
 
-    前端在打开页面时调用, 若有新进展则提示「你的选题有新论文」——这正是
-    DeepSeek/谷歌学术给不了的东西: 系统主动告诉你该读什么。
+    多租户隔离: 只返回归属当前用户的订阅记录 (user_id 匹配), 匿名用户看不到他人数据。
     """
     import json
     from pathlib import Path
@@ -2498,7 +2498,12 @@ async def api_updates():
         entries = json.loads(log_file.read_text())
     except Exception:
         return {"updates": [], "total_new_papers": 0}
-    fresh = [e for e in entries if (e.get("new_papers") or 0) > 0]
+    # 只取当前用户的新进展 (匿名/无归属的记录不返回给已登录用户)
+    fresh = [
+        e
+        for e in entries
+        if (e.get("new_papers") or 0) > 0 and e.get("user_id", "") == (user_id or "")
+    ]
     fresh.sort(key=lambda e: e.get("time", ""), reverse=True)
     return {
         "updates": fresh[:10],

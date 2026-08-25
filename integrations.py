@@ -304,16 +304,18 @@ def subscribe_topic(
     keywords_en: list[str] = None,
     keywords_cn: list[str] = None,
     interval_hours: int = 24,
+    user_id: str = "",
 ) -> dict:
-    """订阅研究方向，设置自动检索频率。"""
+    """订阅研究方向，设置自动检索频率。user_id 用于多租户隔离 (跨用户不串数据)。"""
     data = _load_subscriptions()
-    # 幂等: 同 query 不重复订阅 (自动订阅时避免每建一次课题就加一条重复)
+    # 幂等: 同 (query, user_id) 不重复订阅
     for existing in data["subscriptions"]:
-        if existing["query"] == query:
+        if existing["query"] == query and existing.get("user_id", "") == user_id:
             return {"ok": True, "subscription": existing, "existing": True}
     sub = {
         "id": f"sub_{len(data['subscriptions']) + 1}",
         "query": query,
+        "user_id": user_id,
         "keywords_en": keywords_en or [],
         "keywords_cn": keywords_cn or [],
         "interval_hours": interval_hours,

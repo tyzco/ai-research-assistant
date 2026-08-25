@@ -52,6 +52,7 @@ async def _run_all_subscriptions_once():
                 {
                     "subscription_id": sub["id"],
                     "query": sub["query"],
+                    "user_id": sub.get("user_id", ""),
                     "time": now.isoformat(),
                     "new_papers": len(papers),
                     "status": "ok",
@@ -65,6 +66,7 @@ async def _run_all_subscriptions_once():
                 {
                     "subscription_id": sub.get("id", "?"),
                     "query": sub.get("query", "?"),
+                    "user_id": sub.get("user_id", ""),
                     "time": now.isoformat(),
                     "status": f"error: {e}",
                 }

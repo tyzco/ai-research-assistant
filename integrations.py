@@ -307,6 +307,10 @@ def subscribe_topic(
 ) -> dict:
     """订阅研究方向，设置自动检索频率。"""
     data = _load_subscriptions()
+    # 幂等: 同 query 不重复订阅 (自动订阅时避免每建一次课题就加一条重复)
+    for existing in data["subscriptions"]:
+        if existing["query"] == query:
+            return {"ok": True, "subscription": existing, "existing": True}
     sub = {
         "id": f"sub_{len(data['subscriptions']) + 1}",
         "query": query,

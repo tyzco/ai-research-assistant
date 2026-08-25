@@ -753,6 +753,21 @@ async def api_create_topic(
         import asyncio
 
         asyncio.create_task(_enhance())
+
+        # 主动推送 (蓝海核心): 自动订阅新课题, 后台每日检索新进展
+        async def _auto_subscribe():
+            try:
+                from integrations import subscribe_topic
+
+                subscribe_topic(
+                    query,
+                    keywords_en=strategy.get("keywords_en"),
+                    keywords_cn=strategy.get("keywords_cn"),
+                )
+            except Exception:
+                pass
+
+        asyncio.create_task(_auto_subscribe())
     return {"topic_id": state.topic_id, "strategy": strategy}
 
 
@@ -2464,6 +2479,31 @@ async def api_list_subscriptions():
     from integrations import list_subscriptions
 
     return {"subscriptions": list_subscriptions()}
+
+
+@app.get("/updates")
+async def api_updates():
+    """主动推送 (蓝海核心): 返回订阅的每日检索新进展 (最近有新论文的记录)。
+
+    前端在打开页面时调用, 若有新进展则提示「你的选题有新论文」——这正是
+    DeepSeek/谷歌学术给不了的东西: 系统主动告诉你该读什么。
+    """
+    import json
+    from pathlib import Path
+
+    log_file = Path("data/scheduler_log.json")
+    if not log_file.exists():
+        return {"updates": [], "total_new_papers": 0}
+    try:
+        entries = json.loads(log_file.read_text())
+    except Exception:
+        return {"updates": [], "total_new_papers": 0}
+    fresh = [e for e in entries if (e.get("new_papers") or 0) > 0]
+    fresh.sort(key=lambda e: e.get("time", ""), reverse=True)
+    return {
+        "updates": fresh[:10],
+        "total_new_papers": sum(e.get("new_papers", 0) for e in fresh),
+    }
 
 
 @app.delete("/subscribe/{sub_id}")

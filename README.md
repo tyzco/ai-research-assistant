@@ -22,12 +22,16 @@ PaperLink 是一个面向中文研究者的 **AI 学术研究伴侣**。核心�
 
 **技术底座**：自适应混合检索（BM25+向量 RRF + 两级级联重排 + 双语重排）、三层意图漏斗、自我进化三环（反思/反馈教训/技能记忆）、LLM 容错降级、学术白名单闸门 + SSRF/路径穿越防护。
 
+![PaperLink 界面](docs/screenshot.png)
+
+*「你的选题有新进展」——主动推送（蓝海差异化）：系统记住你的选题，每日检索新论文并主动告知。*
+
 ## 快速开始
 
 ```bash
 # 1. 克隆
 git clone https://github.com/tyzco/ai-research-assistant.git
-cd paperlink
+cd ai-research-assistant
 
 # 2. 配置
 cp .env.example .env

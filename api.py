@@ -960,7 +960,7 @@ async def api_download_bulk(request: Request, user_id: str = Depends(get_current
                 return None
 
         # 分批下载并逐批更新进度 (原 gather 并行一次性返回 → 进度卡 0/N 然后跳)
-        _urls = urls[:100]
+        _urls = urls[:500]
         _total = len(_urls)
         pdf_contents = []
         _B = 4  # 每批并发 4 篇

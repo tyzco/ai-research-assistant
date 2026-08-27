@@ -53,8 +53,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','PingFang SC'
 .msg{display:flex;flex-direction:column;align-items:flex-start}
 .msg.user{align-items:flex-end}
 .msg .card{max-width:88%;background:var(--card);border:1px solid var(--border);border-radius:16px;padding:16px 18px;font-size:13px;line-height:1.7;box-shadow:0 1px 2px rgba(0,0,0,.03),0 8px 24px color-mix(in srgb,var(--text) 4%,transparent);transition:border-color .15s}
-.u-actions{display:flex;gap:4px;margin-top:3px;opacity:0;transition:opacity .15s}
-.msg.user:hover .u-actions{opacity:1}
+.u-actions{display:flex;gap:4px;margin-top:3px}
 .u-actions button{background:none;border:none;color:var(--muted);cursor:pointer;font-size:11px;padding:2px 6px;border-radius:6px}
 .u-actions button:hover{background:var(--hover);color:var(--text)}
 .msg .card:hover{border-color:color-mix(in srgb,var(--brand) 35%,var(--border))}
@@ -393,7 +392,7 @@ async function FB(q,a,r){try{await fetch(A+'/feedback',{method:'POST',headers:{'
 function traceAsk(q){var url='/static/pipeline.html?q='+encodeURIComponent(q)+'&tid='+(S.tid||'');window.open(url,'_blank')}
 function CP(id){var el=document.getElementById(id);if(!el)return;var t=el.innerText;var ok=function(){var btn=document.querySelector('[data-cp="'+id+'"]');if(btn){btn.innerHTML='✅ 已复制';setTimeout(function(){btn.innerHTML='📋 复制'},1500)}};if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(ok).catch(function(){_fbCopy(t);ok()})}else{_fbCopy(t);ok()}}
 function _fbCopy(t){try{var ta=document.createElement('textarea');ta.value=t;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta)}catch(e){}}
-function Ae(r,c){S.msgs.push({r:r,c:c});R()}
+function Ae(r,c){S.msgs.push({r:(r==='user'?'u':r),c:c});R()}
 var _editIdx=-1;
 function editMsg(i){_editIdx=i;R()}
 function cancelEdit(){_editIdx=-1;R()}

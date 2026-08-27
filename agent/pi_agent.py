@@ -611,6 +611,10 @@ class PiAgent:
                         if _r2.choices[0].finish_reason != "length" or not _chunk:
                             break
                         _cont.append({"role": "assistant", "content": _chunk})
+                # 过滤模型偶发把工具调用以 <tool_calls> XML 文本输出 (泄漏进答案)
+                import re as _re
+
+                answer = _re.sub(r"<tool_calls>.*?</tool_calls>", "", answer, flags=_re.S).strip()
                 final_result = answer
                 messages.append({"role": "assistant", "content": answer})
 

@@ -1868,8 +1868,9 @@ async def api_agent_pi_stream(request: Request):
             _st = active_topics.get(topic_id)
             if _st and getattr(_st, "lancedb_table", None):
                 kb_context = (
-                    f"当前课题「{_st.query}」的知识库表是 {_st.lancedb_table}。"
-                    "查询知识库/问答时只用这个表名，不要搜其他表、不要跨库。"
+                    f"当前课题「{_st.query}」的知识库表是 {_st.lancedb_table}。\n"
+                    f"【强制】不要调用 search_knowledge_bases 去搜索其他表。\n"
+                    f"直接调用 agent_ask(table_name=\"{_st.lancedb_table}\", question=...) 或 ask_knowledge_base。"
                 )
         except Exception:
             pass
@@ -2468,11 +2469,16 @@ async def api_subscribe(request: Request):
 
 
 @app.get("/subscribe")
-async def api_list_subscriptions():
-    """查看所有订阅。"""
+async def api_list_subscriptions(user_id: str = Depends(get_current_user)):
+    """查看当前用户的订阅 (多租户: 只返回归属自己的)。"""
     from integrations import list_subscriptions
 
-    return {"subscriptions": list_subscriptions()}
+    subs = [
+        s
+        for s in list_subscriptions()
+        if (s.get("user_id") or "") == (user_id or "")
+    ]
+    return {"subscriptions": subs}
 
 
 @app.get("/updates")
@@ -2514,11 +2520,20 @@ async def api_updates(user_id: str = Depends(get_current_user)):
 
 
 @app.delete("/subscribe/{sub_id}")
-async def api_delete_subscription(sub_id: str):
-    """删除订阅。"""
-    from integrations import delete_subscription
+async def api_delete_subscription(sub_id: str, user_id: str = Depends(get_current_user)):
+    """删除订阅 (多租户: 只允许删除归属自己的订阅)。"""
+    from integrations import _load_subscriptions, _save_subscriptions
 
-    return {"ok": delete_subscription(sub_id)}
+    data = _load_subscriptions()
+    subs = data.get("subscriptions", [])
+    target = next((s for s in subs if s["id"] == sub_id), None)
+    if target is None:
+        return {"ok": False}
+    if (target.get("user_id") or "") != (user_id or ""):
+        raise HTTPException(403, "无权删除该订阅")
+    data["subscriptions"] = [s for s in subs if s["id"] != sub_id]
+    _save_subscriptions(data)
+    return {"ok": True}
 
 
 @app.post("/subscribe/{sub_id}/run")

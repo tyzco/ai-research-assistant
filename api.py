@@ -959,7 +959,7 @@ async def api_download_bulk(request: Request, user_id: str = Depends(get_current
                 return None
 
         results = await asyncio.gather(
-            *(_fetch(i, url) for i, url in enumerate(urls[:50]))
+            *(_fetch(i, url) for i, url in enumerate(urls[:100]))
         )
         pdf_contents = [r for r in results if r]
         try:
@@ -990,6 +990,7 @@ async def api_download_bulk(request: Request, user_id: str = Depends(get_current
 
         for fname, content in pdf_contents:
             try:
+                state.progress.current += 1  # 进度: 逐篇解析/索引
                 # DeepSeek 审查 #13: CPU 密集解析放入线程池
                 result = await asyncio.to_thread(parse_pdf, content, fname)
                 paper_id = uuid.uuid4().hex[:16]

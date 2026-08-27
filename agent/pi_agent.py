@@ -193,14 +193,16 @@ class PiAgent:
 
         # === 可选 plan 阶段: 长任务先规划 (防跑偏), 短问答跳过 (省延迟) ===
         if self.enable_plan and len(task.strip()) >= AGENT_PLAN_MIN_CHARS:
-            plan = await self._plan(task)
-            if plan:
-                self._messages.append(
-                    {
-                        "role": "assistant",
-                        "content": f"任务计划：\n{plan}",
-                    }
-                )
+            _plan_ret = await self._plan(task)
+            if _plan_ret:
+                _p, _p_rc = _plan_ret
+                _pm = {
+                    "role": "assistant",
+                    "content": f"任务计划：\n{_p}",
+                }
+                if _p_rc:
+                    _pm["reasoning_content"] = _p_rc  # 回传, 否则后续调用 400
+                self._messages.append(_pm)
 
         self._state = {
             "messages": self._messages,
@@ -236,10 +238,10 @@ class PiAgent:
                 pass
         return result
 
-    async def _plan(self, task: str) -> str | None:
+    async def _plan(self, task: str) -> tuple[str, str] | None:
         """可选 plan 阶段 (规划层): 长任务先让 LLM 拆 3-6 步计划, 防纯 ReAct 跑偏。
 
-        只输出步骤列表不执行; 失败静默降级 (返回 None, 不影响主循环)。
+        返回 (计划, reasoning_content) — 后者必须随 assistant 消息回传 (DeepSeek 契约)。
         """
         try:
             resp = await chat_with_retry(
@@ -259,7 +261,10 @@ class PiAgent:
                 extra_body={"thinking": {"type": "disabled"}},
             )
             plan = (resp.choices[0].message.content or "").strip()
-            return plan[:500] if plan else None
+            if not plan:
+                return None
+            rc = getattr(resp.choices[0].message, "reasoning_content", None) or ""
+            return (plan[:500], rc)
         except Exception as e:
             logger.debug(f"Plan stage failed: {e}")
             return None
@@ -560,6 +565,7 @@ class PiAgent:
                 from llm_client import get_client
 
                 answer = ""
+                _rc = ""
                 _finished = False
                 try:
                     _stream = await get_client().chat.completions.create(
@@ -574,6 +580,8 @@ class PiAgent:
                         if _ch.choices[0].finish_reason:
                             _finished = True
                         _delta = _ch.choices[0].delta.content or ""
+                        if not _rc:
+                            _rc = getattr(_ch.choices[0].delta, "reasoning_content", "") or ""
                         if _delta:
                             answer += _delta
                             if self._step_cb:
@@ -618,8 +626,11 @@ class PiAgent:
                 import re as _re
 
                 answer = _re.sub(r"<tool_calls>.*?</tool_calls>", "", answer, flags=_re.S).strip()
+                _am2 = {"role": "assistant", "content": answer}
+                if _rc:
+                    _am2["reasoning_content"] = _rc
                 final_result = answer
-                messages.append({"role": "assistant", "content": answer})
+                messages.append(_am2)
 
                 # === HOOK: before_emit ===
                 hr = self._fire_hook("before_emit", state, final_result)

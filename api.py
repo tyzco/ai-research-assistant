@@ -2486,9 +2486,11 @@ async def api_list_subscriptions():
 
 @app.get("/updates")
 async def api_updates(user_id: str = Depends(get_current_user)):
-    """主动推送 (蓝海核心): 返回当前用户订阅的每日检索新进展 (最近有新论文的记录)。
+    """主动推送 (蓝海核心): 返回当前用户每个订阅方向「最近一次」检索到的相关论文数。
 
-    多租户隔离: 只返回归属当前用户的订阅记录 (user_id 匹配), 匿名用户看不到他人数据。
+    多租户隔离: 只返回归属当前用户的订阅 (user_id 匹配)。
+    按订阅去重: 每个方向只显示最新一次检索 (避免天天跑的老订阅刷屏, 挤掉用户新订阅)。
+    措辞诚实: 数字是「检索到的相关论文数」(实时 API 快照), 非严格增量「新增论文」。
     """
     import json
     from pathlib import Path
@@ -2500,16 +2502,23 @@ async def api_updates(user_id: str = Depends(get_current_user)):
         entries = json.loads(log_file.read_text())
     except Exception:
         return {"updates": [], "total_new_papers": 0}
-    # 只取当前用户的新进展 (匿名/无归属的记录不返回给已登录用户)
-    fresh = [
+    mine = [
         e
         for e in entries
         if (e.get("new_papers") or 0) > 0 and e.get("user_id", "") == (user_id or "")
     ]
-    fresh.sort(key=lambda e: e.get("time", ""), reverse=True)
+    mine.sort(key=lambda e: e.get("time", ""), reverse=True)
+    # 按订阅去重: 每个 subscription_id 只保留最新一条
+    latest: dict = {}
+    for e in mine:
+        key = e.get("subscription_id") or e.get("query") or "?"
+        if key not in latest:
+            latest[key] = e
+    updates = sorted(latest.values(), key=lambda e: e.get("time", ""), reverse=True)
     return {
-        "updates": fresh[:10],
-        "total_new_papers": sum(e.get("new_papers", 0) for e in fresh),
+        "updates": updates[:10],
+        "total_new_papers": sum(e.get("new_papers", 0) for e in updates),
+        "note": "数字为各方向最近一次检索到的相关论文数（实时抓取公开学术库），非严格新增量。",
     }
 
 

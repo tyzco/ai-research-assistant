@@ -813,7 +813,6 @@ async def api_search_papers_stream(request: Request):
             "doi_url": f"https://doi.org/{p.doi}" if p.doi else None,
             "cnki_url": _cnki_search_url(p.title) if p.title else None,
             "google_scholar_url": _gs_search_url(p.title) if p.title else None,
-            "scihub_url": f"https://sci-hub.se/{p.doi}" if p.doi else None,
         }
 
     async def generate():
@@ -822,86 +821,27 @@ async def api_search_papers_stream(request: Request):
         )
         t0 = time.time()
 
-        # Step 1: 快速返回第一批 (arXiv前5篇, 3s超时)
-        from search import (
-            _search_arxiv,
-            _search_openalex,
-            _search_openalex_cn,
-            _should_drop,
-        )
+        # 完整 12 源检索 (与选题判断一致, 缓存翻译兜底), 再分批流式输出。
+        # 修复: 原仅 arXiv+OpenAlex+S2+CNKI (~61篇), 面板与选题报告篇数不一致。
+        from search import search_papers_for_topic
 
-        async def _safe(fn, *a, to=5, **kw):
-            try:
-                return await asyncio.wait_for(fn(*a, **kw), timeout=to)
-            except Exception as e:
-                # DeepSeek 审查 #9: 记录失败源 (原静默返回空列表, 无法排查限流/超时)
-                logger.debug(f"Search source {getattr(fn, '__name__', fn)} failed: {e}")
-                return []
-
-        kw_en = keywords_en[:1] if keywords_en else [query]
-        kw_cn = keywords_cn[:1] if keywords_cn else [query]
-        import config
-
-        # Batch 1: arXiv (fastest, ~6s)
-        batch1 = await _safe(_search_arxiv, kw_en, to=config.SEARCH_TIMEOUT_ARXIV)
-        batch1 = [p for p in batch1 if not _should_drop(p)]
-        yield s(
-            "batch",
-            {
-                "source": "arxiv",
-                "count": len(batch1),
-                "papers": [_fmt(p) for p in batch1[:8]],
-            },
-        )
-
-        # Batch 2: OpenAlex EN + CN (并行, ~8s)
-        batch2 = await asyncio.gather(
-            _safe(_search_openalex, kw_en, to=config.SEARCH_TIMEOUT_OPENALEX),
-            _safe(_search_openalex_cn, kw_cn, to=config.SEARCH_TIMEOUT_OPENALEX_CN),
-        )
-        oa_papers = [p for p in (batch2[0] or []) if not _should_drop(p)]
-        cn_papers = [p for p in (batch2[1] or []) if not _should_drop(p)]
-        # Filter CN relevance
-        cn_filtered = [
-            p
-            for p in cn_papers
-            if any(kw in (p.title or "") for kw in kw_cn if len(kw) >= 2)
-        ]
-        yield s(
-            "batch",
-            {
-                "source": "openalex",
-                "count": len(oa_papers) + len(cn_filtered),
-                "papers": [_fmt(p) for p in (oa_papers + cn_filtered)[:12]],
-            },
-        )
-
-        # Batch 3: 慢源 (S2 + CNKI, 不阻塞)
-        from search import _make_cnki_async, _search_s2
-
-        batch3 = await asyncio.gather(
-            _safe(_search_s2, kw_en, to=config.SEARCH_TIMEOUT_S2),
-            _safe(_make_cnki_async, query, kw_cn, to=config.SEARCH_TIMEOUT_CNKI),
-        )
-        s2_papers = [p for p in (batch3[0] or []) if not _should_drop(p)]
-        cnki_papers = batch3[1] or []
-        yield s(
-            "batch",
-            {
-                "source": "s2+cnki",
-                "count": len(s2_papers) + len(cnki_papers),
-                "papers": [_fmt(p) for p in s2_papers[:5] + cnki_papers],
-            },
-        )
-
-        total = (
-            len(batch1)
-            + len(oa_papers)
-            + len(cn_filtered)
-            + len(s2_papers)
-            + len(cnki_papers)
-        )
-        yield s("done", {"total": total, "elapsed": f"{time.time()-t0:.1f}s"})
+        papers = await search_papers_for_topic(query, keywords_en, keywords_cn)
+        seen, uniq = set(), []
+        for p in papers:
+            if p.paper_id in seen:
+                continue
+            seen.add(p.paper_id)
+            uniq.append(p)
+        for i in range(0, len(uniq), 12):
+            yield s(
+                "batch",
+                {
+                    "source": "all",
+                    "count": len(uniq),
+                    "papers": [_fmt(p) for p in uniq[i : i + 12]],
+                },
+            )
+        yield s("done", {"total": len(uniq), "elapsed": f"{time.time()-t0:.1f}s"})
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 

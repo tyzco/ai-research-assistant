@@ -958,10 +958,23 @@ async def api_download_bulk(request: Request, user_id: str = Depends(get_current
                     pass
                 return None
 
-        results = await asyncio.gather(
-            *(_fetch(i, url) for i, url in enumerate(urls[:100]))
-        )
-        pdf_contents = [r for r in results if r]
+        # 分批下载并逐批更新进度 (原 gather 并行一次性返回 → 进度卡 0/N 然后跳)
+        _urls = urls[:100]
+        _total = len(_urls)
+        pdf_contents = []
+        _B = 4  # 每批并发 4 篇
+        for _start in range(0, _total, _B):
+            _chunk_urls = _urls[_start : _start + _B]
+            _idx0 = _start
+            _rs = await asyncio.gather(
+                *(_fetch(_idx0 + i, u) for i, u in enumerate(_chunk_urls))
+            )
+            for _r in _rs:
+                if _r:
+                    pdf_contents.append(_r)
+            if state:
+                state.progress.current = min(_idx0 + _B, _total)
+                state.progress.dl_total = _total
         try:
             from monitor import metrics
 
@@ -984,6 +997,7 @@ async def api_download_bulk(request: Request, user_id: str = Depends(get_current
     imported_images = 0
     if state:
         state.step = "indexing"
+        state.progress.current = 0  # 重置, 索引阶段独立计数 (下载阶段已走到 N)
         papers: list[PaperMeta] = []
         fulltext_chunks: dict[str, list[str]] = {}
         all_images: list[dict] = []

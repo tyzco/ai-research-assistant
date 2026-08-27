@@ -213,7 +213,8 @@ TOOL_SECURITY_BLOCK_NON_WHITELIST = _env_bool(
 # 单 PDF 上传大小上限 (字节)
 MAX_UPLOAD_BYTES = _env("MAX_UPLOAD_BYTES", 50 * 1024 * 1024, int)
 # /download_bulk 并发下载数 (信号量)
-DOWNLOAD_CONCURRENCY = _env("DOWNLOAD_CONCURRENCY", 3, int)
+DOWNLOAD_CONCURRENCY = _env("DOWNLOAD_CONCURRENCY", 6, int)
+DOWNLOAD_TIMEOUT = _env("DOWNLOAD_TIMEOUT", 20, int)
 
 # ===================================================================
 # Conversation Memory

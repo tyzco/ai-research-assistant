@@ -31,6 +31,7 @@ from config import (
     CORS_ORIGINS,
     DEEPSEEK_MODEL,
     DOWNLOAD_CONCURRENCY,
+    DOWNLOAD_TIMEOUT,
     IMAGE_DIR,
     LANCEDB_DIR,
     LLM_GEN_MAX_TOKENS,
@@ -945,7 +946,7 @@ async def api_download_bulk(request: Request, user_id: str = Depends(get_current
         state.progress.current = 0
 
     pdf_contents: list[tuple[str, bytes]] = []
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with httpx.AsyncClient(timeout=DOWNLOAD_TIMEOUT) as client:
         sem = asyncio.Semaphore(DOWNLOAD_CONCURRENCY)  # DeepSeek 审查 #14: 配置化
 
         async def _fetch(i, url):

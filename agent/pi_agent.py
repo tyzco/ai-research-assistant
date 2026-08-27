@@ -363,6 +363,9 @@ class PiAgent:
                     tool_choice="auto",
                     temperature=AGENT_TEMPERATURE,
                     max_tokens=AGENT_MAX_TOKENS,
+                    # 修复: 主循环缺 thinking disabled → flash 产出 reasoning_content → 下一轮 400。
+                    # 全链路一致禁用 thinking (plan/反思/续写都已禁), 否则推理模型契约要求回传 reasoning_content。
+                    extra_body={"thinking": {"type": "disabled"}},
                 )
             except Exception as e:
                 logger.error(f"LLM call failed at turn {turn_idx}: {e}")

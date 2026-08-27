@@ -385,23 +385,26 @@ class PiAgent:
                 # 原 append(msg) 使 messages 混入 pydantic 对象, 下一轮 context_engine
                 # estimate_messages_tokens 的 m.get("content") 崩 AttributeError
                 # (仅在 agent 发起工具调用时触发, 直答轮不触发)。
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": msg.content,
-                        "tool_calls": [
-                            {
-                                "id": tc.id,
-                                "type": "function",
-                                "function": {
-                                    "name": tc.function.name,
-                                    "arguments": tc.function.arguments,
-                                },
-                            }
-                            for tc in msg.tool_calls
-                        ],
-                    }
-                )
+                # 回传 reasoning_content (DeepSeek 推理模型契约: 上一轮有 thinking 必须原样回传, 否则 400)
+                _rc = getattr(msg, "reasoning_content", None)
+                _am = {
+                    "role": "assistant",
+                    "content": msg.content,
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments,
+                            },
+                        }
+                        for tc in msg.tool_calls
+                    ],
+                }
+                if _rc:
+                    _am["reasoning_content"] = _rc
+                messages.append(_am)
                 for tc in msg.tool_calls:
                     tool_name = tc.function.name
                     try:

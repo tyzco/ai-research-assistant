@@ -179,6 +179,7 @@ SKILL_INTENT_KEYWORDS = {
     ],
     "deep_qa": [
         "什么是", "为什么", "如何", "解释", "对比", "区别", "机制", "问答",
+        "有哪些", "包含哪些", "列出", "有什么", "介绍一下这个库",
         "explain", "what is", "how",
     ],
     "research_decision": [

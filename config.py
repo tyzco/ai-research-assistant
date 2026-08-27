@@ -91,7 +91,7 @@ VISION_BASE_URL = _env(
 # ===================================================================
 SEMANTIC_SCHOLAR_API_KEY = os.getenv("SEMANTIC_SCHOLAR_API_KEY", "")
 APIFY_API_KEY = os.getenv("APIFY_API_KEY", "")
-MAX_SEARCH_RESULTS = _env("MAX_SEARCH_RESULTS", 50, int)
+MAX_SEARCH_RESULTS = _env("MAX_SEARCH_RESULTS", 100, int)
 
 # ===================================================================
 # Storage Paths

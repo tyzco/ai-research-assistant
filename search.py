@@ -419,16 +419,25 @@ async def search_papers_for_topic(
         logger.info(f"Search cache hit: {len(_cached)} papers")
         return [PaperMeta(**p) for p in _cached]
     if not keywords_en:
-        # 策略 LLM 不可用/超时 → 降级为查询词本身, 搜索不因策略失败而中断
-        try:
-            strategy = await generate_search_strategy(query)
-            keywords_en = strategy.get("keywords_en", [])[:2]
-            keywords_cn = strategy.get("keywords_cn", [])[:3]
-            related_en = related_en or strategy.get("related_terms_en", [])
-            related_cn = related_cn or strategy.get("related_terms_cn", [])
-        except Exception as e:
-            logger.warning(f"Strategy generation failed, using query as keyword: {e}")
-            keywords_en = keywords_cn = None
+        # 优先用缓存翻译 (快): 中文 query → 英文关键词, 显著提升 EN 源召回
+        if any(19968 <= ord(c) <= 40869 for c in query):
+            try:
+                en_txt = await _translate_cn_query(query)
+                if en_txt:
+                    keywords_en = [k.strip() for k in en_txt.split(",") if k.strip()][:2]
+            except Exception:
+                keywords_en = None
+        if not keywords_en:
+            # 翻译不可用 → 走 LLM 策略生成 (慢), 失败则降级为查询词本身
+            try:
+                strategy = await generate_search_strategy(query)
+                keywords_en = strategy.get("keywords_en", [])[:2]
+                keywords_cn = strategy.get("keywords_cn", [])[:3]
+                related_en = related_en or strategy.get("related_terms_en", [])
+                related_cn = related_cn or strategy.get("related_terms_cn", [])
+            except Exception as e:
+                logger.warning(f"Strategy generation failed, using query as keyword: {e}")
+                keywords_en = keywords_cn = None
     # 修复: 关键词含中文 → 翻译为英文。不常见选题最常见的失败路径是
     # 策略降级返回中文原文, 英文源(arXiv/S2/Crossref)搜中文=召回失败。
     if keywords_en and any(19968 <= ord(c) <= 40869 for c in "".join(keywords_en)):

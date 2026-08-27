@@ -238,7 +238,7 @@ function setPhase(p){var prev=S.phase;S.phase=p;saveSession();R()}
 function saveSession(){if(!S.tid)return;var snap={q:S.q,msgs:S.msgs.slice(),strategy:S.strategy,pps:S.pps,phase:S.phase};S.sessions[S.tid]=snap;try{localStorage.setItem('session_'+S.tid,JSON.stringify(snap))}catch(e){}}
 function loadSession(id){var cached=S.sessions[id];if(!cached){try{var raw=localStorage.getItem('session_'+id);if(raw){cached=JSON.parse(raw);S.sessions[id]=cached}}catch(e){}}return cached}
 function restoreFrom(id){var snap=loadSession(id);if(!snap)return false;S.q=snap.q;S.msgs=snap.msgs||[];S.strategy=snap.strategy;S.pps=snap.pps||[];S.phase=snap.phase||'strategy';S.tid=id;return true}
-async function loadTopics(){await L();var s=localStorage.aia_t;if(s){var found=S.ts.find(function(x){return x.topic_id===s});if(found){var foundId=found.topic_id;WW(foundId).catch(function(){localStorage.removeItem('aia_t');Y()})}else{localStorage.removeItem('aia_t');Y()}}else Y()}
+async function loadTopics(){await L();/* 落地即「选题判断」首页, 不自动恢复上次课题 (钩子优先); 上次课题经侧边栏点击恢复 */Y()}
 (function I(){if(localStorage.aia_d==='1')document.documentElement.className='dark';syncMode();loadTopics()})();
 function TT(){var h=document.documentElement;h.className=h.className==='dark'?'light':'dark';localStorage.aia_d=h.className==='dark'?'1':'0'}
 async function L(){try{var data=await(await fetch(A+'/topics',{headers:authHeaders()})).json();S.ts=data;K()}catch(e){setTimeout(L,3000)}}

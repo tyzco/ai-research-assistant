@@ -114,7 +114,7 @@ def _llm_check(draft: str, references: list, goal: str = "") -> dict:
         client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
         resp = client.chat.completions.create(
             model=DEEPSEEK_MODEL,
-            temperature=0.1,
+            temperature=0.0,
             max_tokens=min(LLM_QUICK_MAX_TOKENS, 600),
             messages=[{"role": "user", "content": prompt}],
             extra_body={"thinking": {"type": "disabled"}},

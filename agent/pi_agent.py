@@ -78,6 +78,7 @@ class PiAgent:
         step_cb=None,
         enable_reflexion: bool | None = None,
         enable_plan: bool | None = None,
+        kb_context: str = "",
     ):
         self.max_steps = max_steps
         self.max_time = max_time_seconds
@@ -96,6 +97,8 @@ class PiAgent:
         self._reflexed = False
         # 可选 plan 阶段 (规划层): 长任务先拆步骤再执行, 防纯 ReAct 跑偏
         self.enable_plan = AGENT_PLAN_ENABLED if enable_plan is None else enable_plan
+        # 当前课题知识库上下文 (限制 agent 只查当前课题的表, 不跨库)
+        self.kb_context = kb_context
 
         # 延迟加载
         self._hooks = None
@@ -756,7 +759,8 @@ class PiAgent:
                 strat_txt = "\n\n【过往相似任务的成功经验（可参考此做法）】" + strat_txt
         except Exception:
             pass
-        return f"""你是 PaperLink 学术智能助手。{cap}{lessons_txt}{strat_txt}
+        kb_txt = f"\n\n【当前课题知识库作用域】\n{self.kb_context}" if self.kb_context else ""
+        return f"""你是 PaperLink 学术智能助手。{cap}{kb_txt}{lessons_txt}{strat_txt}
 
 ---
 工作流: 理解任务 → 搜索/search_knowledge_bases → 问答/agent_ask → 综合分析 → 输出报告

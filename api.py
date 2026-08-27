@@ -1857,6 +1857,22 @@ async def api_agent_pi_stream(request: Request):
     max_time = req.get("max_time", 300)
     goal = req.get("goal", "")
     skills = req.get("skills") or None
+    topic_id = req.get("topic_id", "")
+
+    # 当前课题知识库上下文: 让 agent 只查当前课题的表 (修复跨全部测试库乱答+慢)
+    kb_context = ""
+    if topic_id:
+        try:
+            from topic_manager import active_topics
+
+            _st = active_topics.get(topic_id)
+            if _st and getattr(_st, "lancedb_table", None):
+                kb_context = (
+                    f"当前课题「{_st.query}」的知识库表是 {_st.lancedb_table}。"
+                    "查询知识库/问答时只用这个表名，不要搜其他表、不要跨库。"
+                )
+        except Exception:
+            pass
 
     from agent.pi_agent import get_agent
 
@@ -1873,6 +1889,7 @@ async def api_agent_pi_stream(request: Request):
         goal=goal,
         skills=skills,
         step_cb=step_cb,
+        kb_context=kb_context,
     )
 
     async def generate():

@@ -1830,6 +1830,7 @@ async def api_agent_pi(request: Request):
         enable_tool_check=True,
         enable_context_compaction=True,
         skills=skills,
+        topic_id=topic_id,
     )
     result = await agent.run(task)
     result["run_id"] = agent.run_id
@@ -1891,6 +1892,7 @@ async def api_agent_pi_stream(request: Request):
         skills=skills,
         step_cb=step_cb,
         kb_context=kb_context,
+        topic_id=topic_id,
     )
 
     async def generate():

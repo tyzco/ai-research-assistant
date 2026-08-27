@@ -79,6 +79,7 @@ class PiAgent:
         enable_reflexion: bool | None = None,
         enable_plan: bool | None = None,
         kb_context: str = "",
+        topic_id: str = "",
     ):
         self.max_steps = max_steps
         self.max_time = max_time_seconds
@@ -99,6 +100,8 @@ class PiAgent:
         self.enable_plan = AGENT_PLAN_ENABLED if enable_plan is None else enable_plan
         # 当前课题知识库上下文 (限制 agent 只查当前课题的表, 不跨库)
         self.kb_context = kb_context
+        # 当前课题 id (用于把 agent 发现/工具调用持久化到课题记忆 — 接线 add_finding/add_tool_call)
+        self.topic_id = topic_id
 
         # 延迟加载
         self._hooks = None
@@ -218,6 +221,19 @@ class PiAgent:
                 )
         except Exception:
             pass
+        # 接线 add_finding/add_tool_call: 把 agent 的发现/工具调用持久化到课题记忆 (之前从未调用)
+        if self.topic_id:
+            try:
+                from conversation_memory import get_memory
+
+                _mem = get_memory(self.topic_id)
+                _tr = result.get("trace") or {}
+                for _t in _tr.get("tools_used") or []:
+                    _mem.add_tool_call(_t, "")
+                for _kf in _tr.get("key_findings") or []:
+                    _mem.add_finding(str(_kf)[:300], "agent")
+            except Exception:
+                pass
         return result
 
     async def _plan(self, task: str) -> str | None:

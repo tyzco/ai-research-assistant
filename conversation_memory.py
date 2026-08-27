@@ -83,8 +83,7 @@ class ConversationMemory:
         self.save()
 
     def add_finding(self, content: str, source: str = ""):
-        """结构化添加关键发现 (DeepSeek 建议: 保证 key_findings 元素是 dict)。
-        去重按 content 字段比较, 而非整个 dict。"""
+        """结构化添加关键发现 (去重按 content)。由 agent 完成时调用, 持久化跨会话记忆。"""
         if not content:
             return
         existing = {
@@ -103,6 +102,7 @@ class ConversationMemory:
         self.save()
 
     def add_tool_call(self, tool_name: str, result: str):
+        """记录工具调用 (结果截断) 到会话记忆。由 agent 工具执行时调用。"""
         truncated = str(result)[:500]
         self.recent.append(
             {"role": "tool_result", "content": f"[{tool_name}] {truncated}"}

@@ -534,10 +534,39 @@ class PiAgent:
                     # DeepSeek 审查 #1: 任何路径都推进 steps, 防死循环
                     state["steps"] += 1
             else:
-                # === 直接回答 (无工具调用) ===
-                answer = msg.content or ""
-                # 防截断续写 (finish_reason==length → 从断点继续, 不污染 messages)
-                if resp.choices[0].finish_reason == "length" and answer:
+                # === 直接回答 (无工具调用) — 流式生成, 逐字推送 (step_cb event=token) ===
+                from llm_client import get_client
+
+                answer = ""
+                _finished = False
+                try:
+                    _stream = await get_client().chat.completions.create(
+                        model=DEEPSEEK_MODEL,
+                        messages=messages,
+                        temperature=AGENT_TEMPERATURE,
+                        max_tokens=AGENT_MAX_TOKENS,
+                        stream=True,
+                        extra_body={"thinking": {"type": "disabled"}},
+                    )
+                    async for _ch in _stream:
+                        if _ch.choices[0].finish_reason:
+                            _finished = True
+                        _delta = _ch.choices[0].delta.content or ""
+                        if _delta:
+                            answer += _delta
+                            if self._step_cb:
+                                try:
+                                    await self._step_cb(
+                                        {"event": "token", "token": _delta}
+                                    )
+                                except Exception:
+                                    pass
+                except Exception as e:
+                    logger.error(f"LLM stream call failed at turn {turn_idx}: {e}")
+                    final_result = f"LLM 调用失败: {e}"
+                    break
+                # 防截断续写 (流式末块未带 finish_reason → 续写, 不污染 messages)
+                if not _finished and answer:
                     _cont = [{"role": "assistant", "content": answer}]
                     for _ in range(4):
                         _cont.append(
@@ -551,7 +580,15 @@ class PiAgent:
                             extra_body={"thinking": {"type": "disabled"}},
                         )
                         _chunk = _r2.choices[0].message.content or ""
-                        answer += _chunk
+                        if _chunk:
+                            answer += _chunk
+                            if self._step_cb:
+                                try:
+                                    await self._step_cb(
+                                        {"event": "token", "token": _chunk}
+                                    )
+                                except Exception:
+                                    pass
                         if _r2.choices[0].finish_reason != "length" or not _chunk:
                             break
                         _cont.append({"role": "assistant", "content": _chunk})

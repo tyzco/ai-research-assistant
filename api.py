@@ -2139,13 +2139,46 @@ def _quota_record(request: Request, user_id: str, tokens: int) -> None:
         pass
 
 
+# DeepSeek 账户余额缓存 (60s TTL, 避免每次刷新都打 DeepSeek)
+_deepseek_balance_cache: dict = {"value": None, "ts": 0.0}
+
+
+def _deepseek_balance() -> float | None:
+    """查 DeepSeek 账户余额 (元)。失败/未配置返回 None。60s 缓存。"""
+    import time
+
+    import httpx
+
+    from config import DEEPSEEK_API_KEY
+
+    now = time.time()
+    if _deepseek_balance_cache["value"] is not None and now - _deepseek_balance_cache["ts"] < 60:
+        return _deepseek_balance_cache["value"]
+    if not DEEPSEEK_API_KEY:
+        return None
+    try:
+        r = httpx.get(
+            "https://api.deepseek.com/user/balance",
+            headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
+            timeout=6,
+        )
+        total = 0.0
+        for b in r.json().get("balance_infos", []):
+            total += float(b.get("total_balance", 0) or 0)
+        _deepseek_balance_cache["value"] = round(total, 2)
+        _deepseek_balance_cache["ts"] = now
+        return _deepseek_balance_cache["value"]
+    except Exception:
+        return None
+
+
 @app.get("/quota")
 async def api_quota(request: Request, user_id: str = Depends(get_current_user)):
-    """当前配额状态 (免费额度 / 已用 / 剩余)。"""
+    """当前配额状态 (免费额度 / 已用 / 剩余) + DeepSeek 账户余额 (缓存 60s)。"""
     from quota import check_quota
 
     q = check_quota(_quota_key(request, user_id))
-    return {"user_key": _quota_key(request, user_id), **q}
+    return {"user_key": _quota_key(request, user_id), **q, "deepseek_balance": _deepseek_balance()}
 
 
 @app.post("/quota/topup")

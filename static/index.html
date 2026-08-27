@@ -181,7 +181,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','PingFang SC'
     <span style="margin-left:auto"></span>
     <div class="top-actions">
       <span id="quotaChip" class="chip" style="font-size:11px;cursor:pointer" onclick="refreshQuota()" title="LLM 额度 (剩余 token, 点击刷新)">🪙 --</span>
-      <button class="chip" onclick="recharge()" title="充值 LLM 额度 (Stripe 支付)">💳 充值</button>
+      <!-- 收款暂缓: 充值按钮隐藏, 冷启动期不误导用户 (Stripe 接入时恢复) -->
       <select id="exportFmt" onchange="EX(this.value)" title="导出">
         <option value="">导出</option>
         <option value="markdown">↓ MD</option>
@@ -391,7 +391,7 @@ function R(){
   var h='';S.msgs.forEach(function(m,i){
     h+='<div class="msg '+(m.r==='u'?'user':'')+'" id="msg-'+i+'" style="animation-delay:'+(i*.04)+'s">';
     if(m.r==='u')h+='<div class="bubble">'+esc(m.c)+'</div>';
-    else if(m.r==='a'){h+='<div class="card"><div class="md-body">'+md(m.c)+'</div><div class="msg-actions"><button data-cp="msg-'+i+'" onclick="CP(\x27msg-'+i+'\x27)">📋 复制</button>';var p=S.msgs[i-1];if(p&&p.r==='u'){h+='<button onclick="QQ(\x27'+escA(p.c)+'\x27)">🔄 重新生成</button>';h+='<button onclick="traceAsk(\x27'+escA(p.c)+'\x27)">🔬 追踪</button>'}h+='<button onclick="FB(\x27'+escA(p?p.c:'')+'\x27,\x27'+escA(m.c.substring(0,200))+'\x27,1)" style="background:var(--hover);border:1px solid var(--border);border-radius:6px;padding:3px 8px;cursor:pointer;font-size:12px">👍</button><button onclick="FB(\x27'+escA(p?p.c:'')+'\x27,\x27'+escA(m.c.substring(0,200))+'\x27,-1)" style="background:var(--hover);border:1px solid var(--border);border-radius:6px;padding:3px 8px;cursor:pointer;font-size:12px;margin-left:2px">👎</button>';h+='</div></div>';}
+    else if(m.r==='a'){h+='<div class="card"><div class="md-body">'+md(m.c)+'</div><div class="msg-actions"><button data-cp="msg-'+i+'" onclick="CP(\x27msg-'+i+'\x27)">📋 复制</button>';var p=S.msgs[i-1];if(p&&p.r==='u'){h+='<button onclick="QQ(\x27'+escA(p.c)+'\x27)">🔄 重新生成</button>'}h+='<button onclick="FB(\x27'+escA(p?p.c:'')+'\x27,\x27'+escA(m.c.substring(0,200))+'\x27,1)" style="background:var(--hover);border:1px solid var(--border);border-radius:6px;padding:3px 8px;cursor:pointer;font-size:12px">👍</button><button onclick="FB(\x27'+escA(p?p.c:'')+'\x27,\x27'+escA(m.c.substring(0,200))+'\x27,-1)" style="background:var(--hover);border:1px solid var(--border);border-radius:6px;padding:3px 8px;cursor:pointer;font-size:12px;margin-left:2px">👎</button>';h+='</div></div>';}
     else h+='<div class="card">'+md(m.c)+'</div>';
     h+='</div>';
   });

@@ -692,7 +692,8 @@ async def api_create_topic(
     """创建课题：本地关键词 + LLM翻译(非阻塞增强)。
     如果 topic 已存在（刷新页面恢复），保留已有策略和对话，不覆盖。"""
     query = sanitize_input(req.query)
-    if (blk := await _scope_gate(query)) is not None:
+    # topic_mode: create_topic 收的是研究方向 (裸选题名), 语义即学术, 只拦硬非学术词
+    if (blk := await _scope_gate(query, topic_mode=True)) is not None:
         return blk
     # 写论文模式 (reuse_kb): 已有同名/相似且已建库的课题 → 直接复用, 跳过多源检索
     if req.reuse_kb:
@@ -2462,7 +2463,8 @@ async def api_subscribe(request: Request):
     query = sanitize_input(req.get("query", ""))
     if not query:
         raise HTTPException(400, "需要 query 参数")
-    if (blk := await _scope_gate(query)) is not None:
+    # topic_mode: subscribe 订阅的是研究方向, 语义即学术
+    if (blk := await _scope_gate(query, topic_mode=True)) is not None:
         return blk
     from integrations import subscribe_topic
 

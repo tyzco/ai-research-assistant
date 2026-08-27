@@ -379,10 +379,18 @@ def gate_query(query: str, topic_mode: bool = False) -> tuple[bool, str, str]:
             return False, _REASON, "rule_reject"
         return True, "", "topic_pass"
 
-    # L0: 短查询仅放行「会话续接短语」的精确匹配 (多轮对话的 继续/好的/补充 等);
-    # 其余短查询走完整闸门, 防「怎么做红烧肉」这类短句绕过
+    # L0: 短查询仅放行「会话续接短语」的精确匹配 (多轮对话的 继续/好的/补充 等)
     if len(q) <= 8 and ql.strip() in CONTINUATION_PHRASES:
         return True, "", "short_pass"
+
+    # L0.5: 短查询快路径 (≤12 字, 通常是裸选题名如「情感分析」「图像分割」):
+    # 信息量不足以做语义分类, 只拦硬非学术词, 其余放行。
+    # 修复: 短裸选题名被语义层误判 (fail-closed 对短串无信号可判) 导致「总是被拦」。
+    # 代价: 「怎么做红烧肉」类短句若未命中硬词会放行 (受配额与学术范围约束, 可接受)。
+    if len(q) <= 12:
+        if any(k in ql for k in NON_ACADEMIC_KEYWORDS):
+            return False, _REASON, "rule_reject"
+        return True, "", "short_topic_pass"
 
     # L1 规则: 强学术词 → 放行 (先查, 防止合法学术请求被非学术词误杀)
     if any(k in ql for k in ACADEMIC_KEYWORDS):

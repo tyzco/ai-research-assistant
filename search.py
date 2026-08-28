@@ -540,6 +540,15 @@ async def search_papers_for_topic(
             p.title, strict=(cn_count_done < 30)
         ):
             continue
+        # 英文论文关键词相关性: 标题/摘要含任一 EN 关键词或原始 query 才保留
+        # (修复: 之前无 EN 相关性过滤 → AlphaFold/SciPy 等无关论文污染知识库)
+        if not _detect_cn(p.title):
+            en_kw_set = {k.lower() for k in (keywords_en or []) if len(k) >= 2}
+            if en_kw_set:
+                _txt = ((p.title or "") + " " + (p.abstract or "")).lower()
+                _q = (query or "").lower()
+                if not (any(k in _txt for k in en_kw_set) or (_q and _q in _txt)):
+                    continue
         key = _dedup_key(p)
         if key and key not in seen:
             seen.add(key)

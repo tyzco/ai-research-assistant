@@ -10,6 +10,7 @@
     results = retriever.search("什么是ArcFace算法？", top_k=5)
 """
 
+import asyncio
 import logging
 import re
 import threading
@@ -46,7 +47,7 @@ class AdaptiveHybridRetriever:
             with AdaptiveHybridRetriever._model_lock:
                 if AdaptiveHybridRetriever._stage1_model is None:
                     AdaptiveHybridRetriever._stage1_model = SentenceTransformer(
-                        RERANK_STAGE1_MODEL
+                        RERANK_STAGE1_MODEL, local_files_only=True
                     )
         return AdaptiveHybridRetriever._stage1_model
 
@@ -55,7 +56,7 @@ class AdaptiveHybridRetriever:
             with AdaptiveHybridRetriever._model_lock:
                 if AdaptiveHybridRetriever._stage2_model is None:
                     AdaptiveHybridRetriever._stage2_model = CrossEncoder(
-                        RERANK_MODEL, max_length=512
+                        RERANK_MODEL, max_length=512, local_files_only=True
                     )
         return AdaptiveHybridRetriever._stage2_model
 
@@ -248,12 +249,13 @@ class AdaptiveHybridRetriever:
             try:
                 from search import _translate_cn_query
 
-                en = await _translate_cn_query(q)
+                # 翻译最多等 0.8s (缓存未命中时) — 防止慢翻译阻塞检索主路径
+                en = await asyncio.wait_for(_translate_cn_query(q), timeout=0.8)
                 if en:
                     for term in [t.strip() for t in en.split(",") if t.strip()][:2]:
                         if term and term.lower() not in [v.lower() for v in variants]:
                             variants.append(term)
-            except Exception:
+            except (Exception, asyncio.TimeoutError):
                 pass
         return variants[:3]
 

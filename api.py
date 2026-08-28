@@ -95,7 +95,7 @@ async def startup_preload():
 
             from config import RERANK_MODEL
 
-            CrossEncoder(RERANK_MODEL, max_length=512)
+            CrossEncoder(RERANK_MODEL, max_length=512, local_files_only=True)
             logger.info("Reranker model preloaded")
         except Exception as e:
             logger.warning(f"Reranker preload failed: {e}")

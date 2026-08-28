@@ -75,7 +75,7 @@ def _load_model(model_name: str, dim: int):
         else:
             from sentence_transformers import SentenceTransformer
 
-            _embed_model = SentenceTransformer(model_name)
+            _embed_model = SentenceTransformer(model_name, local_files_only=True)
 
         _current_model_name = model_name
 

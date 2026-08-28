@@ -43,7 +43,9 @@ def _get_reranker():
                 from config import RERANK_MODEL
 
                 logger.info(f"Loading {RERANK_MODEL}...")
-                _reranker = CrossEncoder(RERANK_MODEL, max_length=512)
+                _reranker = CrossEncoder(
+                    RERANK_MODEL, max_length=512, local_files_only=True
+                )
     return _reranker
 
 

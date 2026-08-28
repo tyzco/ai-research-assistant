@@ -1885,8 +1885,11 @@ async def api_agent_pi_stream(request: Request):
             if _st and getattr(_st, "lancedb_table", None):
                 kb_context = (
                     f"当前课题「{_st.query}」的知识库表是 {_st.lancedb_table}。\n"
-                    f"【强制】不要调用 search_knowledge_bases 去搜索其他表。\n"
-                    f"直接调用 agent_ask(table_name=\"{_st.lancedb_table}\", question=...) 或 ask_knowledge_base。"
+                    f"【强制】当前课题已有知识库，优先直接基于该库检索问答。\n"
+                    f"① 禁止先调用 generate_search_strategy / search_papers 跑外部搜索；"
+                    f"只有当库内检索确实无相关内容时，才可补充外部搜索。\n"
+                    f"② 不要调用 search_knowledge_bases 去搜索其他表。\n"
+                    f"③ 直接调用 agent_ask(table_name=\"{_st.lancedb_table}\", question=...) 或 ask_knowledge_base 获取库内内容。"
                 )
         except Exception:
             pass

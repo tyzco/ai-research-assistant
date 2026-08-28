@@ -596,6 +596,32 @@ class PiAgent:
                 answer = ""
                 _rc = ""
                 _finished = False
+                _emit_buf = ""
+
+                async def _emit_token(tok):
+                    """流式过滤: 抑制 <tool_calls>...</tool_calls> 块内 token, 其余实时推送。
+                    (泄漏修复: 原实现先把 XML 实时发到前端, 流完才过滤 → 前端已显示污染)"""
+                    nonlocal _emit_buf
+                    import re as _re
+
+                    _emit_buf += tok
+                    while _emit_buf:
+                        m = _re.search(r"<tool_calls>", _emit_buf)
+                        if m is None:
+                            out, _emit_buf = _emit_buf, ""
+                        else:
+                            out, _emit_buf = _emit_buf[: m.start()], _emit_buf[m.start() :]
+                            end = _emit_buf.find("</tool_calls>")
+                            if end == -1:
+                                break  # 块未闭合 → 等后续 token
+                            _emit_buf = _emit_buf[end + len("</tool_calls>") :]
+                            continue
+                        if out:
+                            try:
+                                await self._step_cb({"event": "token", "token": out})
+                            except Exception:
+                                pass
+
                 try:
                     _stream = await get_client().chat.completions.create(
                         model=DEEPSEEK_MODEL,
@@ -613,13 +639,7 @@ class PiAgent:
                             _rc = getattr(_ch.choices[0].delta, "reasoning_content", "") or ""
                         if _delta:
                             answer += _delta
-                            if self._step_cb:
-                                try:
-                                    await self._step_cb(
-                                        {"event": "token", "token": _delta}
-                                    )
-                                except Exception:
-                                    pass
+                            await _emit_token(_delta)
                 except Exception as e:
                     logger.error(f"LLM stream call failed at turn {turn_idx}: {e}")
                     final_result = f"LLM 调用失败: {e}"
@@ -641,13 +661,7 @@ class PiAgent:
                         _chunk = _r2.choices[0].message.content or ""
                         if _chunk:
                             answer += _chunk
-                            if self._step_cb:
-                                try:
-                                    await self._step_cb(
-                                        {"event": "token", "token": _chunk}
-                                    )
-                                except Exception:
-                                    pass
+                            await _emit_token(_chunk)
                         if _r2.choices[0].finish_reason != "length" or not _chunk:
                             break
                         _cont.append({"role": "assistant", "content": _chunk})
@@ -655,6 +669,13 @@ class PiAgent:
                 import re as _re
 
                 answer = _re.sub(r"<tool_calls>.*?</tool_calls>", "", answer, flags=_re.S).strip()
+                if _emit_buf:
+                    # 收尾: 释放残留的块外文本 (流式缓冲未清空部分)
+                    try:
+                        await self._step_cb({"event": "token", "token": _emit_buf})
+                    except Exception:
+                        pass
+                    _emit_buf = ""
                 _am2 = {"role": "assistant", "content": answer}
                 if _rc:
                     _am2["reasoning_content"] = _rc
@@ -826,7 +847,7 @@ class PiAgent:
         return f"""你是 PaperLink 学术智能助手。{cap}{kb_txt}{lessons_txt}{strat_txt}
 
 ---
-工作流: 理解任务 → 搜索/search_knowledge_bases → 问答/agent_ask → 综合分析 → 输出报告
+工作流: 理解任务 → 优先 search_knowledge_bases/当前课题库 → 问答/agent_ask → 综合分析 → 输出报告; 只有库内无相关内容才外部搜索
 约束: 每个回复最多调用一个工具 | 引用使用 [论文: 标题, 年份] 格式
 纯净输出: 只输出最终结果/回答; 严禁在回复中出现「让我查询/我需要补充/我再确认/让我再」等过程性文字, 严禁输出任何内部思考、工具调用内容或 XML 标记
 学术规范: 引用必须真实 (库内文献用 [编号], 非库内共识明确标注「通用学术共识」), 不编造数据; 结论诚实标注局限

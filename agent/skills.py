@@ -62,11 +62,10 @@ LITERATURE_REVIEW = Skill(
     ],
     system_prompt_appendix="""
 【文献调研模式】
-1. 收到调研主题后，先调用 generate_search_strategy 生成检索策略
-2. 调用 search_knowledge_bases 检查是否已有相关 KB
-3. 如已有 KB → agent_ask 直接问答
-4. 如无可 KB → search_papers → download_and_index → agent_ask
-5. 最后综合所有结果，以结构化 Markdown 格式输出综述
+1. 收到调研主题后，先调用 search_knowledge_bases 检查是否已有相关 KB
+2. 如已有相关 KB（或系统已指定当前课题库）→ 直接 agent_ask 基于该库问答，不要再 generate_search_strategy / search_papers
+3. 如确无可 KB → 才调用 generate_search_strategy → search_papers → download_and_index → agent_ask
+4. 最后综合所有结果，以结构化 Markdown 格式输出综述
    - 包含: 摘要/引言/方法论/关键发现/未来方向
    - 每段引用 [论文: 标题, 年份]
 """,

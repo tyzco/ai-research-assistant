@@ -957,6 +957,15 @@ async def api_download_bulk(request: Request, user_id: str = Depends(get_current
                         return (f"paper_{i+1}.pdf", r.content)
                 except Exception:
                     pass
+                # arxiv.org 被墙/不稳定 → 回退到 export.arxiv.org 镜像 (实测可达)
+                if "arxiv.org/pdf/" in url and "export.arxiv.org" not in url:
+                    alt = url.replace("arxiv.org/pdf/", "export.arxiv.org/pdf/")
+                    try:
+                        r2 = await client.get(alt, follow_redirects=True)
+                        if r2.status_code == 200 and len(r2.content) > 1000:
+                            return (f"paper_{i+1}.pdf", r2.content)
+                    except Exception:
+                        pass
                 return None
 
         # 分批下载并逐批更新进度 (原 gather 并行一次性返回 → 进度卡 0/N 然后跳)

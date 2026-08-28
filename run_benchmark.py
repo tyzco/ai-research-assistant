@@ -39,7 +39,7 @@ def run_retrieval(tbl, question, top_k, use_hybrid):
 
     try:
         hr = AdaptiveHybridRetriever(tbl.name)
-        text_res, _ = hr.search(question, top_k=top_k, filter_expr="is_fulltext = true AND is_image = false")
+        text_res, _ = hr.search_sync(question, top_k=top_k, filter_expr="is_fulltext = true AND is_image = false")
         return [r.get("text", "")[:500] for r in (text_res or [])]
     except Exception:
         qv = _embed_texts_sync([question])[0]

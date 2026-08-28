@@ -273,7 +273,7 @@ async def ask_question(
         from hybrid_retriever import AdaptiveHybridRetriever
 
         hr = AdaptiveHybridRetriever(table_name)
-        text_res, _ = hr.search(
+        text_res, _ = await hr.search(
             expanded, top_k=5, filter_expr="is_fulltext = true AND is_image = false"
         )
         img_res, _ = hr.search(expanded, top_k=3, filter_expr="is_image = true")

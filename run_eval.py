@@ -40,7 +40,7 @@ def run_hybrid_search(tbl, question: str, top_k: int = 10) -> list[str]:
 
     try:
         hr = AdaptiveHybridRetriever(tbl.name)
-        text_res, _ = hr.search(
+        text_res, _ = hr.search_sync(
             question, top_k=top_k, filter_expr="is_fulltext = true AND is_image = false"
         )
         return [r.get("text", "")[:500] for r in (text_res or [])]

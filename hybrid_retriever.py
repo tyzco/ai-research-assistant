@@ -204,31 +204,18 @@ class AdaptiveHybridRetriever:
             return [q, stripped]
         return [q]
 
-    # ---- 主入口 ----
-    def search(
-        self,
-        query: str,
-        top_k: int = 5,
-        filter_expr: str | None = None,
-    ) -> tuple[list[dict], float]:
-        """返回 (检索结果列表, BM25权重alpha)。
-
-        alpha 值表示本次检索中 BM25 的贡献比例（0=纯向量, 1=纯关键词）。
-        调用方可记录此值用于消融实验。
-        """
-        alpha = self._compute_adaptive_weight(query)
-
-        # 多查询扩展 (召回优化): 原 query + 翻译/去问句词变体 → 多路召回融合
-        variants = self._query_variants(query)
+    def _fuse_variants(
+        self, variants: list[str], query: str, top_k: int, filter_expr: str | None
+    ) -> list[dict]:
+        """多变体融合: 每变体独立召回 → 加权 RRF 聚合 → 级联重排 (同步)。"""
         if len(variants) <= 1:
             vec_res = self._vector_recall(query, top_k * 6, filter_expr)
             bm25_res = self._bm25_recall(query, top_k * 6)
             if not bm25_res:
-                return self._cascade_rerank(query, vec_res, top_k), alpha
+                return self._cascade_rerank(query, vec_res, top_k)
             fused = self._adaptive_rrf(vec_res, bm25_res, query, top_k=top_k * 3)
-            return self._cascade_rerank(query, fused, top_k), alpha
+            return self._cascade_rerank(query, fused, top_k)
 
-        # 多变体融合: 每个变体独立召回 → 加权 RRF 聚合 → 级联重排
         agg: dict = {}
         agg_map: dict = {}
         for vq in variants:
@@ -246,7 +233,57 @@ class AdaptiveHybridRetriever:
         merged = [agg_map[cid] for cid in sorted(agg, key=agg.get, reverse=True)][
             : top_k * 3
         ]
-        return self._cascade_rerank(query, merged, top_k), alpha
+        return self._cascade_rerank(query, merged, top_k)
+
+    async def _query_variants_async(self, query: str) -> list[str]:
+        """生成检索变体 (异步): 原 query + 去问句词 + CN→EN 缓存翻译。"""
+        q = (query or "").strip()
+        if not q:
+            return [q]
+        variants = [q]
+        stripped = self._query_variants(q)
+        if len(stripped) > 1 and stripped[1] not in variants:
+            variants.append(stripped[1])
+        if any(19968 <= ord(c) <= 40869 for c in q):
+            try:
+                from search import _translate_cn_query
+
+                en = await _translate_cn_query(q)
+                if en:
+                    for term in [t.strip() for t in en.split(",") if t.strip()][:2]:
+                        if term and term.lower() not in [v.lower() for v in variants]:
+                            variants.append(term)
+            except Exception:
+                pass
+        return variants[:3]
+
+    # ---- 主入口 ----
+    async def search(
+        self,
+        query: str,
+        top_k: int = 5,
+        filter_expr: str | None = None,
+    ) -> tuple[list[dict], float]:
+        """返回 (检索结果列表, BM25权重alpha)。异步 (支持 CN→EN 翻译变体)。
+
+        alpha 值表示本次检索中 BM25 的贡献比例（0=纯向量, 1=纯关键词）。
+        同步调用方请用 search_sync()。
+        """
+        alpha = self._compute_adaptive_weight(query)
+        variants = await self._query_variants_async(query)
+        merged = self._fuse_variants(variants, query, top_k, filter_expr)
+        return merged, alpha
+
+    def search_sync(
+        self,
+        query: str,
+        top_k: int = 5,
+        filter_expr: str | None = None,
+    ) -> tuple[list[dict], float]:
+        """同步版 search (给 sync main / 测试用)。"""
+        import asyncio
+
+        return asyncio.run(self.search(query, top_k, filter_expr))
 
         # 级联重排
         return self._cascade_rerank(query, fused, top_k), alpha

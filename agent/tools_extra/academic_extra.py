@@ -60,7 +60,7 @@ async def _check_plagiarism(text: str, table_name: str = "") -> dict:
 
     try:
         hr = AdaptiveHybridRetriever(table_name)
-        results, alpha = hr.search(text, top_k=8)
+        results, alpha = await hr.search(text, top_k=8)
     except Exception as e:
         return {"error": f"知识库检索失败: {e}"}
 

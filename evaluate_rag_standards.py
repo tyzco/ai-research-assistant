@@ -170,11 +170,15 @@ def main():
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--kb", type=str, default="")
     ap.add_argument("--qa", type=str, default="data/benchmark_qa.json")
+    ap.add_argument("--topic", type=str, default="", help="只评该主题(可逗号分隔, 如 '强化学习,大语言模型')")
     args = ap.parse_args()
 
     qa = load_eval_qa(args.qa, limit=0)
+    if args.topic:
+        topics = {t.strip() for t in args.topic.split(",") if t.strip()}
+        qa = [x for x in qa if x.get("topic", "") in topics]
     table = args.kb or pick_kb(prefer=("benchmark", "eval", "papers"))
-    print(f"评估 KB: {table}, 题目: {len(qa)} (limit={args.limit or '全部'})")
+    print(f"评估 KB: {table}, 题目: {len(qa)} (limit={args.limit or '全部'}, topic={args.topic or '全部'})")
     report = asyncio.run(run_eval(qa, table, args.limit))
     print("\n===== RAG 标准评估汇总 =====")
     for k in ("faithfulness", "answer_relevancy", "context_recall", "context_precision"):

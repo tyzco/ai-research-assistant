@@ -1,61 +1,186 @@
-"""RAG 标准评估 (ragas): faithfulness + context_precision + answer_relevancy + context_recall。
+"""RAG 标准评估 (RAGAS 指标, 自研实现): faithfulness + answer_relevancy + context_precision + context_recall。
 
 用法:
-    python evaluate_rag_standards.py                    # 全部题
-    python evaluate_rag_standards.py --limit 5          # 只评前 5 题
-    python evaluate_rag_standards.py --kb papers_xxx    # 指定 KB
+    python evaluate_rag_standards.py                    # benchmark_qa 全部 30 题
+    python evaluate_rag_standards.py --limit 8          # 只评前 8 题 (快)
+    python evaluate_rag_standards.py --kb papers_xxx    # 指定 KB (默认选内容最多的非 eval 表)
 
-评估器: DeepSeek (llm_factory) + 本地 bge 嵌入 (LocalBgeEmbeddings)。
-注: 每个样本会生成真实答案 (qa_engine.ask_with_context) 再交由 ragas 打分, 耗时较长。
+为什么不用 ragas 框架 (已试过, 记录在此):
+  - RAGAS 的 LLM judge 绑定 OpenAI 输出格式, 与 DeepSeek 不兼容 → faithfulness 恒 0 /
+    answer_relevancy nan / context_recall 卡死。
+  - 故指标保留, 判定全部自研 (与项目"自研 RAG"一致):
+      faithfulness / answer_relevancy → DeepSeek 温度0 直判 (thinking disabled, 确定性)
+      context_recall → 嵌入语义召回 (近似)
+      context_precision → top-k 命中 ground_truth 相关上下文占比 (嵌入阈值)
+  - 每个样本会走真实管线 (ask_with_context: 检索+重排+生成答案) 再打分, 较慢 (约 20-30s/题)。
 """
 import argparse
 import asyncio
 import json
 import logging
 import os
-import sys
-import types
 
-
-# 离线/本地缓存加载模型, 避免 sentence-transformers 每次启动联网检查 HuggingFace 卡顿
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
-logging.basicConfig(level=logging.WARNING)
+logger = logging.getLogger("rag_standards")
+logging.basicConfig(level=logging.INFO)
 
-# ragas 0.4.3 与 langchain_community 0.4.x 兼容 stub (vertexai 已拆分为独立包, 本评估不使用)
-_mod = types.ModuleType("langchain_community.chat_models.vertexai")
+import numpy as np  # noqa: E402
 
-
-class _ChatVertexAI:
-    def __init__(self, *a, **k):
-        raise NotImplementedError("VertexAI 未配置, 本评估使用 DeepSeek")
-
-
-_mod.ChatVertexAI = _ChatVertexAI
-sys.modules.setdefault("langchain_community.chat_models.vertexai", _mod)
-
-from langchain_openai import ChatOpenAI  # noqa: E402
-from openai import OpenAI  # noqa: E402
-from ragas import EvaluationDataset, SingleTurnSample, evaluate  # noqa: E402
-from ragas.embeddings.base import BaseRagasEmbeddings  # noqa: E402
-from ragas.llms import LangchainLLMWrapper  # noqa: E402
-from ragas.metrics import context_precision  # noqa: E402
-# 注: faithfulness/answer_relevancy/context_recall 的 LLM 判定与 DeepSeek 输出格式不兼容
-# (faithfulness 恒 0 / answer_relevancy nan / context_recall 卡死)。
-# 故: faithfulness+answer_relevancy 用 DeepSeek 直判, context_recall 用嵌入语义召回。
-
-from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL  # noqa: E402
+from config import (  # noqa: E402
+    DEEPSEEK_API_KEY,
+    DEEPSEEK_BASE_URL,
+    DEEPSEEK_MODEL,
+    LLM_QUICK_MAX_TOKENS,
+)
 from eval_common import load_eval_qa, pick_kb, semantic_recall  # noqa: E402
-from knowledge_base import LANCEDB_DIR, _embed_texts_sync  # noqa: E402
+from knowledge_base import _embed_texts_sync  # noqa: E402
 
 
-class LocalBgeEmbeddings(BaseRagasEmbeddings):
-    """用项目本地 bge 模型提供 ragas 评估嵌入。"""
+# ============ DeepSeek 直判评分器 (确定性: 温度0 + thinking disabled) ============
 
-    def embed_documents(self, texts):
-        return _embed_texts_sync(texts)
+def _judge_llm(prompt: str, max_tokens: int = 60, timeout: int = 30) -> str:
+    """DeepSeek 直判, 返回原始输出。失败返回 ""。"""
+    from openai import OpenAI
 
-    def embed_query(self, text):
-        return _embed_texts_sync([text])[0]
+    client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+    resp = client.chat.completions.create(
+        model=DEEPSEEK_MODEL,
+        temperature=0.0,
+        max_tokens=min(LLM_QUICK_MAX_TOKENS, max_tokens),
+        messages=[{"role": "user", "content": prompt}],
+        extra_body={"thinking": {"type": "disabled"}},
+        timeout=timeout,
+    )
+    return resp.choices[0].message.content or ""
 
+
+def _parse_score(raw: str) -> float | None:
+    """从 LLM 输出里提取 0-1 分数 (鲁棒: 数字/分数/JSON 均可)。"""
+    import re
+
+    if not raw:
+        return None
+    m = re.search(r"\d+\.?\d*", raw)
+    if not m:
+        return None
+    try:
+        v = float(m.group())
+    except ValueError:
+        return None
+    return max(0.0, min(1.0, v))
+
+
+def judge_faithfulness(answer: str, contexts: list[str]) -> float | None:
+    """答案论断被上下文支撑的比例 (0-1)。RAGAS faithfulness 语义。
+
+    按论断逐个判定并取被支撑比例 (部分支撑给部分分), 避免"有任何不支持即 0"的二值化误杀。
+    """
+    ctx = "\n".join(f"- {c[:400]}" for c in contexts[:5]) or "（无上下文）"
+    prompt = (
+        "你是 RAG 评估器。将答案拆成若干论断, 逐个判断每个论断是否被给定上下文"
+        "直接支撑或可由上下文合理推断。\n"
+        "规则: 上下文完全没有依据的论断 (编造/外推) 算不被支撑; 上下文为空则该答案所有论断都不被支撑。\n"
+        f"上下文:\n{ctx}\n\n答案:\n{(answer or '')[:1500]}\n\n"
+        "只输出被支撑比例 = 被支撑论断数 / 总论断数, 一个 0-1 之间的小数, 不要解释。"
+    )
+    return _parse_score(_judge_llm(prompt))
+
+
+def judge_answer_relevancy(question: str, answer: str) -> float | None:
+    """答案是否直接回应了问题 (0-1)。RAGAS answer_relevancy 语义。"""
+    prompt = (
+        "你是 RAG 评估器。判断答案是否直接、完整地回答了问题。\n"
+        "规则: 答非所问/跑题/回避 → 低分; 完整覆盖问题核心 → 高分。\n"
+        f"问题: {question[:300]}\n\n答案: {(answer or '')[:1500]}\n\n"
+        "只输出一个 0-1 之间的数 (0=完全无关, 1=完整回答), 不要解释。"
+    )
+    return _parse_score(_judge_llm(prompt))
+
+
+def context_precision(contexts: list[str], ground_truth: str, top_k: int = 5, thresh: float = 0.75) -> float:
+    """top-k 中与 ground_truth 相关的上下文占比 (嵌入语义近似 RAGAS context_precision)。"""
+    if not contexts or not ground_truth:
+        return 0.0
+    ge = _embed_texts_sync([ground_truth])[0]
+    top = contexts[:top_k]
+    ce = np.array(_embed_texts_sync([c[:500] for c in top]))
+    sims = np.dot(ce, ge) / (np.linalg.norm(ce, axis=1) * np.linalg.norm(ge) + 1e-12)
+    return float(np.mean(sims >= thresh))
+
+
+# ============ 主评估流程 ============
+
+async def run_eval(qa_list: list[dict], table_name: str, limit: int = 0) -> dict:
+    from qa_engine import ask_with_context
+
+    items = qa_list[:limit] if limit else qa_list
+    rows = []
+    for i, item in enumerate(items, 1):
+        q = item.get("question", "")
+        gt = item.get("ground_truth", "")
+        try:
+            answer, contexts = await ask_with_context(table_name, q)
+        except Exception as e:
+            logger.warning(f"QA failed [{i}]: {q[:30]}: {e}")
+            rows.append({"question": q, "error": str(e)})
+            continue
+        f = judge_faithfulness(answer, contexts)
+        r = judge_answer_relevancy(q, answer)
+        cr = semantic_recall(contexts, gt, top_k=5)
+        cp = context_precision(contexts, gt, top_k=5)
+        rows.append(
+            {
+                "question": q,
+                "answer_len": len(answer or ""),
+                "contexts": len(contexts),
+                "faithfulness": f,
+                "answer_relevancy": r,
+                "context_recall": cr,
+                "context_precision": cp,
+            }
+        )
+        logger.info(
+            f"[{i}/{len(items)}] faith={f if f is not None else 'NA':.2f} "
+            f"rel={r if r is not None else 'NA':.2f} rec={cr:.3f} prec={cp:.3f}"
+        )
+
+    def _avg(key: str, filter_none: bool = True) -> float:
+        vals = [x.get(key) for x in rows if x.get(key) is not None]
+        return round(sum(vals) / len(vals), 4) if vals else 0.0
+
+    report = {
+        "kb": table_name,
+        "n": len(rows),
+        "questions": len(items),
+        "faithfulness": _avg("faithfulness"),
+        "answer_relevancy": _avg("answer_relevancy"),
+        "context_recall": _avg("context_recall"),
+        "context_precision": _avg("context_precision"),
+        "note": "faithfulness/relevancy=DeepSeek直判; context_recall/precision=嵌入语义近似 (非标准标注).",
+    }
+    with open("data/rag_standards_report.json", "w", encoding="utf-8") as f:
+        json.dump({"summary": report, "rows": rows}, f, ensure_ascii=False, indent=1)
+    return report
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--kb", type=str, default="")
+    ap.add_argument("--qa", type=str, default="data/benchmark_qa.json")
+    args = ap.parse_args()
+
+    qa = load_eval_qa(args.qa, limit=0)
+    table = args.kb or pick_kb(prefer=("benchmark", "eval", "papers"))
+    print(f"评估 KB: {table}, 题目: {len(qa)} (limit={args.limit or '全部'})")
+    report = asyncio.run(run_eval(qa, table, args.limit))
+    print("\n===== RAG 标准评估汇总 =====")
+    for k in ("faithfulness", "answer_relevancy", "context_recall", "context_precision"):
+        print(f"  {k:20s}: {report.get(k)}")
+    print(f"已保存 data/rag_standards_report.json (n={report['n']})")
+
+
+if __name__ == "__main__":
+    main()

@@ -139,7 +139,7 @@ class AdaptiveHybridRetriever:
         if len(chunks) <= top_k:
             return chunks
 
-        stage1_keep = stage1_k or max(top_k * 3, 15)
+        stage1_keep = stage1_k or max(top_k * 5, 25)
         stage1_keep = min(stage1_keep, len(chunks))
 
         # Stage 1: 轻量语义相似度预筛
@@ -165,6 +165,12 @@ class AdaptiveHybridRetriever:
             reranker = self._get_stage2()
             pairs = [[query, c.get("text", "")[:512]] for c in stage1_chunks]
             scores2 = reranker.predict(pairs, convert_to_numpy=True)
+            from config import RERANK_MIN_SCORE
+            if RERANK_MIN_SCORE > 0:
+                valid = [(i, sc) for i, sc in enumerate(scores2) if sc >= RERANK_MIN_SCORE]
+                if valid:
+                    valid.sort(key=lambda x: x[1], reverse=True)
+                    return [stage1_chunks[i] for i, _ in valid[:top_k]]
             stage2_indices = sorted(
                 range(len(scores2)), key=lambda i: scores2[i], reverse=True
             )[:top_k]
@@ -187,14 +193,14 @@ class AdaptiveHybridRetriever:
         """
         alpha = self._compute_adaptive_weight(query)
 
-        vec_res = self._vector_recall(query, top_k * 4, filter_expr)
-        bm25_res = self._bm25_recall(query, top_k * 4)
+        vec_res = self._vector_recall(query, top_k * 6, filter_expr)
+        bm25_res = self._bm25_recall(query, top_k * 6)
 
         if not bm25_res:
             return self._cascade_rerank(query, vec_res, top_k), alpha
 
         # 自适应 RRF 融合
-        fused = self._adaptive_rrf(vec_res, bm25_res, query, top_k=top_k * 2)
+        fused = self._adaptive_rrf(vec_res, bm25_res, query, top_k=top_k * 3)
 
         # 级联重排
         return self._cascade_rerank(query, fused, top_k), alpha

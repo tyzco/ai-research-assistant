@@ -72,7 +72,9 @@ EMBEDDING_BACKEND = _env("EMBEDDING_BACKEND", "")
 # Rerank 模型 (延迟加载)
 # ===================================================================
 RERANK_MODEL = _env("RERANK_MODEL", "BAAI/bge-reranker-base")
+RERANK_MIN_SCORE = _env("RERANK_MIN_SCORE", 0.0, float)
 RERANK_STAGE1_MODEL = _env("RERANK_STAGE1_MODEL", "all-MiniLM-L6-v2")
+# 重排精度阈值: bge-reranker 得分低于此值的 chunk 过滤掉 (0=不过滤, 提升精度; 太高伤召回)
 
 # ===================================================================
 # Vision Model (默认关闭)

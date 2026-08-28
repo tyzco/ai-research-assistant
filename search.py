@@ -158,10 +158,12 @@ async def _generate_strategy_uncached(query: str) -> dict:
     client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
 
     def _fallback() -> dict:
-        """JSON 解析失败时的降级默认值。"""
+        """JSON 解析失败时的降级默认值。
+        keywords_en 留空 — 让 search_papers_for_topic 走缓存翻译/LLM 翻译生成 EN 词
+        (修复: 之前把中文 query 塞进 keywords_en → EN 源全部检索不到 → 返回 1 篇)。"""
         return {
             "keywords_cn": [query],
-            "keywords_en": [query],
+            "keywords_en": [],
             "domain_tags": [],
             "related_terms_cn": [],
             "related_terms_en": [],
@@ -498,15 +500,21 @@ async def search_papers_for_topic(
     # 合并去重 + 屏蔽过滤 + 语言检测 + CN 相关性过滤
     cn_kw_set = set((keywords_cn or [query]) + [query])
 
-    def _cn_relevant(title: str, strict: bool = True) -> bool:
-        """strict=True要求完整关键词; strict=False含任一关键词字符即通过"""
-        if strict:
-            for kw in cn_kw_set:
-                if len(kw) >= 2 and kw in title:
-                    return True
-            return False
-        cn_chars = {c for kw in cn_kw_set for c in kw if 19968 <= ord(c) <= 40869}
-        return any(c in cn_chars for c in (title or ""))
+    def _cn_relevant(title: str, abstract: str = "", strict: bool = True) -> bool:
+        """中文论文必须标题含完整短关键词 (2-8字)。摘要不采信 — CN 摘要 buzzword 泛滥。
+        策略降级为整句关键词时 → 2-gram 兜底 (避免标题匹配不到返回 0)。"""
+        t = title or ""
+        short_kws = [k.strip() for k in cn_kw_set if 2 <= len(k.strip()) <= 8]
+        if short_kws:
+            return any(k in t for k in short_kws)
+        # 无短关键词 (策略失败, 关键词为整句) → 2-gram 兜底防返回 0
+        bigrams = {
+            k.strip()[i : i + 2]
+            for k in cn_kw_set
+            if len(k.strip()) >= 2
+            for i in range(len(k.strip()) - 1)
+        }
+        return any(b in t for b in bigrams)
 
     seen: set[str] = set()
     papers: list[PaperMeta] = []
@@ -537,7 +545,7 @@ async def search_papers_for_topic(
         # 中文论文必须与搜索关键词相关（前30篇严格，之后宽松）
         cn_count_done = sum(1 for pp in papers if _detect_cn(pp.title))
         if _detect_cn(p.title) and not _cn_relevant(
-            p.title, strict=(cn_count_done < 30)
+            p.title, p.abstract, strict=(cn_count_done < 30)
         ):
             continue
         # 英文论文关键词相关性: 标题/摘要含任一 EN 关键词或原始 query 才保留
@@ -562,7 +570,7 @@ async def search_papers_for_topic(
                 p not in papers
                 and not _should_drop(p)
                 and _detect_cn(p.title)
-                and _cn_relevant(p.title, strict=False)
+                and _cn_relevant(p.title, p.abstract, strict=False)
             ):
                 key = _dedup_key(p)
                 if key not in seen:

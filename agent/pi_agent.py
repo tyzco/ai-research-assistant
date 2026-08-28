@@ -415,6 +415,19 @@ class PiAgent:
                 messages.append(_am)
                 for tc in msg.tool_calls:
                     tool_name = tc.function.name
+                    # 硬上限: check_draft_quality 最多 2 次, 之后阻止并强制交付 (防 10 次自检烧 token)
+                    if tool_name == "check_draft_quality":
+                        self._quality_checks = getattr(self, "_quality_checks", 0) + 1
+                        if self._quality_checks > 2:
+                            messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": tc.id,
+                                    "content": "已自检 2 次。请不要再调用 check_draft_quality，直接交付最终初稿（可标注仍未满足的项）。",
+                                }
+                            )
+                            state["steps"] += 1
+                            continue
                     try:
                         tool_args = json.loads(tc.function.arguments)
                     except json.JSONDecodeError:

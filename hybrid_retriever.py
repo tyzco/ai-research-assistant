@@ -179,6 +179,31 @@ class AdaptiveHybridRetriever:
             logger.error(f"Stage2 rerank failed: {e}")  # DeepSeek 审查 #5
             return stage1_chunks[:top_k]
 
+    def _query_variants(self, query: str) -> list[str]:
+        """生成检索 query 变体 (召回优化): 原 query + 去问句词的核心词变体。
+        同步无延迟 (不做 LLM 翻译); 最多 2 变体控制耗时。"""
+        q = (query or "").strip()
+        if not q:
+            return [q]
+        ql = q.lower()
+        stripped = ql
+        for w in [
+            "什么是", "为什么", "如何", "怎么", "有哪些", "有什么区别",
+            "介绍一下", "帮我", "请问", "总结", "说明", "解释", "分析",
+            "what is", "what are", "how to", "how does", "how do",
+            "explain", "describe", "why do", "why is", "please", "list",
+        ]:
+            stripped = stripped.replace(w, "")
+        stripped = stripped.strip(" ？?。.，,：:；;！!()（）")
+        if (
+            stripped
+            and stripped != ql
+            and len(stripped) >= 2
+            and len(stripped) <= len(ql)
+        ):
+            return [q, stripped]
+        return [q]
+
     # ---- 主入口 ----
     def search(
         self,
@@ -193,14 +218,35 @@ class AdaptiveHybridRetriever:
         """
         alpha = self._compute_adaptive_weight(query)
 
-        vec_res = self._vector_recall(query, top_k * 6, filter_expr)
-        bm25_res = self._bm25_recall(query, top_k * 6)
+        # 多查询扩展 (召回优化): 原 query + 翻译/去问句词变体 → 多路召回融合
+        variants = self._query_variants(query)
+        if len(variants) <= 1:
+            vec_res = self._vector_recall(query, top_k * 6, filter_expr)
+            bm25_res = self._bm25_recall(query, top_k * 6)
+            if not bm25_res:
+                return self._cascade_rerank(query, vec_res, top_k), alpha
+            fused = self._adaptive_rrf(vec_res, bm25_res, query, top_k=top_k * 3)
+            return self._cascade_rerank(query, fused, top_k), alpha
 
-        if not bm25_res:
-            return self._cascade_rerank(query, vec_res, top_k), alpha
-
-        # 自适应 RRF 融合
-        fused = self._adaptive_rrf(vec_res, bm25_res, query, top_k=top_k * 3)
+        # 多变体融合: 每个变体独立召回 → 加权 RRF 聚合 → 级联重排
+        agg: dict = {}
+        agg_map: dict = {}
+        for vq in variants:
+            v_alpha = self._compute_adaptive_weight(vq)
+            v_vec = self._vector_recall(vq, top_k * 3, filter_expr)
+            v_bm25 = self._bm25_recall(vq, top_k * 3)
+            for rank, r in enumerate(v_vec):
+                cid = r.get("chunk_id", f"v{rank}")
+                agg[cid] = agg.get(cid, 0.0) + (1 - v_alpha) / (60 + rank)
+                agg_map.setdefault(cid, r)
+            for rank, r in enumerate(v_bm25):
+                cid = r.get("chunk_id", f"b{rank}")
+                agg[cid] = agg.get(cid, 0.0) + v_alpha / (60 + rank)
+                agg_map.setdefault(cid, r)
+        merged = [agg_map[cid] for cid in sorted(agg, key=agg.get, reverse=True)][
+            : top_k * 3
+        ]
+        return self._cascade_rerank(query, merged, top_k), alpha
 
         # 级联重排
         return self._cascade_rerank(query, fused, top_k), alpha

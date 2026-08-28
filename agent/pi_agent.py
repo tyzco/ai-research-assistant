@@ -428,6 +428,19 @@ class PiAgent:
                             )
                             state["steps"] += 1
                             continue
+                    # 硬上限: agent_ask 每 agent 最多 3 次 (防简单问题过度查库, 慢+乱)
+                    if tool_name == "agent_ask":
+                        self._ask_checks = getattr(self, "_ask_checks", 0) + 1
+                        if self._ask_checks > 3:
+                            messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": tc.id,
+                                    "content": "已查询知识库 3 次，已有足够信息。请直接基于已有检索结果回答，不要继续查询。",
+                                }
+                            )
+                            state["steps"] += 1
+                            continue
                     try:
                         tool_args = json.loads(tc.function.arguments)
                     except json.JSONDecodeError:

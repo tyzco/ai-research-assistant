@@ -343,6 +343,25 @@ async def ask_question(
     if neighbor_texts:
         text_res = (text_res or []) + neighbor_texts
 
+    # 轻量图引导扩展: 跨论文共享关键术语的图邻居 chunk → 补 grounding (faithfulness)
+    # (父子扩展只拉同论文相邻块; 图邻居能拉不同论文里讲同一方法/术语的支撑段落)
+    try:
+        from graph_retriever import TermGraphRetriever
+
+        gr = TermGraphRetriever(table_name)
+        graph_neighbors = gr.expand((text_res or [])[:5], k=3)
+        if graph_neighbors:
+            _have_ids = {r.get("chunk_id", "") for r in text_res if r.get("chunk_id")}
+            for cid, _shared in graph_neighbors:
+                if cid in _have_ids:
+                    continue
+                row = gr.get_row(cid)
+                if row:
+                    _have_ids.add(cid)
+                    text_res.append(row)
+    except Exception as e:
+        logger.warning(f"Graph neighbor expansion failed: {e}")
+
     # 构建 Prompt
     if text_res:
         ft = "\n\n".join(
@@ -459,12 +478,30 @@ async def ask_question(
 
 
 async def ask_with_context(table_name: str, question: str) -> tuple[str, list[str]]:
-    """返回答案 + 检索到的上下文块列表（供 RAGAS 评估用）。"""
+    """返回答案 + 检索到的上下文块列表（供 RAGAS 评估用）。
+
+    上下文与 ask_question 答案所见保持一致: top-5 重排后追加图邻居扩展。
+    """
     from knowledge_base import retrieve_with_images
 
     expanded = await _expand_query(question)
     text_res, img_res, abs_res = retrieve_with_images(table_name, expanded, top_k=20)
     text_res = _rerank(question, text_res, top_k=5)
+    # 图邻居扩展 (与 ask_question 内部一致)
+    try:
+        from graph_retriever import TermGraphRetriever
+
+        gr = TermGraphRetriever(table_name)
+        _have = {r.get("chunk_id", "") for r in text_res if r.get("chunk_id")}
+        for cid, _s in gr.expand(text_res or [], k=3):
+            if cid in _have:
+                continue
+            row = gr.get_row(cid)
+            if row:
+                _have.add(cid)
+                text_res.append(row)
+    except Exception as e:
+        logger.warning(f"ask_with_context graph expand failed: {e}")
     contexts = [c.get("text", "")[:500] for c in (text_res or [])]
     result = await ask_question(table_name, question, use_rerank=True)
     return result.answer, contexts

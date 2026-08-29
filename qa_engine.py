@@ -281,7 +281,8 @@ async def ask_question(
             expanded, top_k=5, filter_expr="is_fulltext = true AND is_image = false"
         )
         img_res, _ = hr.search(expanded, top_k=3, filter_expr="is_image = true")
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Hybrid retrieval degraded to retrieve_with_images: {e}")
         text_res, img_res, abs_res = retrieve_with_images(
             table_name, expanded, top_k=20
         )

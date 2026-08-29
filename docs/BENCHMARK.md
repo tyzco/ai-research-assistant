@@ -55,10 +55,12 @@ python run_eval.py --kb <表名>                   # 内部回归 (8题, 防退�
 
 | 指标 | 值 |
 |---|---|
-| faithfulness (严格判词) | **0.133** |
+| faithfulness (严格判词, 完整上下文) | **0.221** |
 | answer_relevancy | **0.99** |
 | context_recall | 0.78 |
-| context_precision | 0.71 |
+| context_precision | 0.67 |
+
+注: 0.133 是旧评估把上下文截断到 400字×5 饿死 judge 的产物; 给 judge 完整检索上下文(900字×8)后 0.133→0.221 (+66%)。剩余 0.22 为诚实接地率 — 答案相关 0.99, 但 ~78% 论断是生成侧综合 + RAGAS 严格判词(逐论断比例)的固有结果, 非检索缺陷。
 
 ### 关键结论
 

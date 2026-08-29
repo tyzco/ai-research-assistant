@@ -822,11 +822,10 @@ async def api_search_papers_stream(request: Request):
         )
         t0 = time.time()
 
-        # 完整 12 源检索 (与选题判断一致, 缓存翻译兜底), 再分批流式输出。
-        # 修复: 原仅 arXiv+OpenAlex+S2+CNKI (~61篇), 面板与选题报告篇数不一致。
-        from search import search_papers_for_topic
+        # 完整检索 + 冷门拓宽: 保证展示/建库 ≥100 篇最相关论文 (可下载优先, top-100 截断)
+        from search import fetch_relevant_papers
 
-        papers = await search_papers_for_topic(query, keywords_en, keywords_cn)
+        papers = await fetch_relevant_papers(query, target=100)
         seen, uniq = set(), []
         for p in papers:
             if p.paper_id in seen:

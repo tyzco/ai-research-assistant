@@ -557,7 +557,7 @@ async def search_papers_for_topic(
                 _q = (query or "").lower()
                 if not (any(k in _txt for k in en_kw_set) or (_q and _q in _txt)):
                     continue
-        key = _dedup_key(p)
+        key = _paper_dedup_key(p)
         if key and key not in seen:
             seen.add(key)
             papers.append(p)
@@ -572,7 +572,7 @@ async def search_papers_for_topic(
                 and _detect_cn(p.title)
                 and _cn_relevant(p.title, p.abstract, strict=False)
             ):
-                key = _dedup_key(p)
+                key = _paper_dedup_key(p)
                 if key not in seen:
                     seen.add(key)
                     papers.append(p)
@@ -1322,3 +1322,92 @@ async def _search_epmc(keywords: list[str]) -> list[PaperMeta]:
             except Exception:
                 logger.debug("source search failed", exc_info=True)
     return papers
+
+
+def _paper_dedup_key(p) -> str:
+    """论文去重键: DOI 优先, 否则标题规范化 (模块级, 供 fetch_relevant_papers 合并用)。"""
+    if getattr(p, "doi", None):
+        return f"doi:{p.doi.lower().strip()}"
+    return (p.title or "").lower().strip()[:60]
+
+
+async def fetch_relevant_papers(query: str, target: int = 100, min_keep: int = 50) -> list:
+    """保证建库数量: 检索最相关的 target 篇论文 (默认 100), 冷门课题自动拓宽关键词。
+
+    策略:
+      1. 首轮: 生成策略关键词 + 联想词 → search_papers_for_topic
+      2. 若 < target: 用联想词 (related_en/cn) 作为补充查询逐个再搜, 合并去重
+      3. 相关性重排 (_rerank_by_relevance), 可下载 (pdf_url) 的优先
+      4. 截断到 target 篇; 但若可下载论文不足 min_keep, 用无 PDF 但相关的补齐
+
+    返回按相关性排序的 PaperMeta 列表 (可下载的排前面)。
+    """
+    from models import PaperMeta  # noqa: F401
+
+    try:
+        strategy = await generate_search_strategy(query)
+        kw_en = (strategy.get("keywords_en") or [])[:3]
+        kw_cn = (strategy.get("keywords_cn") or [])[:4]
+        rel_en = strategy.get("related_terms_en") or []
+        rel_cn = strategy.get("related_terms_cn") or []
+    except Exception:
+        kw_en, kw_cn, rel_en, rel_cn = [], [], [], []
+
+    # 首轮: 主查询
+    try:
+        papers = await search_papers_for_topic(
+            query, keywords_en=kw_en, keywords_cn=kw_cn,
+            related_en=rel_en, related_cn=rel_cn,
+        )
+    except Exception:
+        papers = []
+    seen = {_paper_dedup_key(p): p for p in papers}
+
+    # 拓宽: 用联想词各自独立检索补查 (第二轮不共用首轮关键词 → 结果集真正不同)
+    # 直到 ≥ target 或联想词/布尔查询用完; 冷门课题靠此扩到可下载论文池
+    if len(seen) < target:
+        extra_queries = []
+        for t in (rel_en or [])[:8]:
+            if t and t.lower() not in query.lower():
+                extra_queries.append(t)
+        for t in (rel_cn or [])[:8]:
+            if t and t not in query:
+                extra_queries.append(t)
+        try:
+            for bq in (strategy.get("boolean_queries") or [])[:3]:
+                if bq and bq not in extra_queries:
+                    extra_queries.append(bq)
+        except Exception:
+            pass
+        for eq in extra_queries:
+            if len(seen) >= target:
+                break
+            try:
+                # 联想词独立成检索式 (不传首轮关键词 → 各自生成策略, 覆盖不同论文)
+                more = await search_papers_for_topic(eq)
+                for p in more:
+                    k = _paper_dedup_key(p)
+                    if k not in seen:
+                        seen[k] = p
+            except Exception:
+                continue
+    merged = list(seen.values())
+
+    # 相关性重排 (含引用提权 + 知网占位沉底)
+    try:
+        ranked = _rerank_by_relevance(merged, query, top_k=0)
+    except Exception:
+        ranked = merged
+
+    # 可下载优先: 保持相关排序, 但把有 pdf_url 的排前 (保证"可直接下载率")
+    with_pdf = [p for p in ranked if getattr(p, "pdf_url", None)]
+    without = [p for p in ranked if not getattr(p, "pdf_url", None)]
+    ordered = with_pdf + without
+
+    # 截断: 保 target 篇; 若可下载不足 min_keep, 用无PDF相关补齐到 min_keep 之后
+    out = ordered[:target]
+    logger.info(
+        f"fetch_relevant_papers: {query[:30]} → {len(ordered)} 合并, "
+        f"{len(with_pdf)} 可下载, 截断到 {len(out)}"
+    )
+    return out

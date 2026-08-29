@@ -1,0 +1,18 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // .tool_response.filePath' | { read -r f; case \"$f\" in */qa_engine.py|*/search.py|*/hybrid_retriever.py|*/graph_retriever.py|*/knowledge_base.py|*/downloader.py|*/evaluate_rag_standards.py) cd \"/Users/ty/Downloads/大模型项目/ai-research-assistant\" && python3 evaluate_rag_standards.py --kb papers_big_eval --limit 3 >> /tmp/rag_eval_smoke.log 2>&1; echo \"[rag-eval-smoke] $(date +%H:%M:%S) $f\";; esac } 2>/dev/null || true",
+            "timeout": 300,
+            "async": true,
+            "statusMessage": "RAG faithfulness 冒烟评估运行中（3题，后台）…"
+          }
+        ]
+      }
+    ]
+  }
+}

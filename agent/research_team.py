@@ -447,14 +447,61 @@ class ResearchTeam:
 
     async def _run_pipeline(self, start_idx: int) -> dict:
         """从 start_idx 开始执行流水线 (DeepSeek 审查 #6: 去重 execute/approve_and_continue)。
-        遇审批闸门 → 返回 awaiting_approval; 全部完成 → 返回 completed。"""
-        for i in range(start_idx, len(self.PIPELINE)):
+        遇审批闸门 → 返回 awaiting_approval; 全部完成 → 返回 completed。
+
+        速度优化 (保速度提质量): 无审批门的上游 agent 互相独立 (同层不注入前输出),
+        聚成一批 asyncio.gather 并行执行 — 上游阶段 ~2-3× 提速, 不影响正确性。
+        带审批门的 agent (topic_evaluator) 仍串行, 保持"先确认方向再花检索成本"的闸门语义。"""
+        i = start_idx
+        while i < len(self.PIPELINE):
             agent_key, description, required = self.PIPELINE[i]
             if not required and not self._should_run(agent_key):
+                i += 1
                 continue
+            agent_def = AGENT_DEFINITIONS[agent_key]
+
+            # 并行优化: 连续的无门同层 agent (上游/中游) 一波并行执行。
+            # 依据: _build_context 只注入"前一层"输出, 同层 agent 互不看见彼此输出
+            # → 串行与并行看到相同上下文, 并行是纯提速不改质量。中游 6 章节 writer 全无门 → ~5× 提速。
+            if (
+                agent_def["layer"] in ("upstream", "midstream")
+                and not agent_def.get("needs_approval")
+            ):
+                batch = []
+                j = i
+                while j < len(self.PIPELINE):
+                    _k, _d, _r = self.PIPELINE[j]
+                    _ad = AGENT_DEFINITIONS[_k]
+                    if (
+                        _ad["layer"] != agent_def["layer"]
+                        or _ad.get("needs_approval")
+                    ):
+                        break
+                    if _r or self._should_run(_k):
+                        batch.append(self.PIPELINE[j])
+                    j += 1
+                if len(batch) > 1:
+                    logger.info(f"Layer parallel: {[k for k, _, _ in batch]}")
+                    results = await asyncio.gather(
+                        *[self._run_agent(k, AGENT_DEFINITIONS[k]) for k, _, _ in batch]
+                    )
+                    for (k, desc2, _), res in zip(batch, results):
+                        self.state[k] = res
+                        self.history.append(
+                            {
+                                "agent": k,
+                                "name": AGENT_DEFINITIONS[k]["name"],
+                                "description": desc2,
+                                "layer": agent_def["layer"],
+                                "output_preview": res[:200],
+                            }
+                        )
+                        self._save_snapshot()
+                    i = j
+                    continue
+                # 单个无门 agent, 走下方通用路径
 
             self.current_stage = agent_key
-            agent_def = AGENT_DEFINITIONS[agent_key]
             logger.info(f"Running: {agent_def['name']} ({description})")
 
             result = await self._run_agent(agent_key, agent_def)
@@ -492,6 +539,7 @@ class ResearchTeam:
                     },
                     "completed_stages": [h["agent"] for h in self.history],
                 }
+            i += 1
 
         # 全部完成
         final = self.state.get("final_drafter", "")

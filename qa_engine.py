@@ -234,6 +234,7 @@ async def ask_question(
     use_rerank: bool = True,
     model: str = "",
     memory_key: str = "",
+    extra_context: list[dict] | None = None,
 ) -> AskResponse:
     """RAG 问答：指代消解 → 查询改写 → 粗召回 → Rerank 精排 → 生成。
 
@@ -345,6 +346,9 @@ async def ask_question(
         text_res = (text_res or []) + neighbor_texts
 
     # 构建 Prompt
+    if extra_context:
+        # 生成后接地增强: 补充证据 (论断级查库补出的支撑段落) 追加进上下文
+        text_res = (text_res or []) + extra_context
     if text_res:
         ft = "\n\n".join(
             f"[{i+1}] {r.get('title','N/A')} ({r.get('year','N/A')}), p{r.get('page_number',0)}\n{r.get('text','')[:4096]}"

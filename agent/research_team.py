@@ -366,10 +366,12 @@ class ResearchTeam:
         ("final_drafter", "终稿定稿", True),
     ]
 
-    def __init__(self, run_id: str = ""):
+    def __init__(self, run_id: str = "", topic_id: str = ""):
         """创建团队实例。run_id 为空 → 自动生成 (每个 /team/start 独立 run)。
-        DeepSeek 审查 #7: 弃用全局单例, 按 run_id 隔离多用户并发。"""
+        DeepSeek 审查 #7: 弃用全局单例, 按 run_id 隔离多用户并发。
+        topic_id: 关联课题, 用于 _should_run 按"是否已有知识库"跳过冗余上游搜索。"""
         self.run_id: str = run_id or f"run_{uuid.uuid4().hex[:12]}"
+        self.topic_id: str = topic_id
         self.state: dict[str, Any] = {}  # agent_key → output
         self.pending_approval: Optional[ApprovalRequest] = None
         self.current_stage: str = "idle"
@@ -551,9 +553,11 @@ class ResearchTeam:
             "completed_stages": [h["agent"] for h in self.history],
         }
 
-    async def execute(self, task: str) -> dict:
+    async def execute(self, task: str, topic_id: str = "") -> dict:
         """执行完整研究流程。返回 {status, result|request, run_id}"""
         async with self._lock:
+            if topic_id:
+                self.topic_id = topic_id
             self.state = {"task": task}
             self.history = []
             return await self._run_pipeline(0)
@@ -708,11 +712,31 @@ class ResearchTeam:
         return "\n\n".join(context_parts) if context_parts else "（无上游产出）"
 
     def _should_run(self, agent_key: str) -> bool:
-        """判断是否跳过可选 agent。
-        DeepSeek 审查 #4: 原 has_kb magic flag 全项目无处设置, 属死代码。
-        当前无可自动跳过的依据 → 一律执行 (required=False 仅表达"可选")。
-        后续接入会话持久化后可在此按资源/偏好动态跳过。"""
+        """判断是否跳过 agent (触发条件)。
+
+        提速优化 (保速度提质量):
+        - 上游"多元检索 + 质量筛选"在课题已有知识库时是冗余的 (论文已入库,
+          写作 agent 直接 agent_ask/search_knowledge_bases 用库) → 跳过两者,
+          省 2 个 LLM 调用 + 12 源搜索网络耗时。
+        其余 agent 均执行。"""
+        if agent_key in ("multi_source_searcher", "quality_screener"):
+            if self._topic_has_kb():
+                return False
         return True
+
+    def _topic_has_kb(self) -> bool:
+        """课题是否已建知识库 (有 lancedb_table + papers)。"""
+        if not self.topic_id:
+            return False
+        try:
+            from topic_manager import active_topics
+
+            st = active_topics.get(self.topic_id)
+            if st and getattr(st, "lancedb_table", None):
+                return True
+        except Exception:
+            pass
+        return False
 
     def _build_summary(self) -> str:
         parts = ["# 研究流程总结\n"]

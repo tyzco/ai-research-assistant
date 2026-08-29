@@ -2352,7 +2352,8 @@ async def api_team_start(request: Request):
     from agent.research_team import get_team
 
     team = get_team()  # 每次 start 独立实例, 不再全局单例互踩
-    result = await team.execute(task)
+    topic_id = sanitize_input(req.get("topic_id", ""))
+    result = await team.execute(task, topic_id=topic_id)
     result["run_id"] = team.run_id
     return result
 

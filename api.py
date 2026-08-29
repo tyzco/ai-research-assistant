@@ -467,11 +467,16 @@ async def api_me(user_id: str = Depends(require_user)):
 
 
 @app.get("/topics")
-async def api_list_topics(user_id: str = Depends(get_current_user)):
+async def api_list_topics(
+    user_id: str = Depends(get_current_user), filter: str = "active"
+):
     from database import get_db
 
     db = get_db()
     rows = db.list_topics(user_id if user_id is not None else None)
+    # 默认 active: 隐藏已结题/中止/归档 — 防止未完成课题一直充斥上下文
+    if filter != "all":
+        rows = [r for r in rows if r.get("status") not in ("settled", "aborted", "archived")]
     return [
         {
             "topic_id": r["topic_id"],
@@ -508,6 +513,26 @@ async def api_delete_topic(topic_id: str, user_id: str = Depends(get_current_use
     except Exception as e:
         logger.warning(f"close_memory cleanup failed: {e}")
     return {"ok": True}
+
+
+@app.post("/topic/{topic_id}/state")
+async def api_topic_state(
+    topic_id: str, request: Request, user_id: str = Depends(get_current_user)
+):
+    """课题状态机流转 (结题/中止/归档等)。{status, reason}
+    权限: 仅课题归属用户可流转。审计日志记录流转历史。"""
+    _assert_topic_access(topic_id, user_id)
+    req = await request.json()
+    new_status = (req.get("status") or "").strip().lower()
+    reason = sanitize_input(str(req.get("reason") or ""))[:200]
+    if not new_status:
+        raise HTTPException(400, "需要 status 参数 (settled/aborted/archived/ready 等)")
+    from topic_manager import transition_topic
+
+    ok, msg = transition_topic(topic_id, new_status, user_id, reason)
+    if not ok:
+        raise HTTPException(400, msg)
+    return {"ok": True, "message": msg, "status": new_status}
 
 
 @app.get("/export/{topic_id}")

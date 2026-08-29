@@ -16,9 +16,12 @@ from pydantic import BaseModel, Field
 
 
 class TopicStatus(str, Enum):
-    BUILDING = "building"
-    READY = "ready"
+    BUILDING = "building"  # 建库中
+    READY = "ready"  # 可用/执行中 (可问答、写作)
     ERROR = "error"
+    SETTLED = "settled"  # 已结题 (初稿交付/用户标记完成)
+    ABORTED = "aborted"  # 中止 (用户放弃)
+    ARCHIVED = "archived"  # 归档 (从活跃列表隐藏, 防未完成课题充斥上下文)
 
 
 # ===== Search Strategy (具体化 — DeepSeek 对话建议) =====

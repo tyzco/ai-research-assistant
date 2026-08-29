@@ -18,8 +18,51 @@ _STATUS_LOAD_MAP = {
     "ready": TopicStatus.READY,
     "building": TopicStatus.BUILDING,
     "error": TopicStatus.ERROR,
+    "settled": TopicStatus.SETTLED,
+    "aborted": TopicStatus.ABORTED,
+    "archived": TopicStatus.ARCHIVED,
 }
 _STATUS_MAP_REVERSE = {v.value: v for v in TopicStatus}
+
+# 状态机流转规则: 当前状态 → 允许流转到的状态 (课题生命周期)
+# 待立项≈READY(选题报告已出, 可用) → 建库/可用/结题/中止; 结题/中止 → 归档(移出活跃列表)
+TRANSITIONS: dict[str, set[str]] = {
+    "building": {"ready", "error", "aborted"},
+    "error": {"ready", "building", "aborted"},
+    "ready": {"settled", "aborted", "archived"},
+    "settled": {"archived"},
+    "aborted": {"archived"},
+}
+
+
+def transition_topic(topic_id: str, new_status: str, user_id: str = "", reason: str = "") -> tuple[bool, str]:
+    """课题状态机流转: 校验合法流转 → 更新内存+持久化 → 审计日志。
+
+    user_id 为权限控制参数 (调用方负责鉴权); 审计日志记录谁/何时/从哪到哪/原因。
+    非法流转返回 (False, 原因)。
+    """
+    state = active_topics.get(topic_id)
+    if not state:
+        return False, "课题不存在"
+    cur = state.status.value
+    new_s = _STATUS_MAP_REVERSE.get(new_status)
+    if new_s is None:
+        return False, f"未知状态: {new_status}"
+    if new_status == cur:
+        return False, f"课题已是 {cur} 状态"
+    allowed = TRANSITIONS.get(cur, set())
+    if new_status not in allowed:
+        return False, f"非法流转: {cur} → {new_status} (允许: {sorted(allowed) or '无'})"
+    old = state.status.value
+    state.status = new_s
+    save_topic_state(topic_id)
+    try:
+        from database import get_db
+
+        get_db().log_state_change(topic_id, old, new_status, user_id, reason)
+    except Exception as e:
+        logger.warning(f"audit log failed: {e}")
+    return True, f"{old} → {new_status}"
 
 
 def _save_topics():

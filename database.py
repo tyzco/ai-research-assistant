@@ -154,6 +154,17 @@ class Database:
                 updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
+            CREATE TABLE IF NOT EXISTS topic_state_log (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                topic_id     TEXT NOT NULL,
+                from_status  TEXT NOT NULL DEFAULT '',
+                to_status    TEXT NOT NULL,
+                user_id      TEXT NOT NULL DEFAULT '',
+                reason       TEXT NOT NULL DEFAULT '',
+                created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_state_log_topic ON topic_state_log(topic_id);
+
             CREATE INDEX IF NOT EXISTS idx_messages_topic ON messages(topic_id);
             CREATE INDEX IF NOT EXISTS idx_topics_user ON topics(user_id);
         """
@@ -293,6 +304,30 @@ class Database:
         cur = c.execute("DELETE FROM topics WHERE topic_id = ?", (topic_id,))
         c.commit()
         return cur.rowcount > 0
+
+    def log_state_change(
+        self, topic_id: str, from_status: str, to_status: str,
+        user_id: str = "", reason: str = "",
+    ) -> None:
+        """课题状态流转审计日志 (状态机: 谁/何时/从哪到哪/原因)。"""
+        self._ensure_tables()
+        c = self._conn()
+        c.execute(
+            "INSERT INTO topic_state_log (topic_id, from_status, to_status, user_id, reason) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (topic_id, from_status, to_status, user_id, reason),
+        )
+        c.commit()
+
+    def list_state_log(self, topic_id: str, limit: int = 50) -> list[dict]:
+        """查询课题状态流转历史 (审计)。"""
+        self._ensure_tables()
+        c = self._conn()
+        rows = c.execute(
+            "SELECT * FROM topic_state_log WHERE topic_id = ? ORDER BY id DESC LIMIT ?",
+            (topic_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     # ==================== Messages ====================
 

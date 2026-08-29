@@ -10,27 +10,27 @@
    黑#171717 + 金#D4AF37, 微交互) + taste-skill (单强调色/反卡片滥用)。
    保留全部 class 名, 仅重设计视觉层 + 聊天区重构。
    ============================================================ */
-@import url('https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Crimson+Pro:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap');
 :root,.light{--bg:#faf9f7;--card:#fff;--text:#171717;--muted:#6b6560;--border:#e7e5e4;--brand:#16655d;--brand-light:#0d9488;--brand-strong:#0f5f57;--green:#047857;--hover:#f5f5f4;--input-bg:#fff;--gold:#a16207;--gold-soft:rgba(161,98,7,.12);--shadow:0 1px 3px rgba(23,23,23,.06),0 4px 16px rgba(23,23,23,.04);--red:#b91c1c;--ring:rgba(22,101,93,.14)}
 .dark{--bg:#16140f;--card:#211e19;--text:#e7e5e4;--muted:#a8a29e;--border:#3f3b36;--brand:#2dd4bf;--brand-light:#5eead4;--brand-strong:#0d9488;--green:#34d399;--hover:#2b2823;--input-bg:#211e19;--gold:#d4af37;--gold-soft:rgba(212,175,55,.14);--shadow:0 1px 3px rgba(0,0,0,.35),0 6px 20px rgba(0,0,0,.22);--red:#f87171;--ring:rgba(45,212,191,.18)}
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:'Atkinson Hyperlegible',-apple-system,BlinkMacSystemFont,'PingFang SC','Noto Sans SC','Segoe UI',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
-/* 学术衬线标题: 英文标题/报告级标题用 Crimson Pro, 中文回退系统黑体 */
-h1,h2,h3,h4,.msg h1,.msg h2,.msg h3,.msg .card h1,.msg .card h2,.topbar .title,.sidebar h2{font-family:'Crimson Pro','PingFang SC','Noto Sans SC',Georgia,serif;font-weight:600;letter-spacing:.01em}
+body{font-family:'Geist',-apple-system,BlinkMacSystemFont,'PingFang SC','Noto Sans SC','Segoe UI',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+/* 层级用字重/字距控制, 不靠衬线+超大号 (taste-skill: dashboard 禁衬线) */
+h1,h2,h3,h4,.msg h1,.msg h2,.msg h3,.msg .card h1,.msg .card h2{font-weight:600;letter-spacing:-.01em}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
 /* 暖调顶部光晕 — 替代 AI 蓝紫 */
 .glow{position:fixed;top:-256px;left:0;right:0;height:512px;background:radial-gradient(ellipse at 50% 0,rgba(15,118,110,.06) 0,transparent 70%);pointer-events:none;z-index:0}
 /* Sidebar */
 .sidebar{width:220px;background:var(--card);border-right:1px solid var(--border);display:flex;flex-direction:column;position:sticky;top:0;height:100vh;z-index:10;flex-shrink:0}
 .sidebar h2{font-size:14px;font-weight:700;letter-spacing:-.01em;padding:15px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:9px}
-.sidebar h2 i{width:28px;height:28px;border-radius:9px;background:linear-gradient(135deg,var(--brand-strong),#0d9488);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-style:normal;box-shadow:0 2px 8px var(--ring)}
-.sidebar .btn-new{width:calc(100% - 20px);padding:9px;margin:12px 10px;background:linear-gradient(135deg,var(--brand-strong),#0d9488);color:#fff;border:none;border-radius:10px;font-size:12px;font-weight:600;cursor:pointer;transition:transform .12s,box-shadow .12s;box-shadow:0 3px 12px var(--ring)}
-.sidebar .btn-new:hover{box-shadow:0 5px 16px var(--ring);filter:brightness(1.05)}
+.sidebar h2 i{width:28px;height:28px;border-radius:9px;background:linear-gradient(135deg,var(--brand-strong),#0d9488);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-style:normal;box-shadow:0 1px 3px rgba(0,0,0,.14)}
+.sidebar .btn-new{width:calc(100% - 20px);padding:9px;margin:12px 10px;background:linear-gradient(135deg,var(--brand-strong),#0d9488);color:#fff;border:none;border-radius:10px;font-size:12px;font-weight:600;cursor:pointer;transition:transform .12s,box-shadow .12s;box-shadow:0 2px 6px rgba(0,0,0,.18)}
+.sidebar .btn-new:hover{box-shadow:0 3px 10px rgba(0,0,0,.22);filter:brightness(1.05)}
 .sidebar .btn-new:active{transform:scale(.97)}
 .topic-list{flex:1;overflow-y:auto;padding:6px 8px}
 .topic-item{padding:9px 12px;border-radius:10px;cursor:pointer;font-size:11px;margin:3px 2px;border-left:3px solid transparent;transition:background .15s,border-color .15s}
 .topic-item:hover{background:var(--hover)}
-.topic-item.active{background:color-mix(in srgb,var(--brand) 9%,transparent);border-left-color:var(--brand)}
+.topic-item.active{background:color-mix(in srgb,var(--brand) 9%,transparent)}
 .topic-item .tname{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .topic-item .tmeta{font-size:10px;color:var(--muted)}
 /* Main */
@@ -38,7 +38,7 @@ h1,h2,h3,h4,.msg h1,.msg h2,.msg h3,.msg .card h1,.msg .card h2,.topbar .title,.
 /* ===== 专业应用头部 ===== */
 .topbar{position:relative;padding:0 16px;height:54px;background:color-mix(in srgb,var(--card) 88%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;flex-shrink:0;z-index:20}
 .topbar .brand{display:flex;align-items:center;gap:9px;min-width:0}
-.topbar .brand-mark{width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,var(--brand-strong),#0d9488);color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:800;box-shadow:0 2px 10px var(--ring);flex-shrink:0}
+.topbar .brand-mark{width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,var(--brand-strong),#0d9488);color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:800;box-shadow:0 1px 3px rgba(0,0,0,.14);flex-shrink:0}
 .topbar .brand-name{font-size:14px;font-weight:700;letter-spacing:-.01em}
 .topbar .conn{font-size:10px;color:var(--muted)}
 .top-actions{display:flex;align-items:center;gap:7px}
@@ -54,7 +54,7 @@ h1,h2,h3,h4,.msg h1,.msg h2,.msg h3,.msg .card h1,.msg .card h2,.topbar .title,.
 @keyframes popIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
 .msg{animation:popIn .3s cubic-bezier(.16,1,.3,1) both}
 .msg.user{display:flex;justify-content:flex-end}
-.msg.user .bubble{max-width:80%;background:var(--brand-strong);color:#fff;border-radius:16px 16px 4px 16px;padding:10px 16px;font-size:13px;line-height:1.55;box-shadow:0 3px 12px var(--ring)}
+.msg.user .bubble{max-width:80%;background:var(--brand-strong);color:#fff;border-radius:16px 16px 4px 16px;padding:10px 16px;font-size:13px;line-height:1.55;box-shadow:0 2px 6px rgba(0,0,0,.15)}
 .msg{display:flex;flex-direction:column;align-items:flex-start}
 .msg.user{align-items:flex-end}
 .msg .card{max-width:88%;background:var(--card);border:1px solid var(--border);border-radius:16px;padding:16px 18px;font-size:13px;line-height:1.7;box-shadow:0 1px 2px rgba(0,0,0,.03),0 8px 24px color-mix(in srgb,var(--text) 4%,transparent);transition:border-color .15s}
@@ -74,7 +74,7 @@ h1,h2,h3,h4,.msg h1,.msg h2,.msg h3,.msg .card h1,.msg .card h2,.topbar .title,.
 .msg pre{background:#1c1917;color:#e7e5e4;border-radius:9px;padding:11px 14px;font-size:12px;line-height:1.55;overflow-x:auto;margin:7px 0}
 .msg code{background:var(--hover);padding:2px 6px;border-radius:5px;font-size:12px;color:var(--brand)}
 .msg pre code{background:transparent;padding:0;color:inherit}
-.msg blockquote{border-left:3px solid var(--brand);margin:7px 0;padding:5px 13px;color:var(--muted);font-size:12px;background:var(--hover);border-radius:0 7px 7px 0}
+.msg blockquote{margin:7px 0;padding:7px 13px;color:var(--muted);font-size:12px;background:var(--hover);border-radius:8px}
 .msg a{color:var(--brand)}
 .msg a:hover{text-decoration:underline}
 .msg ul,.msg ol{padding-left:20px;margin:5px 0}
@@ -108,9 +108,9 @@ h1,h2,h3,h4,.msg h1,.msg h2,.msg h3,.msg .card h1,.msg .card h2,.topbar .title,.
 .skill-sel{font-size:10px;padding:4px 7px;border:1px solid var(--border);border-radius:7px;background:var(--card);color:var(--text);cursor:pointer;max-width:90px}
 .agent-on{background:var(--brand-strong)!important;color:#fff!important}
 /* Pi-Agent trace */
-.pi-trace{padding:8px 12px;margin:4px 0;border-radius:8px;font-size:10px;border-left:3px solid var(--brand);background:var(--hover);animation:popIn .3s ease-out}
-.pi-trace.tool-ok{border-left-color:var(--green)}
-.pi-trace.tool-err{border-left-color:var(--red)}
+.pi-trace{padding:8px 12px;margin:4px 0;border-radius:8px;font-size:10px;border:1px solid var(--border);background:color-mix(in srgb,var(--brand) 4%,var(--hover));animation:popIn .3s ease-out}
+.pi-trace.tool-ok{border-color:color-mix(in srgb,var(--green) 35%,var(--border))}
+.pi-trace.tool-err{border-color:color-mix(in srgb,var(--red) 35%,var(--border))}
 .pi-trace .step-num{font-weight:600;color:var(--brand);margin-right:4px}
 /* Progress bar */
 .progress{position:fixed;bottom:20px;right:20px;z-index:100;width:300px;background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px;box-shadow:0 12px 40px rgba(0,0,0,.15);display:none}
@@ -133,17 +133,17 @@ h1,h2,h3,h4,.msg h1,.msg h2,.msg h3,.msg .card h1,.msg .card h2,.topbar .title,.
 .input-bar{padding:12px 18px 16px;display:flex;gap:10px;background:linear-gradient(0deg,color-mix(in srgb,var(--bg) 60%,transparent),transparent)}
 .input-bar textarea{flex:1;border:1px solid var(--border);border-radius:16px;padding:12px 16px;font-size:13px;resize:none;outline:none;font-family:inherit;line-height:1.5;max-height:120px;background:var(--input-bg);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.03),0 4px 16px color-mix(in srgb,var(--text) 4%,transparent);transition:border-color .15s,box-shadow .15s}
 .input-bar textarea:focus{border-color:var(--brand);box-shadow:0 0 0 3px var(--ring)}
-.input-bar .send-btn{padding:11px 22px;background:var(--brand-strong);color:#fff;border:none;border-radius:16px;font-size:13px;font-weight:600;cursor:pointer;transition:transform .12s,box-shadow .12s;box-shadow:0 3px 12px var(--ring)}
-.input-bar .send-btn:hover{box-shadow:0 5px 18px var(--ring);transform:translateY(-1px)}
+.input-bar .send-btn{padding:11px 22px;background:var(--brand-strong);color:#fff;border:none;border-radius:16px;font-size:13px;font-weight:600;cursor:pointer;transition:transform .12s,box-shadow .12s;box-shadow:0 2px 6px rgba(0,0,0,.18)}
+.input-bar .send-btn:hover{box-shadow:0 3px 10px rgba(0,0,0,.24);transform:translateY(-1px)}
 .input-bar .send-btn:active{transform:translateY(0) scale(.96)}
 .input-bar .send-btn:disabled{opacity:.5;cursor:not-allowed}
 /* 全局焦点可见性 (无障碍) */
 :focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 /* Shimmer 文字动画 */
-.shimmer-text{display:inline-block;background:linear-gradient(90deg,var(--muted) 25%,var(--brand) 50%,var(--muted) 75%);background-size:200% 100%;-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;animation:shimmer-text 2s linear infinite}
-@keyframes shimmer-text{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.shimmer-text{display:inline-block;color:var(--muted);animation:shimmer-text 2s ease-in-out infinite}
+@keyframes shimmer-text{0%,100%{opacity:.45}50%{opacity:1}}
 /* Agent step card */
-.agent-step{padding:10px 14px;margin:4px 0;border-radius:10px;font-size:11px;border-left:3px solid var(--brand);background:var(--hover);animation:popIn .3s ease-out}
+.agent-step{padding:10px 14px;margin:4px 0;border-radius:10px;font-size:11px;border:1px solid var(--border);background:color-mix(in srgb,var(--brand) 4%,var(--hover));animation:popIn .3s ease-out}
 .agent-step .label{font-weight:600;color:var(--brand);margin-bottom:4px}
 .agent-step .detail{color:var(--muted);font-size:10px}
 

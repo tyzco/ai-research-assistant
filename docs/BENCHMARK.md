@@ -42,3 +42,27 @@ python run_eval.py --kb <表名>                   # 内部回归 (8题, 防退�
 
 `data/benchmark_report.json` 里的数字 = **内部回归参考**，不是对外性能声明。
 跑出来的分主题分布（即使 KB 只有 10 行也 0.76-0.80 的「地板」）正是语义近似 + 小样本的信号 —— 这也是为什么不能拿它当基准数字。
+
+## 答案层评估 (RAGAS 式严格判词, 2026-08 重建)
+
+`evaluate_rag_standards.py` — 4 指标:
+- **faithfulness / answer_relevancy**：DeepSeek 温度0 直判。faithfulness = 答案论断被检索上下文支撑的比例 (逐论断, RAGAS 标准); 旧版"整体是否基于上下文"宽松判词已弃用
+- **context_recall / context_precision**：bge-small-zh 嵌入语义近似
+
+用法: `python evaluate_rag_standards.py --kb papers_big_eval [--topic X] [--limit N]`
+
+### 标准大库基线: papers_big_eval (103 篇 / 4530 行, 5 主题全覆盖)
+
+| 指标 | 值 |
+|---|---|
+| faithfulness (严格判词) | **0.133** |
+| answer_relevancy | **0.99** |
+| context_recall | 0.78 |
+| context_precision | 0.71 |
+
+### 关键结论
+
+1. **0.82 是旧宽松判词 + 人脸密集大库的数字, 不可与严格判词直接比**。系统未退化, 是测量标准变了。
+2. **faithfulness 由"精确支撑论文在库内 + 检索 top-5 命中"驱动, 不是裸库大小**。13 篇精确库 0.264 > 90 篇宽库 0.104 > 103 篇(宽+精确) 0.133。大库提高 relevancy/precision, 但 top-5 在更多论文间分散, 具体论断支撑率反降。
+3. **优化杠杆 = 大库里的检索精确性** (让 top-5 命中精确支撑段落), 不是再堆论文数。
+4. 评估已接入回归门禁: 编辑检索层代码自动跑 3 题冒烟 (PostToolUse hook → /tmp/rag_eval_smoke.log)。

@@ -209,6 +209,7 @@ QA_PROMPT = """你是学术文献精读助手。基于用户上传的论文全�
 3. 如果命中了图片描述，在答案中说明"详见附图"，并引用图片。
 4. 如果问题无法完全回答，明确指出不足。
 5. 末尾如有【🔎 补充线索】，列出标题 + 年份 + DOI。
+6. **溯源格式**（每个关键论断都要能溯源）：来自【全文深度资料】的论断，紧跟标注 `[论文: 标题, 年份, pN]`；来自模型通用知识/库外的论断，紧跟标注 `（库外通用知识）`。答案保持完整有据，不要因溯源而删减内容、不要省略已有库内引用。
 
 ---
 【全文深度资料（用户上传）】
@@ -465,7 +466,7 @@ async def ask_with_context(table_name: str, question: str) -> tuple[str, list[st
     expanded = await _expand_query(question)
     text_res, img_res, abs_res = retrieve_with_images(table_name, expanded, top_k=20)
     text_res = _rerank(question, text_res, top_k=5)
-    contexts = [c.get("text", "")[:500] for c in (text_res or [])]
+    contexts = [c.get("text", "")[:900] for c in (text_res or [])]
     result = await ask_question(table_name, question, use_rerank=True)
     return result.answer, contexts
 

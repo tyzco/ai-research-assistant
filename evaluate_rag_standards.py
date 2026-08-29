@@ -77,12 +77,12 @@ def judge_faithfulness(answer: str, contexts: list[str]) -> float | None:
 
     按论断逐个判定并取被支撑比例 (部分支撑给部分分), 避免"有任何不支持即 0"的二值化误杀。
     """
-    ctx = "\n".join(f"- {c[:400]}" for c in contexts[:5]) or "（无上下文）"
+    ctx = "\n".join(f"- {c[:900]}" for c in contexts[:8]) or "（无上下文）"
     prompt = (
         "你是 RAG 评估器。将答案拆成若干论断, 逐个判断每个论断是否被给定上下文"
         "直接支撑或可由上下文合理推断。\n"
         "规则: 上下文完全没有依据的论断 (编造/外推) 算不被支撑; 上下文为空则该答案所有论断都不被支撑。\n"
-        f"上下文:\n{ctx}\n\n答案:\n{(answer or '')[:1500]}\n\n"
+        f"上下文:\n{ctx}\n\n答案:\n{(answer or '')[:1800]}\n\n"
         "只输出被支撑比例 = 被支撑论断数 / 总论断数, 一个 0-1 之间的小数, 不要解释。"
     )
     return _parse_score(_judge_llm(prompt))

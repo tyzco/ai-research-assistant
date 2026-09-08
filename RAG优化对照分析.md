@@ -15,7 +15,7 @@
 | — | 双层索引：摘要层（覆盖广度）+ 全文层（深度细节） | ✅ **超出** |
 | — | 最小块过滤（<50 字丢弃） | ✅ **超出** |
 
-**评价**：RAG.md 建议的"语义分块 + overlap"已实现。额外做了双层索引和最小块过滤。未做的是"父子分块"（parent-child chunking）——检索小 chunk、返回大 context 的策略，这在长文档场景下可以进一步提升上下文完整性。
+**评价**：RAG.md 建议的"语义分块 + overlap"已实现。额外做了双层索引和最小块过滤。**父子分块已实现**（qa_engine 检索到 chunk 后拉取同论文 ±2 相邻块补上下文）——本文档此前标注"未做"已过时。
 
 ---
 
@@ -78,14 +78,9 @@
 | RAG.md 建议 | 项目实现 | 状态 |
 |------------|---------|------|
 | 每次检索时带上历史对话摘要 | `ConversationMemory`：滑动窗口 5 轮 + 滚动摘要，注入 Prompt | ✅ 已做 |
-| 把历史放进检索 Query | 未实现（检索只用当前问题） | ❌ 缺失 |
+| 把历史放进检索 Query | 多轮指代消解 `_resolve_coreference`（有历史+短问题时用 DeepSeek 消解"它/这"→独立完整问题，消解后的 query 才进检索）| ✅ 已做 |
 
-**缺失项分析**：RAG.md 提到"把历史也放进检索 Query"——这指的是 **Contextualized Query Rewriting**，即将对话历史融入检索查询。例如：
-- 用户 Q1："什么是 RAG？"
-- 用户 Q2："它有什么缺点？"
-- 理想检索 Query："RAG 的缺点"而非"它有什么缺点"
-
-当前项目只做了 Query Expansion（同义词扩展），没有做多轮指代消解。这是一个**值得补的优化**，用 DeepSeek 做一轮 Historical Query Rewriting 即可（约 2-3s 额外延迟）。
+**说明**：本文档此前标"未实现"已过时。`_resolve_coreference`（qa_engine）已实现 Contextualized Query Rewriting——"它有什么缺点"→ 结合历史消解为独立问题再检索。短问题+有历史才触发（省 2-3s），长问题跳过。
 
 ---
 
@@ -154,15 +149,11 @@ RAG.md 第十一节定义了 4 个演进阶段：
 | 自主规划 | ✅ | ReAct 循环，LLM 自己决定下一步用什么工具 |
 | 多源检索 | ✅ | 6 个学术数据源，8 个 Agent 工具 |
 | 工具调用 | ✅ | OpenAI Function Calling 标准格式 |
-| 反思纠错 | ❌ | **没有** Self-Reflection 步骤 |
-| 多 Agent 协作 | ❌ | **没有** Planner/Searcher/Analyst 分工 |
-| LangGraph 图状工作流 | ❌ | 代码脚手架存在但未集成 |
+| 反思纠错 | ✅ | **Reflexion 反思重试闭环已实现**（pi_agent：直答后自批判，不足带批判重试，有界 1 次）|
+| 多 Agent 协作 | ✅ | **13-agent 虚拟科研团队**（research_team：上游调研/中游写作/下游审稿，3 道人审门；中游 6 agent 并行）|
+| LangGraph 图状工作流 | ❌ | 未集成（自研 pi_agent + research_team 替代，零依赖可讲原理）|
 
-**为什么没做反思（Reflection）？**
-- ReAct 循环本身有隐式纠错（工具返回错误 → LLM 看到 → 调整下一步）
-- 显式 Reflection 会增加 1-2 步额外的 LLM 调用（每次 ~8s），显著增加延迟
-- 当前 10 步上限的 ReAct 在简单任务上已经够用
-- 复杂调研任务确实需要 Reflection，这是一个**明确的下一步**
+**说明**：本文档此前标"没有 Self-Reflection / 没有多 Agent"已过时。Reflexion 反思重试已实现（有界 1 次，控制延迟）；13-agent research_team 承担多 Agent 分工 + 人审门。LangGraph 未追（自研更可控，符合 RAG.md"先优化再上 Agentic"建议）。
 
 **为什么不追 LangGraph/多 Agent？**
 - RAG.md 自己也说："先从 Advanced RAG 的工程优化开始，通常能解决 80% 以上的问题，不要一上来就追 Agentic RAG 这个银弹，成本会高很多"
@@ -292,9 +283,9 @@ RAG.md 提到微软的 Graph RAG 可以解决多跳推理问题。项目目前�
 | Context Precision | 0.7568 | 0.7568 | 0 | 单轮评测不涉及指代消解 |
 | Semantic Recall@5 | 0.7703 | 0.7703 | 0 | 现有KB无chunk_index列，需重建KB |
 | ≥0.80 通过率 | 2/8 | 2/8 | 0 | 同上 |
-| 指代消解准确率 | N/A（未实现） | **5/5 (100%)** | +100% | 新增专项测试 |
-| Agent 反思步骤 | 无 | **1步自反思** | +1 step | 新增 reflection |
-| 父子分块 schema | 无 chunk_index | **新增 chunk_index 列** | 新增 | 重建KB后生效 |
+| 指代消解准确率 | N/A（未实现） | **5/5 (100%)** | +100% | 专项测试已通过 |
+| Agent 反思步骤 | 无 | **Reflexion 1 步自反思**（有界重试） | +1 step | 已实现（pi_agent） |
+| 父子分块 | 无 | **检索后拉相邻 ±2 chunk** | 已实现 | qa_engine 相邻块扩展 |
 
 > **说明**：标准评测（evaluate_rag_standards.py）是单轮检索评测，无法体现多轮指代消解的收益。父子分块需用新 schema 重建 KB 才能激活（新表将自动包含 chunk_index）。两项改为定性专项测试验证。
 

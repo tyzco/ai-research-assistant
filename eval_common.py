@@ -91,6 +91,29 @@ def mrr(contexts: list[str], ground_truth: str, threshold: float = 0.75) -> floa
     return 0.0
 
 
+def ndcg(contexts: list[str], ground_truth: str, top_k: int = 5, threshold: float = 0.75) -> float:
+    """NDCG@k — 带位置折扣的排序指标 (IR 标准), 二值相关度。
+
+    注: 不用连续相似度作 gain — bge 相似度挤在 ~0.7-0.9 窄带, 连续 gain 会让 NDCG 恒≈1
+    (排序几乎不影响, 无信息量)。改用二值相关度 gain_i = 1(相似度≥阈值) else 0:
+    衡量"相关块是否排在前面", 与 MRR 同阈值可比, 但对全部相关块的位置都加权(MRR 只看第一个)。
+    """
+    if not contexts or not ground_truth:
+        return 0.0
+    ge = _embed_one(ground_truth)
+    gains = []
+    for c in contexts[:top_k]:
+        ce = _embed_one((c or "")[:500])
+        s = float(np.dot(ce, ge) / (np.linalg.norm(ce) * np.linalg.norm(ge) + 1e-12))
+        gains.append(1.0 if s >= threshold else 0.0)
+    if not gains or sum(gains) == 0:
+        return 0.0
+    dcg = sum(g / np.log2(i + 2) for i, g in enumerate(gains))
+    ideal = sorted(gains, reverse=True)
+    idcg = sum(g / np.log2(i + 2) for i, g in enumerate(ideal))
+    return float(dcg / idcg) if idcg > 1e-12 else 0.0
+
+
 def est_tokens(text: str) -> int:
     """CN/EN 感知 token 估算: 中文 1.5 char/token, 其他 3.5。"""
     if not text:

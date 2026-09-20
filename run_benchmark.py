@@ -26,7 +26,7 @@ os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 import lancedb
 
-from eval_common import mrr, pick_kb, semantic_recall
+from eval_common import mrr, ndcg, pick_kb, semantic_recall
 from knowledge_base import LANCEDB_DIR, _cosine_search, _embed_texts_sync
 
 
@@ -66,23 +66,29 @@ def main():
     print("=" * 70)
 
     per_topic = {}
-    all_r5, all_mrr = [], []
+    all_r5, all_mrr, all_ndcg = [], [], []
     t0 = time.time()
     for topic, items in sorted(topics.items()):
-        r5s, mrrs = [], []
+        r5s, mrrs, ndcgs = [], [], []
         for item in items:
             q, gt = item["question"], item["ground_truth"]
             texts = run_retrieval(tbl, q, args.topk, use_hybrid=True)
             r5s.append(semantic_recall(texts, gt))
             mrrs.append(mrr(texts, gt))
+            ndcgs.append(ndcg(texts, gt, top_k=args.topk))
         per_topic[topic] = {
             "questions": len(items),
             "recall_at_topk": round(sum(r5s) / len(r5s), 4),
             "mrr": round(sum(mrrs) / len(mrrs), 4),
+            "ndcg_at_topk": round(sum(ndcgs) / len(ndcgs), 4),
         }
         all_r5 += r5s
         all_mrr += mrrs
-        print(f"  {topic:12s} {len(items):2d}题  R@topk={per_topic[topic]['recall_at_topk']:.4f}  MRR={per_topic[topic]['mrr']:.4f}")
+        all_ndcg += ndcgs
+        print(
+            f"  {topic:12s} {len(items):2d}题  R@topk={per_topic[topic]['recall_at_topk']:.4f}  "
+            f"MRR={per_topic[topic]['mrr']:.4f}  NDCG={per_topic[topic]['ndcg_at_topk']:.4f}"
+        )
 
     report = {
         "questions": len(qa),
@@ -93,6 +99,7 @@ def main():
         "elapsed_seconds": round(time.time() - t0, 1),
         "overall_recall_at_topk": round(sum(all_r5) / len(all_r5), 4),
         "overall_mrr": round(sum(all_mrr) / len(all_mrr), 4),
+        "overall_ndcg_at_topk": round(sum(all_ndcg) / len(all_ndcg), 4),
         "per_topic": per_topic,
         "environment": {
             "embedding": "bge-small-zh (512d)",
@@ -109,7 +116,10 @@ def main():
     out = Path("data/benchmark_report.json")
     out.write_text(json.dumps(report, ensure_ascii=False, indent=2))
     print("\n" + "=" * 70)
-    print(f"总览: {len(qa)} 题 R@topk={report['overall_recall_at_topk']:.4f}  MRR={report['overall_mrr']:.4f}")
+    print(
+        f"总览: {len(qa)} 题 R@topk={report['overall_recall_at_topk']:.4f}  "
+        f"MRR={report['overall_mrr']:.4f}  NDCG@{args.topk}={report['overall_ndcg_at_topk']:.4f}"
+    )
     print("环境:", report["environment"])
     print("局限 (对外声明时必读):")
     for l in report["limitations"]:

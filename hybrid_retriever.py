@@ -257,7 +257,55 @@ class AdaptiveHybridRetriever:
                             variants.append(term)
             except (Exception, asyncio.TimeoutError):
                 pass
-        return variants[:3]
+        # HyDE: 生成假设答案段落作检索变体 (默认关; 与速度优先原则冲突, 需显式开启)
+        hyde = await self._hyde_variant_async(q)
+        if hyde:
+            variants.append(hyde)
+        return variants[:4]
+
+    async def _hyde_variant_async(self, query: str) -> str:
+        """HyDE (Hypothetical Document Embeddings): 让 LLM 写一段"假设答案"作检索变体。
+
+        原理: 问句与答案段落的嵌入分布有 gap; 用假设答案去检索能跨越该 gap (尤其跨语种/弱召回)。
+        代价: +1 次 LLM 调用 (~2-5s)。故默认关 (HYDE_ENABLED), 且限长+限时。
+        """
+        from config import HYDE_ENABLED, HYDE_MAX_TOKENS, HYDE_TIMEOUT
+
+        if not HYDE_ENABLED or len(query) < 6:
+            return ""
+        try:
+            from openai import AsyncOpenAI
+
+            from config import (
+                DEEPSEEK_API_KEY,
+                DEEPSEEK_BASE_URL,
+                DEEPSEEK_MODEL,
+            )
+
+            client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+            resp = await asyncio.wait_for(
+                client.chat.completions.create(
+                    model=DEEPSEEK_MODEL,
+                    temperature=0.3,
+                    max_tokens=HYDE_MAX_TOKENS,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": (
+                                "写一段学术论文中可能出现的、直接回答下面问题的段落"
+                                "(假设性内容, 用领域术语, 60-100字, 只输出段落不解释):\n" + query[:200]
+                            ),
+                        }
+                    ],
+                    extra_body={"thinking": {"type": "disabled"}},
+                    timeout=HYDE_TIMEOUT,
+                ),
+                timeout=HYDE_TIMEOUT + 1,
+            )
+            txt = (resp.choices[0].message.content or "").strip()
+            return txt[:300] if len(txt) >= 10 else ""
+        except (Exception, asyncio.TimeoutError):
+            return ""
 
     # ---- 主入口 ----
     async def search(

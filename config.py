@@ -73,6 +73,12 @@ EMBEDDING_BACKEND = _env("EMBEDDING_BACKEND", "")
 # ===================================================================
 RERANK_MODEL = _env("RERANK_MODEL", "BAAI/bge-reranker-base")
 RERANK_MIN_SCORE = _env("RERANK_MIN_SCORE", 0.0, float)
+
+# HyDE (Hypothetical Document Embeddings) 查询改写 — 默认关 (每次检索+1 LLM调用, 与速度优先原则冲突)
+# 开启后: 为什么是/如何/为什么类解释性问题生成假设答案段落作检索变体, 提升弱召回场景命中
+HYDE_ENABLED = _env_bool("HYDE_ENABLED", False)
+HYDE_TIMEOUT = _env("HYDE_TIMEOUT", 6, int)
+HYDE_MAX_TOKENS = _env("HYDE_MAX_TOKENS", 120, int)
 RERANK_STAGE1_MODEL = _env("RERANK_STAGE1_MODEL", "all-MiniLM-L6-v2")
 # 重排精度阈值: bge-reranker 得分低于此值的 chunk 过滤掉 (0=不过滤, 提升精度; 太高伤召回)
 

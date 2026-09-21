@@ -161,6 +161,10 @@ class AdaptiveHybridRetriever:
             logger.error(f"Stage1 rerank failed: {e}")  # DeepSeek 审查 #5
             return chunks[:top_k]
 
+        # 质量水位管控: 高水位/超载时跳过 stage2 CrossEncoder 精排 (最贵的一环), 直接返回 stage1 结果
+        if getattr(self, "_load_level", "low") in ("high", "overload"):
+            return stage1_chunks[:top_k]
+
         # Stage 2: CrossEncoder 精排
         try:
             reranker = self._get_stage2()
@@ -320,7 +324,22 @@ class AdaptiveHybridRetriever:
         同步调用方请用 search_sync()。
         """
         alpha = self._compute_adaptive_weight(query)
-        variants = await self._query_variants_async(query)
+        # 质量水位管控 (load-aware degradation): 高水位跳查询变体(省 LLM 翻译/HyDE + 多变体召回),
+        # 低水位走全流程保质量。负载回落自动升档。
+        try:
+            from load_gate import load_level
+
+            _lvl = load_level()
+        except Exception:
+            _lvl = "low"
+        if _lvl == "overload":
+            merged = self._fuse_variants([query], query, top_k, filter_expr)
+            return merged, alpha
+        if _lvl == "high":
+            variants = self._query_variants(query)  # 仅同步去问句词变体, 跳异步翻译/HyDE
+        else:
+            variants = await self._query_variants_async(query)
+        self._load_level = _lvl  # 传给 _cascade_rerank 决定是否跳 stage2
         merged = self._fuse_variants(variants, query, top_k, filter_expr)
         return merged, alpha
 

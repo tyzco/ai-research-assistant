@@ -76,6 +76,10 @@ RERANK_MIN_SCORE = _env("RERANK_MIN_SCORE", 0.0, float)
 
 # HyDE (Hypothetical Document Embeddings) 查询改写 — 默认关 (每次检索+1 LLM调用, 与速度优先原则冲突)
 # 开启后: 为什么是/如何/为什么类解释性问题生成假设答案段落作检索变体, 提升弱召回场景命中
+# 质量水位管控 (load-aware degradation): 并发水位阈值 — 按负载动态升降检索质量档位
+LOAD_HIGH_THRESHOLD = _env("LOAD_HIGH_THRESHOLD", 8, int)      # 并发>=此值 → 跳 stage2精排+查询变体
+LOAD_OVERLOAD_THRESHOLD = _env("LOAD_OVERLOAD_THRESHOLD", 16, int)  # 并发>=此值 → 极致降级(单路+单级)
+
 HYDE_ENABLED = _env_bool("HYDE_ENABLED", False)
 HYDE_TIMEOUT = _env("HYDE_TIMEOUT", 6, int)
 HYDE_MAX_TOKENS = _env("HYDE_MAX_TOKENS", 120, int)

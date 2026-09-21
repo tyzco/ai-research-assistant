@@ -168,6 +168,10 @@ async def rate_limit_middleware(request: Request, call_next):
         return JSONResponse({"detail": "请求过于频繁，请稍后重试"}, status_code=429)
     window.append(now)
     _rate_limiter[ip] = window[-100:]  # trim old entries
+    # 质量水位管控: 请求进出计数 → 检索层按并发水位动态升降质量档
+    from load_gate import enter as _lg_enter, exit as _lg_exit
+
+    _lg_enter()
     # /metrics 请求计数 + 延迟采样 (接线 MetricsTracker.record_request, 修复全零)
     _t0 = _time.time()
     try:
@@ -185,6 +189,7 @@ async def rate_limit_middleware(request: Request, call_next):
         )
         raise
     finally:
+        _lg_exit()  # 质量水位: 请求退出计数
         try:
             from monitor import metrics
 
@@ -272,7 +277,14 @@ async def ready():
 @app.get("/metrics")
 async def api_metrics():
     """系统监控指标。"""
-    return metrics.to_dict()
+    d = metrics.to_dict()
+    try:
+        from load_gate import stats as _lg_stats
+
+        d["load_gate"] = _lg_stats()  # 质量水位: 在飞并发 / 峰值 / 档位
+    except Exception:
+        pass
+    return d
 
 
 @app.get("/kg_data")

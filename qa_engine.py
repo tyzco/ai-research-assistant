@@ -237,7 +237,8 @@ async def ask_question(
     model: str = "",
     memory_key: str = "",
     extra_context: list[dict] | None = None,
-) -> AskResponse:
+    return_ctx: bool = False,
+):
     """RAG 问答：指代消解 → 查询改写 → 粗召回 → Rerank 精排 → 生成。
 
     memory_key: ConversationMemory 的 key。传入 topic_id 使前端 /ask 和 Agent
@@ -463,9 +464,14 @@ async def ask_question(
     image_paths = [
         r.get("image_path", "") for r in (img_res or []) if r.get("image_path")
     ]
-    return AskResponse(
+    _resp = AskResponse(
         answer=answer, references=references, supplement=supplement, images=image_paths
     )
+    # 评估用: 返回本次答案**实际使用**的上下文 (含父子扩展块), 供 faithfulness 判官对齐 —
+    # 避免判官用另一条检索路径的 chunk 判"不被支撑"而低估 faithfulness。
+    if return_ctx:
+        return _resp, [c.get("text", "")[:900] for c in (text_res or [])]
+    return _resp
 
 
 async def ask_with_context(table_name: str, question: str) -> tuple[str, list[str]]:
@@ -475,8 +481,13 @@ async def ask_with_context(table_name: str, question: str) -> tuple[str, list[st
     expanded = await _expand_query(question)
     text_res, img_res, abs_res = retrieve_with_images(table_name, expanded, top_k=20)
     text_res = _rerank(question, text_res, top_k=5)
-    contexts = [c.get("text", "")[:900] for c in (text_res or [])]
-    result = await ask_question(table_name, question, use_rerank=True)
+    # 判官须看到答案**实际使用**的上下文 (hybrid + 父子扩展), 而非另一条检索路径的 chunk。
+    # 注: 上方的 retrieve_with_images 仅用于兜底/空结果提示, 真正上下文从 ask_question 取回。
+    result, contexts = await ask_question(
+        table_name, question, use_rerank=True, return_ctx=True
+    )
+    if not contexts:
+        contexts = [c.get("text", "")[:900] for c in (text_res or [])]
     return result.answer, contexts
 
 

@@ -110,6 +110,7 @@ async def _resolve_coreference(question: str, history: str) -> str:
             max_tokens=LLM_COREF_MAX_TOKENS,
             max_retries=1,
             timeout=LLM_COREF_TIMEOUT,
+            extra_body={"thinking": {"type": "disabled"}},  # 推理模型必须禁 thinking, 否则 token 耗在 reasoning 上 content 为空
             source="llm",
         )
         if resp is None:
@@ -138,6 +139,7 @@ async def _expand_query(question: str) -> str:
             max_tokens=LLM_EXPAND_MAX_TOKENS,
             max_retries=1,
             timeout=LLM_EXPAND_TIMEOUT,
+            extra_body={"thinking": {"type": "disabled"}},  # 同上: 禁 thinking 保证 content 非空
             source="llm",
         )
         if resp is None:

@@ -68,6 +68,7 @@ async def extract_entities_from_abstracts(abstracts: list[dict[str, str]]) -> di
             ],
             max_retries=2,
             timeout=30.0,
+            extra_body={"thinking": {"type": "disabled"}},  # 推理模型禁 thinking, 否则 JSON 输出被 reasoning 挤空
             source="llm",
         )
         if resp is None:

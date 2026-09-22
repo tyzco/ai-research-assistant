@@ -206,6 +206,7 @@ async def _generate_strategy_uncached(query: str) -> dict:
         max_tokens=LLM_STRATEGY_MAX_TOKENS,
         timeout=LLM_STRATEGY_TIMEOUT,
         response_format={"type": "json_object"},
+        extra_body={"thinking": {"type": "disabled"}},  # 推理模型禁 thinking, 否则 content 空 → JSON 解析失败
     )
     text = response.choices[0].message.content.strip()
     parsed = _parse(text)
@@ -234,6 +235,7 @@ async def _generate_strategy_uncached(query: str) -> dict:
             max_tokens=LLM_STRATEGY_MAX_TOKENS,
             timeout=LLM_STRATEGY_TIMEOUT,
             response_format={"type": "json_object"},
+            extra_body={"thinking": {"type": "disabled"}},  # 同首次调用: 禁 thinking 防 content 空
         )
         parsed = _parse(retry.choices[0].message.content.strip())
         if parsed is not None:
@@ -356,6 +358,7 @@ async def _translate_cn_query(query: str) -> str:
                 }
             ],
             timeout=LLM_TRANSLATE_TIMEOUT,
+            extra_body={"thinking": {"type": "disabled"}},  # 推理模型禁 thinking (翻译短输出, reasoning 会吃光 token)
         )
         import re
 

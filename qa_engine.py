@@ -282,7 +282,9 @@ async def ask_question(
         text_res, _ = await hr.search(
             expanded, top_k=5, filter_expr="is_fulltext = true AND is_image = false"
         )
-        img_res, _ = hr.search(expanded, top_k=3, filter_expr="is_image = true")
+        img_res, _ = await hr.search(
+            expanded, top_k=3, filter_expr="is_image = true"
+        )  # 修复: 原漏 await → 每请求都抛 "cannot unpack coroutine" → 整块降级, 混合检索从未生效
     except Exception as e:
         logger.warning(f"Hybrid retrieval degraded to retrieve_with_images: {e}")
         text_res, img_res, abs_res = retrieve_with_images(

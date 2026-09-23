@@ -237,6 +237,13 @@ NON_ACADEMIC_KEYWORDS = (
 
 # ---- L0 会话续接短语 (多轮对话的「继续/好的/补充」等短句, 精确匹配) ----
 # 短查询只有恰好等于续接短语才放行; 否则走完整闸门 (规则+语义), 防「怎么做红烧肉」这类短句漏网
+# 短请求标记: 含这些词的短查询是「请求句」而非「裸选题名词」→ 不走快路径, 交语义层判定。
+# (裸选题如「情感分析」无请求动词 → 快路径放行; 「推荐几个好吃的餐厅」有「推荐」→ 语义层拦下)
+SHORT_REQUEST_MARKERS = (
+    "推荐", "帮我", "来点", "来一个", "怎么做", "怎么弄", "哪家", "哪个好",
+    "好吃", "好玩", "写一段", "生成一个", "找个", "介绍个", "有没有好",
+)
+
 CONTINUATION_PHRASES = {
     "继续",
     "接着",
@@ -390,7 +397,16 @@ def gate_query(query: str, topic_mode: bool = False) -> tuple[bool, str, str]:
     if len(q) <= 12:
         if any(k in ql for k in NON_ACADEMIC_KEYWORDS):
             return False, _REASON, "rule_reject"
-        return True, "", "short_topic_pass"
+        # 含学术词 → 直接放行 (防合法短学术请求被下方请求标记误伤)
+        if any(k in ql for k in ACADEMIC_KEYWORDS):
+            return True, "", "rule_pass"
+        # 短请求句 (含请求动词, 如「推荐几个好吃的餐厅」「来点好玩的」) 不走快路径 →
+        # 落到 L2 语义层判定。只有**裸选题名词**(「情感分析」「图神经网络」) 才快速放行。
+        # 修复: 原实现凡 ≤12 字且未命中硬词一律放行 → 短非学术请求漏过白名单。
+        if any(k in ql for k in SHORT_REQUEST_MARKERS):
+            pass  # 继续向下走 L1/L2
+        else:
+            return True, "", "short_topic_pass"
 
     # L1 规则: 强学术词 → 放行 (先查, 防止合法学术请求被非学术词误杀)
     if any(k in ql for k in ACADEMIC_KEYWORDS):

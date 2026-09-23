@@ -457,7 +457,10 @@ class ResearchTeam:
         i = start_idx
         while i < len(self.PIPELINE):
             agent_key, description, required = self.PIPELINE[i]
-            if not required and not self._should_run(agent_key):
+            # 修复: 原条件 `not required and not _should_run(...)` 短路 — required=True 的 agent
+            # (如 quality_screener) 永远不查 _should_run → "有KB则跳过上游检索/筛选"对 screener 失效。
+            # _should_run 默认返回 True, 故对非跳过场景无行为变化。
+            if not self._should_run(agent_key):
                 i += 1
                 continue
             agent_def = AGENT_DEFINITIONS[agent_key]

@@ -51,9 +51,8 @@ def _select_findings(query: str, findings: list[dict], k: int = 5) -> list[dict]
     只有 query 非空且存在带向量的记忆时才做语义选择; 否则按 recency 兜底。
     意图: 修复「5 轮前的关键约束被最近 5 条无关检索结果挤掉」。
     """
-    valid = [
-        f for f in findings if isinstance(f, dict) and f.get("vec")
-    ]
+    valid = [f for f in findings if isinstance(f, dict) and f.get("vec")]
+    novec = [f for f in findings if isinstance(f, dict) and not f.get("vec")]
     if not query or not valid:
         return findings[-k:]
     try:
@@ -70,7 +69,13 @@ def _select_findings(query: str, findings: list[dict], k: int = 5) -> list[dict]
             sim = float(np.dot(v, qn) / (np.linalg.norm(v) + 1e-12))
             scored.append((sim, f))
         scored.sort(key=lambda x: -x[0])
-        return [f for _, f in scored[:k]]
+        picked = [f for _, f in scored[:k]]
+        # 旧格式记忆 (语义上线前写入, 无 vec) 不参与语义排序, 但**不能因此永久丢弃** ——
+        # 用近期的补齐剩余槽位 (修复: 原实现只从 valid 里选, 一旦有任何新记忆带 vec,
+        # 存量无 vec 记忆会被整体挤出上下文)。
+        if len(picked) < k and novec:
+            picked += novec[-(k - len(picked)):]
+        return picked
     except Exception:
         return findings[-k:]
 

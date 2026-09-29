@@ -80,7 +80,12 @@ class PiAgent:
         enable_plan: bool | None = None,
         kb_context: str = "",
         topic_id: str = "",
+        owner: str = "",
     ):
+        # 发起者身份 (登录 user_id, 匿名则客户端 IP)。人工确认闸靠它校验:
+        # /agent/pi/approve 只接受与 run 发起者相同身份的请求 —— 否则任何人都能
+        # 拿一个 run_id 批准 agent 暂停的危险动作。
+        self.owner = owner
         self.max_steps = max_steps
         self.max_time = max_time_seconds
         self.goal = goal
@@ -829,6 +834,19 @@ class PiAgent:
                 )
         except Exception:
             pass
+        # 跨 agent 记忆: 注入课题累积的关键发现 (此前交互 + 科研团队产出)。
+        # 修复前: pi_agent 只**写**课题记忆不**读** → research_team 的产出 pi_agent 看不到,
+        # 跨 agent 记忆只单向 (只有问答路径 ask_question 读)。
+        mem_txt = ""
+        if self.topic_id:
+            try:
+                from conversation_memory import get_memory
+
+                _mctx = get_memory(self.topic_id).get_context()
+                if _mctx:
+                    mem_txt = f"\n\n【课题记忆（此前交互/科研团队产出的关键发现，可复用）】\n{_mctx[:1500]}"
+            except Exception:
+                pass
         # P3 持久技能记忆: 注入相似成功任务的已验证做法
         strat_txt = ""
         try:
@@ -844,7 +862,7 @@ class PiAgent:
         except Exception:
             pass
         kb_txt = f"\n\n【当前课题知识库作用域】\n{self.kb_context}" if self.kb_context else ""
-        return f"""你是 PaperLink 学术智能助手。{cap}{kb_txt}{lessons_txt}{strat_txt}
+        return f"""你是 PaperLink 学术智能助手。{cap}{kb_txt}{mem_txt}{lessons_txt}{strat_txt}
 
 ---
 工作流: 理解任务 → 优先 search_knowledge_bases/当前课题库 → 问答/agent_ask → 综合分析 → 输出报告; 只有库内无相关内容才外部搜索

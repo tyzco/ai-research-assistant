@@ -106,6 +106,21 @@ class MetricsTracker:
                     self.error_by_type.get(error_type, 0) + 1
                 )
 
+    def record_degradation(self, path: str):
+        """记录一次降级触发 (按路径计数)。
+
+        用途: 降级是保底, 不是正常通道。若某路径计数持续增长 = 正常路径坏了, 该修 try 块
+        (本项目已因此类 bug 踩坑 5 次)。/metrics 暴露各路径计数, 一眼看出哪条总在降级。
+        """
+        with self._lock:
+            if not hasattr(self, "_degradations"):
+                self._degradations: dict = {}
+            self._degradations[path] = self._degradations.get(path, 0) + 1
+
+    def degradation_stats(self) -> dict:
+        with self._lock:
+            return dict(getattr(self, "_degradations", {}))
+
     def record_search(self):
         with self._lock:
             self.search_count += 1

@@ -284,6 +284,11 @@ async def api_metrics():
         d["load_gate"] = _lg_stats()  # 质量水位: 在飞并发 / 峰值 / 档位
     except Exception:
         pass
+    try:
+        # 降级计数: 某路径持续增长 = 正常路径坏了 (降级只该是保底, 不该是常态)
+        d["degradations"] = metrics.degradation_stats()
+    except Exception:
+        pass
     return d
 
 
@@ -1591,7 +1596,8 @@ async def api_ask_stream(request: Request):
                 await _expand_query(question) if len(question) >= 15 else question
             )
             hr = AdaptiveHybridRetriever(table)
-            text_res, _ = hr.search(
+            # 修复: 漏 await → 必抛异常 → 该端点**总是**走下面的降级路径(查询改写+混合检索从未生效)
+            text_res, _ = await hr.search(
                 expanded, top_k=5, filter_expr="is_fulltext = true AND is_image = false"
             )
         except Exception:
@@ -1761,7 +1767,8 @@ async def api_ask_trace(request: Request):
 
             hr = AdaptiveHybridRetriever(kb_table)
             alpha = hr._compute_adaptive_weight(expanded)
-            text_res, _ = hr.search(
+            # 修复: 漏 await → 融合阶段必抛异常 → trace 里的"融合"步骤永远失败
+            text_res, _ = await hr.search(
                 expanded, top_k=5, filter_expr="is_fulltext = true AND is_image = false"
             )
             dt_f = time.time() - t1

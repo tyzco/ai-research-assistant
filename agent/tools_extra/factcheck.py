@@ -18,7 +18,8 @@ async def _retrieve_evidence(claim: str, table_name: str) -> str:
     from hybrid_retriever import AdaptiveHybridRetriever
 
     hr = AdaptiveHybridRetriever(table_name)
-    results, _ = hr.search(claim, top_k=3)
+    # 修复: 漏 await → 解包 coroutine 抛 TypeError → 事实核查工具**永远拿不到证据**(总是失败)
+    results, _ = await hr.search(claim, top_k=3)
     parts = []
     for r in results:
         title = r.get("title", "N/A")

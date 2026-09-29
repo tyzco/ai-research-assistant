@@ -49,6 +49,16 @@ def _get_reranker():
     return _reranker
 
 
+def _rec_degraded(path: str):
+    """记录降级触发 (监控用: 降级是保底, 某路径持续增长=正常路径坏了)。"""
+    try:
+        from monitor import metrics
+
+        metrics.record_degradation(path)
+    except Exception:
+        pass
+
+
 def _rerank(question: str, chunks: list[dict], top_k: int = 5) -> list[dict]:
     """CrossEncoder 重排序：从粗召回中精排 top-k。同步版本 (供同步调用)。"""
     if len(chunks) <= top_k:
@@ -61,6 +71,7 @@ def _rerank(question: str, chunks: list[dict], top_k: int = 5) -> list[dict]:
         return [c for _, c in ranked[:top_k]]
     except Exception as e:
         logger.warning(f"Rerank failed: {e}, using top-{top_k} by vector score")
+        _rec_degraded("rerank")
         return chunks[:top_k]
 
 
@@ -119,6 +130,7 @@ async def _resolve_coreference(question: str, history: str) -> str:
         return resolved if len(resolved) >= 5 else question
     except Exception as e:
         logger.warning(f"Coreference resolution failed: {e}")  # DeepSeek 审查 #4
+        _rec_degraded("coref")
         return question
 
 
@@ -288,6 +300,7 @@ async def ask_question(
         )  # 修复: 原漏 await → 每请求都抛 "cannot unpack coroutine" → 整块降级, 混合检索从未生效
     except Exception as e:
         logger.warning(f"Hybrid retrieval degraded to retrieve_with_images: {e}")
+        _rec_degraded("hybrid_retrieval")
         text_res, img_res, abs_res = retrieve_with_images(
             table_name, expanded, top_k=20
         )

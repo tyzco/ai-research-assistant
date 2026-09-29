@@ -115,20 +115,78 @@ class MetricsTracker:
             self.download_count += 1
 
     def estimate_cost(self) -> dict:
-        """Token 成本估算：优先使用真实 prompt/completion 分布，否则 50:50。"""
+        """Token 成本估算: 用**配置的真实单价**算实际花费。
+
+        修复: 原实现硬编码 $0.14/$0.28 每 MTok (旧 deepseek-chat 价), 换模型后即失真。
+        现在从 config 读单价; **未配置 (0) 时返回 None 而非编一个数** —— 宁可不显示金额,
+        也不显示不准的金额。
+        """
+        from config import (
+            DEEPSEEK_PRICE_INPUT_PER_MTOK,
+            DEEPSEEK_PRICE_OUTPUT_PER_MTOK,
+        )
+
         with self._lock:
             prompt = getattr(self, "_prompt_tokens_total", 0)
             completion = getattr(self, "_completion_tokens_total", 0)
             if prompt > 0 or completion > 0:
-                est = prompt / 1e6 * 0.14 + completion / 1e6 * 0.28
+                in_t, out_t = prompt, completion
             else:
                 in_t = self.total_tokens // 2
                 out_t = self.total_tokens - in_t
-                est = in_t / 1e6 * 0.14 + out_t / 1e6 * 0.28
+            priced = (
+                DEEPSEEK_PRICE_INPUT_PER_MTOK > 0
+                or DEEPSEEK_PRICE_OUTPUT_PER_MTOK > 0
+            )
+            cost = None
+            if priced:
+                cost = (
+                    in_t / 1e6 * DEEPSEEK_PRICE_INPUT_PER_MTOK
+                    + out_t / 1e6 * DEEPSEEK_PRICE_OUTPUT_PER_MTOK
+                )
             return {
                 "total_tokens": self.total_tokens,
-                "estimated_cost_usd": round(est, 4),
+                "prompt_tokens": in_t,
+                "completion_tokens": out_t,
+                "estimated_cost": round(cost, 4) if cost is not None else None,
+                "cost_note": (
+                    ""
+                    if priced
+                    else "未配置单价 (DEEPSEEK_PRICE_INPUT/OUTPUT_PER_MTOK) → 只报 token, 不报金额"
+                ),
             }
+
+    def estimate_calls_cost(self, n_calls: int) -> dict | None:
+        """按**历史真实均值**估算 n 次 LLM 调用的成本 (供成本闸事前估算)。
+
+        返回 None 表示数据不足 (无 token 历史) 或未配置单价 → 调用方应降级为只报次数。
+        """
+        from config import (
+            DEEPSEEK_PRICE_INPUT_PER_MTOK,
+            DEEPSEEK_PRICE_OUTPUT_PER_MTOK,
+        )
+
+        with self._lock:
+            reqs = getattr(self, "_total_requests", 0)
+            toks = self.total_tokens
+            if reqs < 5 or toks <= 0:
+                return None  # 历史太少, 均值不可信
+            avg_tokens = toks / reqs
+        priced = DEEPSEEK_PRICE_INPUT_PER_MTOK > 0 or DEEPSEEK_PRICE_OUTPUT_PER_MTOK > 0
+        if not priced:
+            return {"calls": n_calls, "avg_tokens_per_call": int(avg_tokens), "cost": None}
+        # LLM 调用以输出 token 为主, 按 40/60 粗分 (来自真实总量, 非拍脑袋单价)
+        out_t = avg_tokens * 0.6
+        in_t = avg_tokens * 0.4
+        per_call = (
+            in_t / 1e6 * DEEPSEEK_PRICE_INPUT_PER_MTOK
+            + out_t / 1e6 * DEEPSEEK_PRICE_OUTPUT_PER_MTOK
+        )
+        return {
+            "calls": n_calls,
+            "avg_tokens_per_call": int(avg_tokens),
+            "cost": round(per_call * n_calls, 4),
+        }
 
     def to_dict(self) -> dict:
         with self._lock:

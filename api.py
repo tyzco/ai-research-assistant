@@ -2449,19 +2449,36 @@ async def api_team_start(request: Request):
         return blk
     # 成本闸: 科研团队是 13 个 agent 的流水线 (多次 LLM 调用, 真金白银)。
     # 未确认时先回报估算 —— 防误点/误调用直接开跑烧钱。
-    from config import COST_GATE_ENABLED, COST_GATE_TEAM_ESTIMATE
+    from config import COST_CURRENCY, COST_GATE_ENABLED, COST_GATE_TEAM_ESTIMATE
 
     if COST_GATE_ENABLED and not req.get("confirm"):
+        est: dict = {"llm_calls": COST_GATE_TEAM_ESTIMATE}
+        note_extra = ""
+        # 金额只用**真实历史均值**估: 无历史 或 未配置单价 → 不显示金额 (不给假数)
+        try:
+            from monitor import metrics
+
+            _c = metrics.estimate_calls_cost(COST_GATE_TEAM_ESTIMATE)
+            if _c and _c.get("cost") is not None:
+                est["est_cost"] = _c["cost"]
+                est["currency"] = COST_CURRENCY
+                est["basis"] = f"按历史真实均值 {_c['avg_tokens_per_call']} token/次"
+                note_extra = f"，预计 {COST_CURRENCY}{_c['cost']}"
+            elif _c:
+                est["basis"] = f"按历史均值 {_c['avg_tokens_per_call']} token/次"
+                note_extra = "（未配置单价，不显示金额）"
+            else:
+                note_extra = "（历史样本不足，不估算金额）"
+        except Exception:
+            note_extra = "（估算不可用）"
         return {
             "needs_confirm": True,
-            "estimate": {
-                "llm_calls": COST_GATE_TEAM_ESTIMATE,
-                "note": (
-                    f"科研团队将执行 {COST_GATE_TEAM_ESTIMATE} 个 agent 阶段"
-                    f"（约 {COST_GATE_TEAM_ESTIMATE} 次 LLM 调用，含 3 道人工审批门）。"
-                    f"确认请带 confirm=true 重试。"
-                ),
-            },
+            "estimate": est,
+            "note": (
+                f"科研团队将执行 {COST_GATE_TEAM_ESTIMATE} 个 agent 阶段"
+                f"（约 {COST_GATE_TEAM_ESTIMATE} 次 LLM 调用，含 3 道人工审批门）"
+                f"{note_extra}。确认请带 confirm=true 重试。"
+            ),
         }
     from agent.research_team import get_team
 

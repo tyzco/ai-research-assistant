@@ -78,6 +78,11 @@ RERANK_MIN_SCORE = _env("RERANK_MIN_SCORE", 0.0, float)
 # 开启后: 为什么是/如何/为什么类解释性问题生成假设答案段落作检索变体, 提升弱召回场景命中
 # 质量水位管控 (load-aware degradation): 并发水位阈值 — 按负载动态升降检索质量档位
 # 成本闸: 高成本操作前先回报估算并等人工确认 (防误操作烧钱/耗时)
+# DeepSeek 真实单价 (从官方定价页填入; 默认 0 = 未配置 → 成本闸只显示次数/时间, 绝不显示假¥)
+DEEPSEEK_PRICE_INPUT_PER_MTOK = _env("DEEPSEEK_PRICE_INPUT_PER_MTOK", 0.0, float)
+DEEPSEEK_PRICE_OUTPUT_PER_MTOK = _env("DEEPSEEK_PRICE_OUTPUT_PER_MTOK", 0.0, float)
+COST_CURRENCY = _env("COST_CURRENCY", "¥", str)
+
 COST_GATE_ENABLED = _env_bool("COST_GATE_ENABLED", True)
 COST_GATE_MIN_PAPERS = _env("COST_GATE_MIN_PAPERS", 20, int)   # 下载>=此篇数需确认
 COST_GATE_SEC_PER_PAPER = _env("COST_GATE_SEC_PER_PAPER", 12, float)  # 每篇下载+解析+嵌入约12s
@@ -214,6 +219,9 @@ AGENT_REFLEXION_ENABLED = _env_bool("AGENT_REFLEXION_ENABLED", True)
 # Agent 可选 plan 阶段 (loop-engineering 规划层): 长任务先让 LLM 拆 3-6 步计划
 # 再执行, 防纯 ReAct 长任务 (整篇论文) 跑偏。仅对长度 ≥ 阈值的任务触发 (短问答不规划省延迟)。
 AGENT_PLAN_ENABLED = _env_bool("AGENT_PLAN_ENABLED", True)
+
+# Plan 模式: 生成计划后暂停等人工确认 (计划是长任务的"方向闸", 错方向先拦下)
+AGENT_PLAN_REQUIRE_APPROVAL = _env_bool("AGENT_PLAN_REQUIRE_APPROVAL", True)
 AGENT_PLAN_MIN_CHARS = _env("AGENT_PLAN_MIN_CHARS", 60, int)
 
 # Hook BEFORE_EMIT 敏感词表 (空列表 = 不拦截)。默认仅保留高危命令类,

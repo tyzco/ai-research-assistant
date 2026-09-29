@@ -556,7 +556,20 @@ async def api_export_topic(topic_id: str):
         raise HTTPException(404, "Topic not found")
     lines = [f"# {state.query}", "", f"创建时间: {state.created_at}"]
     if state.search_strategy:
+        # state.search_strategy 是 SearchStrategy **模型**(或历史数据里的 str), 从不是 dict —
+        # 直接 .get() 会 AttributeError, 导致整个导出 500。统一归一成 dict 再用。
         s = state.search_strategy
+        if hasattr(s, "model_dump"):
+            s = s.model_dump()
+        elif isinstance(s, str):
+            import json as _json
+
+            try:
+                s = _json.loads(s)
+            except Exception:
+                s = {}
+        if not isinstance(s, dict):
+            s = {}
         lines += [
             "",
             "## 检索策略",
@@ -1391,6 +1404,21 @@ def _find_semantic_similar_topic(query: str, threshold: float = 0.70):
     return None
 
 
+def _caller_identity(request: Request, user_id: str | None) -> str:
+    """调用者身份: 登录用户用 user_id; 匿名用客户端 IP。
+
+    与 quota 的「匿名按 IP 记账」同一口径 —— 用于给 agent run 绑定发起者,
+    使人工确认闸只接受发起者本人的批准 (此前任何拿到 run_id 的人都能批准)。
+    """
+    if user_id:
+        return f"user:{user_id}"
+    fwd = request.headers.get("x-forwarded-for", "") if request else ""
+    ip = fwd.split(",")[0].strip() if fwd else (
+        request.client.host if request and request.client else ""
+    )
+    return f"ip:{ip}"
+
+
 def _assert_topic_access(topic_id: str, user_id: str | None = None) -> None:
     """多用户课题访问校验 (微观层面补全隔离):
     用户专属课题(user_id 非空)仅归属者可访问; 匿名/共享课题(NULL)人人可访问。
@@ -1470,9 +1498,10 @@ async def api_feedback(request: Request):
     comment = req.get("comment", "")
     if not question or rating == 0:
         raise HTTPException(400, "需要 question 和 rating 参数")
+    user_id = sanitize_input(str(req.get("user_id", "") or ""))
     from database import get_db
 
-    get_db().record_feedback(question, answer, rating, comment)
+    get_db().record_feedback(question, answer, rating, comment, user_id=user_id)
     return {"ok": True, "total": get_db().get_feedback_stats()["total"]}
 
 
@@ -1865,9 +1894,12 @@ async def api_agent_quick(request: Request):
 
 
 @app.post("/agent/pi")
-async def api_agent_pi(request: Request):
+async def api_agent_pi(request: Request, user_id: str | None = Depends(get_current_user)):
     """Pi-Agent 风格主循环: trace→turn 生命周期 + 10 个 hook 节点 + 上下文压缩。
-    危险工具 (need_confirm) 会暂停并返回 run_id, 由 /agent/pi/approve 确认后续跑。"""
+    危险工具 (need_confirm) 会暂停并返回 run_id, 由 /agent/pi/approve 确认后续跑。
+
+    匿名可用 (与全站匿名优先一致), 但 run 会绑定发起者身份, 确认闸只认发起者。
+    """
     req = await request.json()
     task = sanitize_input(req.get("task", ""))
     if not task:
@@ -1880,6 +1912,10 @@ async def api_agent_pi(request: Request):
     max_time = req.get("max_time", 300)
     goal = req.get("goal", "")
     skills = req.get("skills") or None  # 显式技能名数组, None=auto 意图选择
+    # 之前漏读: 下面 get_agent() 传了 topic_id=topic_id, 而这里从未定义它 →
+    # NameError → /agent/pi 每次调用都 500 (非流式端点一直是坏的;
+    # /agent/pi/stream 读了这个字段所以前端没暴露出来)。
+    topic_id = req.get("topic_id", "")
 
     from agent.pi_agent import get_agent
 
@@ -1891,6 +1927,7 @@ async def api_agent_pi(request: Request):
         enable_context_compaction=True,
         skills=skills,
         topic_id=topic_id,
+        owner=_caller_identity(request, user_id),
     )
     result = await agent.run(task)
     result["run_id"] = agent.run_id
@@ -1900,7 +1937,7 @@ async def api_agent_pi(request: Request):
 
 
 @app.post("/agent/pi/stream")
-async def api_agent_pi_stream(request: Request):
+async def api_agent_pi_stream(request: Request, user_id: str | None = Depends(get_current_user)):
     """Agent 流式执行: SSE 推送每步工具调用事件 + 最终结果。
     人工确认门暂停时推送 paused 事件 (run_id), 前端用 /agent/pi/approve 续跑。"""
     import asyncio
@@ -1956,6 +1993,7 @@ async def api_agent_pi_stream(request: Request):
         step_cb=step_cb,
         kb_context=kb_context,
         topic_id=topic_id,
+        owner=_caller_identity(request, user_id),
     )
 
     async def generate():
@@ -1977,9 +2015,14 @@ async def api_agent_pi_stream(request: Request):
 
 
 @app.post("/agent/pi/approve")
-async def api_agent_pi_approve(request: Request):
+async def api_agent_pi_approve(request: Request, user_id: str | None = Depends(get_current_user)):
     """人工确认 pi-agent 暂停的危险工具, 恢复执行。
-    POST {run_id, confirmed: true|false}"""
+    POST {run_id, confirmed: true|false}
+
+    只接受**发起该 run 的同一身份** (登录 user_id, 匿名则客户端 IP)。
+    此前无任何校验: 任何人只要拿到 run_id 就能批准 agent 暂停的危险动作,
+    等于人工确认闸形同虚设。
+    """
     req = await request.json()
     run_id = req.get("run_id", "")
     if not run_id:
@@ -1991,14 +2034,21 @@ async def api_agent_pi_approve(request: Request):
         agent = get_agent(run_id)
     except KeyError:
         raise HTTPException(404, f"run 不存在或已过期: {run_id}")
+    caller = _caller_identity(request, user_id)
+    if getattr(agent, "owner", "") and agent.owner != caller:
+        raise HTTPException(403, "该 run 属于其他发起者，无权确认")
     result = await agent.resume(confirmed)
     result["run_id"] = run_id
     return result
 
 
 @app.get("/agent/pi/stats")
-async def api_agent_pi_stats():
-    """Pi-Agent 运行时统计: hooks 调用次数 + 上下文压缩次数 + 工具错误统计。"""
+async def api_agent_pi_stats(user_id: str = Depends(require_user)):
+    """Pi-Agent 运行时统计: hooks 调用次数 + 上下文压缩次数 + 工具错误统计。
+
+    需登录: 这是内部运行指标(hook 计数/上下文压缩/工具调用), 不是买家功能;
+    此前裸露在无鉴权接口上。前端不调用此端点, 加鉴权无副作用。
+    """
     from agent.context_engine import get_context_engine
     from agent.hooks import get_hooks
     from agent.tool_manager import get_tool_manager
@@ -2123,7 +2173,7 @@ async def api_agent_tools():
 
 
 @app.post("/agent/tools/reload")
-async def api_agent_tools_reload():
+async def api_agent_tools_reload(user_id: str = Depends(require_user)):
     """重新扫描 tools_extra/ 插件目录 — 新增插件文件无需重启即注册生效。"""
     from agent.tool_registry import _load_plugin_tools, get_tools_schema
 
@@ -2332,7 +2382,7 @@ async def quota_cancel():
 
 
 @app.post("/agent/skills/toggle")
-async def api_agent_skills_toggle(request: Request):
+async def api_agent_skills_toggle(request: Request, user_id: str = Depends(require_user)):
     """启用/禁用技能。POST {name: "literature_review", enabled: true}"""
     req = await request.json()
     name = req.get("name", "")

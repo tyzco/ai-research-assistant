@@ -132,6 +132,7 @@ class Database:
                 answer      TEXT NOT NULL,
                 rating      INTEGER NOT NULL DEFAULT 0,
                 comment     TEXT DEFAULT '',
+                user_id     TEXT DEFAULT '',
                 created_at  TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
@@ -140,6 +141,7 @@ class Database:
                 task          TEXT NOT NULL DEFAULT '',
                 tools_used    TEXT DEFAULT '',
                 result_preview TEXT DEFAULT '',
+                user_id       TEXT DEFAULT '',
                 created_at    TEXT NOT NULL DEFAULT (datetime('now'))
             );
             CREATE TABLE IF NOT EXISTS team_runs (
@@ -169,6 +171,19 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_topics_user ON topics(user_id);
         """
             )
+            # 存量库迁移 (幂等): 老库无 user_id 列 → 补上, 否则多用户记忆串味
+            for _tbl in ("learning_feedback", "agent_skill_memory"):
+                try:
+                    _cols = [
+                        r[1] for r in c.execute(f"PRAGMA table_info({_tbl})").fetchall()
+                    ]
+                    if "user_id" not in _cols:
+                        c.execute(
+                            f"ALTER TABLE {_tbl} ADD COLUMN user_id TEXT DEFAULT ''"
+                        )
+                        logger.info(f"migrated: added user_id to {_tbl}")
+                except Exception as e:
+                    logger.warning(f"migrate {_tbl} failed: {e}")
             c.commit()
             self._tables_ready = True
 
@@ -389,13 +404,15 @@ class Database:
     # ==================== Feedback (飞轮) ====================
 
     def record_feedback(
-        self, question: str, answer: str, rating: int, comment: str = ""
+        self, question: str, answer: str, rating: int, comment: str = "",
+        user_id: str = "",
     ):
         self._ensure_tables()
         c = self._conn()
         c.execute(
-            "INSERT INTO learning_feedback (question, answer, rating, comment) VALUES (?, ?, ?, ?)",
-            (question, answer, rating, comment),
+            "INSERT INTO learning_feedback (question, answer, rating, comment, user_id) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (question, answer, rating, comment, user_id or ""),
         )
         c.commit()
 
@@ -406,24 +423,38 @@ class Database:
         avg = c.execute("SELECT AVG(rating) FROM learning_feedback").fetchone()[0]
         return {"total": total, "avg_rating": round(avg, 2) if avg else 0.0}
 
-    def get_low_rated_feedback(self, limit: int = 10) -> list[dict]:
-        """低分反馈 (rating<=2) — 反馈驱动调整的燃料 (P2)。"""
+    def get_low_rated_feedback(self, limit: int = 10, user_id: str = "") -> list[dict]:
+        """低分反馈 (rating<=2) — 反馈驱动调整的燃料 (P2)。
+
+        user_id 非空 → 只取该用户的反馈 (多用户隔离, 防 A 的教训注入 B 的提示)。"""
         self._ensure_tables()
         c = self._conn()
-        rows = c.execute(
-            "SELECT question, comment, rating FROM learning_feedback "
-            "WHERE rating <= 2 ORDER BY id DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
+        if user_id:
+            rows = c.execute(
+                "SELECT question, comment, rating FROM learning_feedback "
+                "WHERE rating <= 2 AND user_id = ? ORDER BY id DESC LIMIT ?",
+                (user_id, limit),
+            ).fetchall()
+        else:
+            rows = c.execute(
+                "SELECT question, comment, rating FROM learning_feedback "
+                "WHERE rating <= 2 ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
         return [dict(r) for r in rows]
 
-    def record_skill_memory(self, task: str, tools_used: str, result_preview: str = ""):
-        """持久技能记忆 (P3): 记录成功任务的做法, 跨会话复用。保留最新 100 条。"""
+    def record_skill_memory(
+        self, task: str, tools_used: str, result_preview: str = "", user_id: str = ""
+    ):
+        """持久技能记忆 (P3): 记录成功任务的做法, 跨会话复用。保留最新 100 条。
+
+        user_id: 多用户隔离 — 成功策略只在同一用户内复现。"""
         self._ensure_tables()
         c = self._conn()
         c.execute(
-            "INSERT INTO agent_skill_memory (task, tools_used, result_preview) VALUES (?, ?, ?)",
-            (task[:200], tools_used[:200], result_preview[:300]),
+            "INSERT INTO agent_skill_memory (task, tools_used, result_preview, user_id) "
+            "VALUES (?, ?, ?, ?)",
+            (task[:200], tools_used[:200], result_preview[:300], user_id or ""),
         )
         # 只保留最新 100 条, 防无限增长
         c.execute(
@@ -432,14 +463,22 @@ class Database:
         )
         c.commit()
 
-    def get_skill_memory(self, limit: int = 100) -> list[dict]:
+    def get_skill_memory(self, limit: int = 100, user_id: str = "") -> list[dict]:
+        """成功策略记忆。user_id 非空 → 只取该用户的策略 (多用户隔离)。"""
         self._ensure_tables()
         c = self._conn()
-        rows = c.execute(
-            "SELECT task, tools_used, result_preview FROM agent_skill_memory "
-            "ORDER BY id DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
+        if user_id:
+            rows = c.execute(
+                "SELECT task, tools_used, result_preview FROM agent_skill_memory "
+                "WHERE user_id = ? ORDER BY id DESC LIMIT ?",
+                (user_id, limit),
+            ).fetchall()
+        else:
+            rows = c.execute(
+                "SELECT task, tools_used, result_preview FROM agent_skill_memory "
+                "ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
         return [dict(r) for r in rows]
 
 

@@ -225,6 +225,7 @@ class PiAgent:
                     task,
                     trace.get("tools_used") or [],
                     str(result.get("result", ""))[:150],
+                    user_id=self.owner,
                 )
         except Exception:
             pass
@@ -827,7 +828,7 @@ class PiAgent:
         try:
             from feedback_lessons import get_failure_lessons
 
-            lessons = get_failure_lessons()
+            lessons = get_failure_lessons(user_id=self.owner)
             if lessons:
                 lessons_txt = "\n\n【历史反馈教训（用户对下列问题类型给过低分，务必避免同类错误）】\n" + "\n".join(
                     f"- {l}" for l in lessons
@@ -852,7 +853,7 @@ class PiAgent:
         try:
             from agent_skills import get_similar_strategies
 
-            for s in get_similar_strategies(self.goal or task or ""):
+            for s in get_similar_strategies(self.goal or task or "", user_id=self.owner):
                 strat_txt += (
                     f"\n- 相似任务「{str(s.get('task',''))[:40]}」成功做法: "
                     f"调用工具 [{s.get('tools_used','')}]"

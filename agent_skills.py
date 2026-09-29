@@ -17,8 +17,8 @@ def _bigrams(s: str) -> set:
     return {s[i : i + 2] for i in range(len(s) - 1)} if len(s) >= 2 else set(s)
 
 
-def record_success(task: str, tools_used: list, result_preview: str = ""):
-    """记录一次成功任务的做法 (工具序列 + 结果预览)。"""
+def record_success(task: str, tools_used: list, result_preview: str = "", user_id: str = ""):
+    """记录一次成功任务的做法 (工具序列 + 结果预览)。user_id 隔离用户间策略。"""
     try:
         from database import get_db
 
@@ -26,17 +26,19 @@ def record_success(task: str, tools_used: list, result_preview: str = ""):
             task or "",
             ", ".join(tools_used or []),
             result_preview or "",
+            user_id or "",
         )
     except Exception as e:
         logger.warning(f"record_skill_memory failed: {e}")
 
 
-def get_similar_strategies(task: str, limit: int = 2, min_overlap: float = 0.5):
-    """返回与当前任务相似的成功做法 (按二元组重叠率)。空列表 = 无相似经验。"""
+def get_similar_strategies(task: str, limit: int = 2, min_overlap: float = 0.5, user_id: str = ""):
+    """返回与当前任务相似的成功做法 (按二元组重叠率)。空列表 = 无相似经验。
+    user_id 非空 → 只复用同一用户的历史策略 (多用户隔离)。"""
     try:
         from database import get_db
 
-        rows = get_db().get_skill_memory(limit=100)
+        rows = get_db().get_skill_memory(limit=100, user_id=user_id)
     except Exception as e:
         logger.warning(f"get_skill_memory failed: {e}")
         return []

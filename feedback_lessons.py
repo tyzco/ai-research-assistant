@@ -17,8 +17,12 @@ os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 logger = logging.getLogger(__name__)
 
-_CACHE: dict = {"ts": 0.0, "lessons": []}
+_CACHES: dict[str, dict] = {}  # user_id → {"ts", "lessons"} — 按用户分键 (单键缓存会串味)
 _TTL = 300  # 5 分钟
+
+
+def _cache_for(user_id: str) -> dict:
+    return _CACHES.setdefault(user_id or "", {"ts": 0.0, "lessons": []})
 
 
 def _distill(rows: list[dict]) -> list[str]:
@@ -64,22 +68,26 @@ def _distill(rows: list[dict]) -> list[str]:
         return []
 
 
-def get_failure_lessons(force: bool = False) -> list[str]:
-    """返回「易失败教训」列表 (空 = 无低分反馈或蒸馏不可用)。带 TTL 缓存。"""
+def get_failure_lessons(force: bool = False, user_id: str = "") -> list[str]:
+    """返回「易失败教训」列表 (空 = 无低分反馈或蒸馏不可用)。按用户 TTL 缓存。
+
+    user_id 非空 → 只蒸馏该用户的低分反馈 (多用户隔离: A 的教训不注入 B 的提示)。
+    """
     now = time.time()
-    if not force and now - _CACHE["ts"] < _TTL:
-        return _CACHE["lessons"]
+    cache = _cache_for(user_id)
+    if not force and now - cache["ts"] < _TTL:
+        return cache["lessons"]
     try:
         from database import get_db
 
-        rows = get_db().get_low_rated_feedback(limit=10)
+        rows = get_db().get_low_rated_feedback(limit=10, user_id=user_id)
         if len(rows) < 3:  # 样本太少不蒸馏, 避免过拟合噪声
-            _CACHE.update({"ts": now, "lessons": []})
+            cache.update({"ts": now, "lessons": []})
             return []
         lessons = _distill(rows)
-        _CACHE.update({"ts": now, "lessons": lessons})
+        cache.update({"ts": now, "lessons": lessons})
         if lessons:
-            logger.info(f"Feedback lessons refreshed: {lessons}")
+            logger.info(f"Feedback lessons refreshed (user={user_id or 'anon'}): {lessons}")
         return lessons
     except Exception as e:
         logger.warning(f"get_failure_lessons failed: {e}")

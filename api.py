@@ -501,8 +501,17 @@ async def api_list_topics(
 
 
 @app.delete("/topic/{topic_id}")
-async def api_delete_topic(topic_id: str, user_id: str = Depends(get_current_user)):
+async def api_delete_topic(
+    topic_id: str, user_id: str = Depends(get_current_user), confirm: bool = False
+):
+    """删除课题 (不可逆: 级联删会话/记忆)。**后端强制二次确认** —— 前端有 confirm 弹窗,
+    但直接调 API 可绕过; 缺 confirm=true 一律 400, 防误调用导致课题不可逆丢失。"""
     _assert_topic_access(topic_id, user_id)
+    if not confirm:
+        raise HTTPException(
+            400,
+            "删除不可逆（级联删除该课题的对话与记忆）。请带 confirm=true 重试。",
+        )
     if topic_id not in active_topics:
         raise HTTPException(404, "Topic not found")
     del active_topics[topic_id]
@@ -986,6 +995,33 @@ async def api_download_bulk(request: Request, user_id: str = Depends(get_current
     _assert_topic_access(topic_id, user_id)
     if not urls:
         raise HTTPException(400, "No URLs provided")
+    # 成本闸: 批量下载是"不可逆 + 高耗时"操作 (下载+解析+嵌入建库)。
+    # 前端有按钮, 但直接调 API 会无提示地跑掉几分钟 → 未确认时先回报估算。
+    from config import (
+        COST_GATE_ENABLED,
+        COST_GATE_MIN_PAPERS,
+        COST_GATE_SEC_PER_PAPER,
+    )
+
+    if (
+        COST_GATE_ENABLED
+        and not req.get("confirm")
+        and len(urls) >= COST_GATE_MIN_PAPERS
+    ):
+        _est_s = int(len(urls) * COST_GATE_SEC_PER_PAPER)
+        return {
+            "needs_confirm": True,
+            "estimate": {
+                "papers": len(urls),
+                "est_seconds": _est_s,
+                "est_minutes": round(_est_s / 60, 1),
+                "note": (
+                    f"将下载并解析 {len(urls)} 篇 PDF 并建库（本地嵌入, 无 API 费用; "
+                    f"主要成本是时间, 约 {round(_est_s/60,1)} 分钟）。"
+                    f"确认请带 confirm=true 重试。"
+                ),
+            },
+        }
 
     state = active_topics.get(topic_id)
     if state:
@@ -2411,6 +2447,22 @@ async def api_team_start(request: Request):
         raise HTTPException(400, "需要 task 参数")
     if (blk := await _scope_gate(task)) is not None:
         return blk
+    # 成本闸: 科研团队是 13 个 agent 的流水线 (多次 LLM 调用, 真金白银)。
+    # 未确认时先回报估算 —— 防误点/误调用直接开跑烧钱。
+    from config import COST_GATE_ENABLED, COST_GATE_TEAM_ESTIMATE
+
+    if COST_GATE_ENABLED and not req.get("confirm"):
+        return {
+            "needs_confirm": True,
+            "estimate": {
+                "llm_calls": COST_GATE_TEAM_ESTIMATE,
+                "note": (
+                    f"科研团队将执行 {COST_GATE_TEAM_ESTIMATE} 个 agent 阶段"
+                    f"（约 {COST_GATE_TEAM_ESTIMATE} 次 LLM 调用，含 3 道人工审批门）。"
+                    f"确认请带 confirm=true 重试。"
+                ),
+            },
+        }
     from agent.research_team import get_team
 
     team = get_team()  # 每次 start 独立实例, 不再全局单例互踩

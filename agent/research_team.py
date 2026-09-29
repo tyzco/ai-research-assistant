@@ -549,12 +549,45 @@ class ResearchTeam:
         # 全部完成
         final = self.state.get("final_drafter", "")
         self._save_snapshot(status="completed")
+        self._persist_to_memory()  # 跨 agent 记忆: 团队产出沉淀到课题记忆
         return {
             "status": "completed",
             "result": final or self._build_summary(),
             "history": self.history,
             "completed_stages": [h["agent"] for h in self.history],
         }
+
+    def _persist_to_memory(self) -> None:
+        """跨 agent 记忆: 把团队产出沉淀进课题 ConversationMemory。
+
+        修复前: research_team 与 ConversationMemory **零交互** —— 13-agent 团队跑完的发现/审稿意见
+        全部随 self.state 消失, pi_agent 后续问答读不到团队的产出 (两条链路记忆不互通)。
+        现沉淀 2 条关键记忆 (团队流程摘要 + 同行审稿意见), 供 pi_agent / 后续会话复用。
+        """
+        if not self.topic_id:
+            return
+        try:
+            from conversation_memory import get_memory
+
+            mem = get_memory(self.topic_id)
+            ran = [h["agent"] for h in self.history]
+            if not ran:
+                return
+            final = self.state.get("final_drafter", "") or self.state.get(
+                "review_synthesizer", ""
+            )
+            mem.add_finding(
+                f"[科研团队] 完成 {len(ran)} 阶段流程 ({', '.join(ran[:5])}…); "
+                f"终稿摘要: {str(final)[:200]}",
+                "research_team",
+            )
+            review = self.state.get("peer_reviewer", "")
+            if review:
+                mem.add_finding(f"[同行审稿意见] {str(review)[:200]}", "research_team")
+            mem.add_tool_call("research_team", f"{len(ran)} 阶段")
+            logger.info(f"团队记忆已沉淀到课题 {self.topic_id}")
+        except Exception as e:
+            logger.warning(f"团队记忆沉淀失败: {e}")
 
     async def execute(self, task: str, topic_id: str = "") -> dict:
         """执行完整研究流程。返回 {status, result|request, run_id}"""

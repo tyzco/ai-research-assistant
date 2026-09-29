@@ -254,7 +254,7 @@ async def ask_question(
         from conversation_memory import get_memory
 
         mem = get_memory(mem_key)
-        mem_ctx = mem.get_context()
+        mem_ctx = mem.get_context(question)  # 语义选择: 按当前问题取相关记忆
     except Exception:
         pass
     resolved_question = question

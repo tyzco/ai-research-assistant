@@ -843,7 +843,7 @@ class PiAgent:
             try:
                 from conversation_memory import get_memory
 
-                _mctx = get_memory(self.topic_id).get_context()
+                _mctx = get_memory(self.topic_id).get_context(task)
                 if _mctx:
                     mem_txt = f"\n\n【课题记忆（此前交互/科研团队产出的关键发现，可复用）】\n{_mctx[:1500]}"
             except Exception:

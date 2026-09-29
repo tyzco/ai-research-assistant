@@ -34,6 +34,47 @@ PRIORITY = {"tool_result": 10, "user": 5, "assistant": 3}
 MEMORY_TTL_SECONDS = 3600
 
 
+def _embed_finding(text: str) -> list:
+    """记忆嵌入 (复用项目本地 bge)。失败返回 [] → 该条退化为 recency 兜底。"""
+    try:
+        from knowledge_base import _embed_texts_sync
+
+        v = _embed_texts_sync([text[:500]])[0]
+        return [float(x) for x in v]
+    except Exception:
+        return []
+
+
+def _select_findings(query: str, findings: list[dict], k: int = 5) -> list[dict]:
+    """按**当前问题的语义相关性**选 top-k 记忆 (替代纯 recency)。
+
+    只有 query 非空且存在带向量的记忆时才做语义选择; 否则按 recency 兜底。
+    意图: 修复「5 轮前的关键约束被最近 5 条无关检索结果挤掉」。
+    """
+    valid = [
+        f for f in findings if isinstance(f, dict) and f.get("vec")
+    ]
+    if not query or not valid:
+        return findings[-k:]
+    try:
+        import numpy as np
+
+        qv = _embed_finding(query)
+        if not qv:
+            return findings[-k:]
+        qv = np.asarray(qv, dtype=np.float32)
+        qn = qv / (np.linalg.norm(qv) + 1e-12)
+        scored = []
+        for f in valid:
+            v = np.asarray(f["vec"], dtype=np.float32)
+            sim = float(np.dot(v, qn) / (np.linalg.norm(v) + 1e-12))
+            scored.append((sim, f))
+        scored.sort(key=lambda x: -x[0])
+        return [f for _, f in scored[:k]]
+    except Exception:
+        return findings[-k:]
+
+
 class ConversationMemory:
     """管理单个课题的多轮对话记忆。SQLite 持久化。"""
 
@@ -83,7 +124,11 @@ class ConversationMemory:
         self.save()
 
     def add_finding(self, content: str, source: str = ""):
-        """结构化添加关键发现 (去重按 content)。由 agent 完成时调用, 持久化跨会话记忆。"""
+        """结构化添加关键发现 (去重按 content)。由 agent 完成时调用, 持久化跨会话记忆。
+
+        同时计算并存储嵌入 → 供 get_context(query) 做**语义选择** (按当前问题取相关记忆,
+        而非只取最近 5 条)。嵌入失败则存空 list, 退化为 recency 兜底 (不阻塞写入)。
+        """
         if not content:
             return
         existing = {
@@ -92,7 +137,9 @@ class ConversationMemory:
             if isinstance(f, dict)
         }
         if content not in existing:
-            self.core["key_findings"].append({"content": content, "source": source})
+            self.core["key_findings"].append(
+                {"content": content, "source": source, "vec": _embed_finding(content)}
+            )
             self.save()
 
     def add_turn(self, question: str, answer: str):
@@ -163,9 +210,12 @@ class ConversationMemory:
         except Exception as e:
             logger.warning(f"Compression failed: {e}")
 
-    def get_context(self) -> str:
+    def get_context(self, query: str = "") -> str:
         """构建上下文。保持时间序, 取最近 max_recent*2 条消息。
-        v5.2 修复: 不再按优先级排序 (原实现丢失时序 + 保留最低优先级)。"""
+        v5.2 修复: 不再按优先级排序 (原实现丢失时序 + 保留最低优先级)。
+
+        query 非空 → 关键发现按**语义相关性**选 top-5 (而非只取最近 5 条);
+        传空 (默认) → 保持原 recency 行为 (向后兼容)。"""
         self.touch()
         parts = []
         if self.core["research_goal"]:
@@ -173,7 +223,7 @@ class ConversationMemory:
         if self.core["key_findings"]:
             findings = [
                 f.get("content", "")[:100]
-                for f in self.core["key_findings"][-5:]
+                for f in _select_findings(query, self.core["key_findings"], k=5)
                 if isinstance(f, dict)
             ]
             if findings:

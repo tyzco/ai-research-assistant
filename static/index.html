@@ -317,6 +317,7 @@ async function PI(task,steps){S.piSteps=[];S.agent=true;setPhase('thinking');sho
         else if(d.event==='token'){piAns+=d.token;S.msgs[S.msgs.length-1].c=(stepsTxt?stepsTxt+'\n\n':'')+piAns+'▌';R()}
         else if(d.event==='result'){
           S.agent=false;showStop(false);
+          if(d.paused&&d.need_plan_approval){S._piRunId=d.run_id||'';document.getElementById('approval-bar').style.display='block';document.getElementById('approval-text').innerHTML='<b>📋 计划待确认（plan 模式）</b><div style="white-space:pre-wrap;font-size:11px;max-height:170px;overflow:auto;background:var(--hover);border-radius:8px;padding:8px;margin:6px 0">'+esc(d.plan||'')+'</div>确认后按此计划执行，或拒绝重新规划';Ae('s','## 📋 计划待确认\n\n'+(d.plan||'')+'\n\n_确认后按此计划执行；拒绝则取消，我会重新规划。_');break}
           if(d.paused){S._piRunId=d.run_id||'';document.getElementById('approval-bar').style.display='block';document.getElementById('approval-text').innerHTML='<b>⚠️ 需要人工确认</b><br>Agent 请求执行: <b>'+(d.need_confirm?d.need_confirm.tool_name:'工具')+'</b><br>确认后执行，或拒绝让 Agent 换路';Ae('s','## ⚠️ 需要人工确认\n\nAgent 请求执行: **'+(d.need_confirm?d.need_confirm.tool_name:'')+'**\n\n_等待人工确认..._');break}
           var res=d.result||'';
           /* plan 模式: 若结果是澄清问题(带标记)则保持反问; 否则是初稿 → 退出 plan */

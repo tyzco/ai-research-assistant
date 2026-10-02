@@ -75,7 +75,14 @@ PAPER_WRITING = Skill(
     name="paper_writing",
     description="论文全流程写作辅助: 大纲生成 → 段落扩展 → 引用管理 → 格式排版",
     category="writing",
-    tools=["agent_ask", "search_papers", "export_report", "check_draft_quality", "review_draft"],
+    tools=[
+        "agent_ask",
+        "search_papers",
+        "export_report",
+        "check_draft_quality",
+        "review_draft",
+        "check_factual_support",
+    ],
     system_prompt_appendix="""
 【论文写作模式】
 1. 理解用户写作需求 (论文类型/目标期刊/语言/章节要求)
@@ -85,6 +92,9 @@ PAPER_WRITING = Skill(
 5. 输出格式: 学术 Markdown + BibTeX 参考文献
 6. 初稿完成前必须调用 check_draft_quality 自检 (研究问题/空白定位/结构/引用/诚实性/可续写);
    有未达标项则修订后再次自检, 直至全部通过再交付
+7. **引用真实性必须核验** (学术场景不容编造): 交付前用 check_factual_support 抽查关键论断
+   是否被库内证据支撑; 判为 contradicted/unsupported 的论断必须改写或明确标注为「通用学术共识」。
+   这是硬性步骤, 不得跳过 —— 幻觉引文属学术不端, 是高风险不可错项。
 """,
 )
 

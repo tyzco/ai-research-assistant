@@ -208,6 +208,33 @@ class PiAgent:
                 if _p_rc:
                     _pm["reasoning_content"] = _p_rc  # 回传, 否则后续调用 400
                 self._messages.append(_pm)
+                # Plan 模式 (人工介入的"方向闸"): 计划生成后**暂停等人工确认**再执行 ——
+                # 长任务的错方向若跑完 20 步才发现, 代价远高于先看一眼计划。
+                # 复用工具确认门 (_pending_confirm + /agent/pi/approve), 用 type 区分两种暂停。
+                from config import AGENT_PLAN_REQUIRE_APPROVAL
+
+                if AGENT_PLAN_REQUIRE_APPROVAL:
+                    self._pending_confirm = {
+                        "type": "plan",
+                        "plan": _p,
+                        "run_id": self.run_id,
+                    }
+                    self._state = {
+                        "messages": self._messages,
+                        "max_steps": self.max_steps,
+                        "steps": 0,
+                    }
+                    self._fire_hook(
+                        "trace_end", {"result": "paused_for_plan", "task": task}
+                    )
+                    return {
+                        "success": True,
+                        "paused": True,
+                        "need_plan_approval": True,
+                        "plan": _p,
+                        "run_id": self.run_id,
+                        "result": _p,
+                    }
 
         self._state = {
             "messages": self._messages,
@@ -242,7 +269,39 @@ class PiAgent:
                     _mem.add_finding(str(_kf)[:300], "agent")
             except Exception:
                 pass
+        self._verify_high_risk(result)
         return result
+
+    def _verify_high_risk(self, result: dict) -> None:
+        """系统层硬性核验 (不由 LLM 自觉) —— 对应"高风险任务不允许出错"这一 Agent 适配前提。
+
+        写作/初稿类任务的"引用真实性"是学术高风险项 (幻觉引文=学术不端), 不能只靠
+        system prompt 提示「必须核验」而依赖 LLM 自觉。此处按 trace 里的实际工具调用判定:
+        若未调用 check_draft_quality / check_factual_support, 就在结果上**显式标注未核验**
+        (而非默默放行), 提示人工复核。
+        """
+        if not result.get("success"):
+            return
+        try:
+            _tr = result.get("trace") or {}
+            _tools = _tr.get("tools_used") or []
+            _ctx = (self.goal or "") + str(self._state.get("task", ""))
+            _is_writing = any(
+                k in _ctx for k in ("写", "综述", "初稿", "论文", "大纲")
+            )
+            if not _is_writing:
+                return
+            _required = ("check_draft_quality", "check_factual_support")
+            _missing = [t for t in _required if t not in _tools]
+            if _missing:
+                result["unverified"] = _missing
+                result["result"] = str(result.get("result", "")) + (
+                    f"\n\n---\n⚠️ **系统核验提示**：本次写作未调用 `{', '.join(_missing)}`——"
+                    f"引用真实性与初稿质量**未经系统核验**。请人工复核关键论断与引用后再使用。"
+                )
+                logger.warning(f"High-risk writing unverified: missing {_missing}")
+        except Exception as e:
+            logger.warning(f"_verify_high_risk failed: {e}")
 
     async def _plan(self, task: str) -> tuple[str, str] | None:
         """可选 plan 阶段 (规划层): 长任务先让 LLM 拆 3-6 步计划, 防纯 ReAct 跑偏。
@@ -794,6 +853,51 @@ class PiAgent:
                 "run_id": self.run_id,
             }
         pc = self._pending_confirm
+        # === Plan 模式: 计划确认 (与工具确认共用本入口, 用 type 区分) ===
+        if pc.get("type") == "plan":
+            self._pending_confirm = None
+            if not confirm:
+                self._fire_hook("trace_end", {"result": "plan_rejected"})
+                return {
+                    "success": False,
+                    "result": "计划已取消。请重新描述任务，我会给出新计划。",
+                    "run_id": self.run_id,
+                }
+            # 确认 → 计划已在 _messages 中 (作为 assistant 消息), 直接续跑
+            self._fire_hook("trace_start", {"task": "plan_approved"})
+            result = await self._loop()
+            # 收尾: 与 run() 一致的持久化 (成功策略 + 课题记忆)
+            _task = ""
+            for _m in self._messages:
+                if _m.get("role") == "user":
+                    _task = str(_m.get("content", ""))[:80]
+                    break
+            try:
+                if result.get("success"):
+                    from agent_skills import record_success
+
+                    record_success(
+                        _task,
+                        (result.get("trace") or {}).get("tools_used") or [],
+                        str(result.get("result", ""))[:150],
+                        user_id=self.owner,
+                    )
+            except Exception:
+                pass
+            if self.topic_id:
+                try:
+                    from conversation_memory import get_memory
+
+                    _mem = get_memory(self.topic_id)
+                    _tr = result.get("trace") or {}
+                    for _t in _tr.get("tools_used") or []:
+                        _mem.add_tool_call(_t, "")
+                    for _kf in _tr.get("key_findings") or []:
+                        _mem.add_finding(str(_kf)[:300], "agent")
+                except Exception:
+                    pass
+            return result
+
         from agent.tool_registry import get_tool
 
         tool_def = get_tool(pc["tool_name"])

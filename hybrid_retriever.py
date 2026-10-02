@@ -70,22 +70,36 @@ class AdaptiveHybridRetriever:
         - 含英文缩写/公式：偏关键词 → BM25 高权重
         - 长查询/自然语言问句：偏语义 → 向量高权重
         """
-        score = 0.5  # 默认均衡
+        # 修复: 原实现把全部系数/阈值**硬编码**在函数里, 而 config 已定义同名 8 个
+        # ADAPTIVE_* 参数却从未被引用 —— 号称"核心创新"的自适应权重实际不可调。
+        # 现统一从 config 读取 (默认值与原硬编码完全一致 → 行为不变, 但变得可调/可复现)。
+        from config import (
+            ADAPTIVE_ACRONYM_BOOST,
+            ADAPTIVE_ALPHA_MAX,
+            ADAPTIVE_ALPHA_MIN,
+            ADAPTIVE_DEFAULT_ALPHA,
+            ADAPTIVE_LONG_QUERY_PENALTY,
+            ADAPTIVE_LONG_THRESHOLD,
+            ADAPTIVE_QUESTION_PENALTY,
+            ADAPTIVE_SHORT_QUERY_BOOST,
+            ADAPTIVE_SHORT_THRESHOLD,
+        )
 
+        score = ADAPTIVE_DEFAULT_ALPHA  # 默认均衡
         # 短查询：更像关键词搜索
-        if len(query) < 15:
-            score += 0.2
+        if len(query) < ADAPTIVE_SHORT_THRESHOLD:
+            score += ADAPTIVE_SHORT_QUERY_BOOST
         # 含英文术语/缩写（如 "ArcFace", "CNN", "LSTM"）
         if re.search(r"[A-Z]{2,}|[a-z]+[A-Z]", query):
-            score += 0.15
+            score += ADAPTIVE_ACRONYM_BOOST
         # 问句形式：更像自然语言
         if re.search(r"[?？]|什么是|如何|怎么样|有哪些", query):
-            score -= 0.15
+            score += ADAPTIVE_QUESTION_PENALTY
         # 长查询：更像语义搜索
-        if len(query) > 40:
-            score -= 0.1
+        if len(query) > ADAPTIVE_LONG_THRESHOLD:
+            score += ADAPTIVE_LONG_QUERY_PENALTY
 
-        return max(0.05, min(0.95, score))
+        return max(ADAPTIVE_ALPHA_MIN, min(ADAPTIVE_ALPHA_MAX, score))
 
     # ---- 多路召回 ----
     def _vector_recall(

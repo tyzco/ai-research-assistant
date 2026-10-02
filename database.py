@@ -320,6 +320,28 @@ class Database:
         c.commit()
         return cur.rowcount > 0
 
+    def prune_archived_memories(self, days: int = 90) -> int:
+        """记忆数据层过期: 清理已结题/中止/归档课题的过期记忆行。返回删除条数。
+
+        此前只有**内存**层 TTL (释放进程缓存), 持久化记忆永不清理 → 长期膨胀。
+        days<=0 表示不清理。
+        """
+        if days <= 0:
+            return 0
+        self._ensure_tables()
+        c = self._conn()
+        cur = c.execute(
+            "DELETE FROM memories WHERE topic_id IN ("
+            "  SELECT topic_id FROM topics "
+            "  WHERE status IN ('settled', 'aborted', 'archived')"
+            ") AND updated_at < datetime('now', ?)",
+            (f"-{int(days)} days",),
+        )
+        c.commit()
+        if cur.rowcount:
+            logger.info(f"pruned {cur.rowcount} archived memories (>{days}d)")
+        return cur.rowcount
+
     def log_state_change(
         self, topic_id: str, from_status: str, to_status: str,
         user_id: str = "", reason: str = "",

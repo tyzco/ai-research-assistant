@@ -145,6 +145,16 @@ class ConversationMemory:
             self.core["key_findings"].append(
                 {"content": content, "source": source, "vec": _embed_finding(content)}
             )
+            # 上限: 超限丢最旧 (此前无上限 → key_findings 无限增长, 记忆膨胀且拖慢语义检索)
+            try:
+                from config import MEMORY_MAX_FINDINGS
+
+                if len(self.core["key_findings"]) > MEMORY_MAX_FINDINGS:
+                    self.core["key_findings"] = self.core["key_findings"][
+                        -MEMORY_MAX_FINDINGS:
+                    ]
+            except Exception:
+                pass
             self.save()
 
     def add_turn(self, question: str, answer: str):

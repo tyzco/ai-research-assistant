@@ -26,12 +26,17 @@ class Tool:
         parameters: dict,
         func: ToolFunc,
         need_confirm: bool = False,
+        kind: str = "deterministic",
     ):
         self.name = name
         self.description = description
         self.parameters = parameters  # JSON Schema
         self.func = func
         self.need_confirm = need_confirm  # 是否需要人工确认
+        # deterministic = 确定性能力 (查库/计算/导出/查询: 同输入同输出, 可缓存可审计)
+        # llm           = 内部含 LLM 判断/生成 (结果有随机性, 成本高, 需谨慎包装)
+        # 设计原则: 工具优先确定性能力; LLM 类须显式标注, 避免"把模糊推理包成工具"而不自知。
+        self.kind = kind
 
     def to_openai_schema(self) -> dict:
         return {
@@ -248,6 +253,7 @@ TOOLS: list[Tool] = [
             "required": ["query"],
         },
         _tool_generate_strategy,
+        kind="llm"
     ),
     Tool(
         "search_papers",
@@ -301,6 +307,7 @@ TOOLS: list[Tool] = [
             "required": ["table_name", "question"],
         },
         _tool_ask_kb,
+        kind="llm"
     ),
     Tool(
         "export_report",
@@ -339,6 +346,7 @@ TOOLS: list[Tool] = [
             "required": ["draft"],
         },
         _tool_check_draft,
+        kind="llm"
     ),
     Tool(
         "analyze_research_gap",
@@ -351,6 +359,7 @@ TOOLS: list[Tool] = [
             "required": ["topic"],
         },
         _tool_analyze_gap,
+        kind="llm"
     ),
     Tool(
         "review_draft",
@@ -364,6 +373,7 @@ TOOLS: list[Tool] = [
             "required": ["draft"],
         },
         _tool_review_draft,
+        kind="llm"
     ),
     Tool(
         "citation_chain",
@@ -524,5 +534,6 @@ if not any(t.name == "agent_ask" for t in TOOLS):
                 "required": ["table_name", "question"],
             },
             _tool_agent_ask,
+            kind="llm",  # 内部走 RAG + LLM 生成 (非确定性): 显式标注, 避免误当确定性工具
         )
     )

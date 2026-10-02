@@ -94,6 +94,14 @@ async def scheduler_loop(interval_seconds: int = 3600):
             await _run_all_subscriptions_once()
         except Exception as e:
             logger.error(f"Scheduler loop error: {e}")
+        # 记忆数据层过期: 清理已结题/归档课题的过期记忆 (此前只清内存, 持久层永不清理)
+        try:
+            from config import MEMORY_ARCHIVE_TTL_DAYS
+            from database import get_db
+
+            get_db().prune_archived_memories(MEMORY_ARCHIVE_TTL_DAYS)
+        except Exception as e:
+            logger.warning(f"Memory prune failed: {e}")
         await asyncio.sleep(interval_seconds)
 
 

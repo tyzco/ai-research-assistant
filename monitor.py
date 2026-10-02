@@ -106,6 +106,47 @@ class MetricsTracker:
                     self.error_by_type.get(error_type, 0) + 1
                 )
 
+    def record_ingest(
+        self, ok: bool, pages: int = 0, chars: int = 0, chunks: int = 0
+    ):
+        """记录一次文档接入 (解析+分块) 结果 — 补齐"接入/索引"环节的量化指标。
+
+        之前全流程只有检索/生成有指标, 接入层是黑的: 解析失败率、平均块大小无从得知,
+        出了问题只能猜是"PDF 有问题"还是"分块有问题"。
+        """
+        with self._lock:
+            if not hasattr(self, "_ingest"):
+                self._ingest = {
+                    "attempts": 0, "ok": 0, "fail": 0,
+                    "pages": 0, "chars": 0, "chunks": 0,
+                }
+            g = self._ingest
+            g["attempts"] += 1
+            g["ok" if ok else "fail"] += 1
+            g["pages"] += pages
+            g["chars"] += chars
+            g["chunks"] += chunks
+
+    def ingest_stats(self) -> dict:
+        """接入/索引环节指标: 解析成功率 + 分块质量 (平均块大小/篇均块数)。"""
+        with self._lock:
+            g = dict(getattr(self, "_ingest", {}))
+        if not g or not g.get("attempts"):
+            return {"attempts": 0, "note": "暂无接入记录"}
+        ok = g.get("ok", 0)
+        chunks = g.get("chunks", 0)
+        return {
+            "attempts": g["attempts"],
+            "parse_ok": ok,
+            "parse_fail": g.get("fail", 0),
+            "parse_success_rate": round(ok / g["attempts"], 4),
+            "total_pages": g.get("pages", 0),
+            "total_chars": g.get("chars", 0),
+            "total_chunks": chunks,
+            "avg_chunk_chars": int(g.get("chars", 0) / chunks) if chunks else 0,
+            "avg_chunks_per_paper": round(chunks / ok, 1) if ok else 0,
+        }
+
     def record_degradation(self, path: str):
         """记录一次降级触发 (按路径计数)。
 

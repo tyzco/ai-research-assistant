@@ -245,6 +245,10 @@ DOWNLOAD_TIMEOUT = _env("DOWNLOAD_TIMEOUT", 20, int)
 # ===================================================================
 # Conversation Memory
 # ===================================================================
+# 记忆上限: key_findings 最多保留条数 (超限丢最旧) — 防无限增长
+MEMORY_MAX_FINDINGS = _env("MEMORY_MAX_FINDINGS", 100, int)
+# 记忆数据层过期: 已结题/归档课题的记忆保留天数, 超期清理 (0=不清理)
+MEMORY_ARCHIVE_TTL_DAYS = _env("MEMORY_ARCHIVE_TTL_DAYS", 90, int)
 MEMORY_MAX_RECENT = _env(
     "MEMORY_MAX_RECENT", 5, int
 )  # max recent turns kept in full text

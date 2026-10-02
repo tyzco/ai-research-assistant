@@ -289,6 +289,11 @@ async def api_metrics():
         d["degradations"] = metrics.degradation_stats()
     except Exception:
         pass
+    try:
+        # 接入/索引环节指标: 解析成功率 + 分块质量 (补齐全流程最后一处无量化的环节)
+        d["ingest"] = metrics.ingest_stats()
+    except Exception:
+        pass
     return d
 
 
@@ -1119,8 +1124,25 @@ async def api_download_bulk(request: Request, user_id: str = Depends(get_current
                 for img in result["images"]:
                     img["paper_id"] = paper_id
                 all_images.extend(result["images"])
+                # 接入环节指标: 解析成功率 + 分块质量 (此前该环节无任何量化指标)
+                try:
+                    from monitor import metrics as _m
+
+                    _m.record_ingest(
+                        ok=bool(chunks),
+                        pages=len(result.get("pages", []) or []),
+                        chars=len(result.get("full_text", "") or ""),
+                        chunks=len(chunks),
+                    )
+                except Exception:
+                    pass
             except Exception:
-                pass
+                try:
+                    from monitor import metrics as _m
+
+                    _m.record_ingest(ok=False)
+                except Exception:
+                    pass
 
         # 构建文本层
         table_name = ""

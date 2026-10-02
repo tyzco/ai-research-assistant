@@ -17,6 +17,11 @@ from config import (
     SEMANTIC_SCHOLAR_API_KEY,
     SOURCE_WEIGHTS,
     SPAM_KEYWORDS,
+    SEARCH_LIMIT_ARXIV,
+    SEARCH_LIMIT_CROSSREF,
+    SEARCH_LIMIT_DOAJ,
+    SEARCH_LIMIT_OPENALEX,
+    SEARCH_LIMIT_S2,
 )
 from models import PaperMeta
 
@@ -667,7 +672,7 @@ async def _search_s2(keywords: list[str]) -> list[PaperMeta]:
             try:
                 resp = await client.get(
                     S2_URL,
-                    params={"query": kw, "limit": 20, "fields": S2_FIELDS},
+                    params={"query": kw, "limit": SEARCH_LIMIT_S2, "fields": S2_FIELDS},
                     headers=headers,
                 )
                 if resp.status_code == 429:
@@ -718,7 +723,7 @@ async def _search_arxiv(keywords: list[str]) -> list[PaperMeta]:
                     ARXIV_URL,
                     params={
                         "search_query": terms,
-                        "max_results": 30,
+                        "max_results": SEARCH_LIMIT_ARXIV,
                         "sortBy": "relevance",
                     },
                 )
@@ -788,7 +793,7 @@ async def _search_openalex(keywords: list[str]) -> list[PaperMeta]:
                     OPENALEX_URL,
                     params={
                         "search": kw,
-                        "per_page": 60,
+                        "per_page": SEARCH_LIMIT_OPENALEX,
                         "sort": "cited_by_count:desc",
                         "filter": "has_doi:true",
                     },
@@ -837,7 +842,7 @@ async def _search_openalex_cn(keywords: list[str]) -> list[PaperMeta]:
                     OPENALEX_URL,
                     params={
                         "search": kw,
-                        "per_page": 60,
+                        "per_page": SEARCH_LIMIT_OPENALEX,
                         "sort": "cited_by_count:desc",
                         "filter": "language:zh,has_doi:true",
                     },
@@ -1062,7 +1067,7 @@ async def _search_core(keywords: list[str]) -> list[PaperMeta]:
             try:
                 resp = await client.get(
                     CORE_URL,
-                    params={"q": kw, "limit": 15, "scroll": "false"},
+                    params={"q": kw, "limit": SEARCH_LIMIT_CROSSREF, "scroll": "false"},
                     headers={"User-Agent": "AI-Research-Assistant/1.0"},
                 )
                 if resp.status_code != 200:
@@ -1258,7 +1263,7 @@ async def _search_pwc(keywords: list[str]) -> list[PaperMeta]:
             try:
                 resp = await client.get(
                     PWC_URL,
-                    params={"q": kw, "items_per_page": 15},
+                    params={"q": kw, "items_per_page": SEARCH_LIMIT_DOAJ},
                 )
                 if resp.status_code != 200:
                     continue

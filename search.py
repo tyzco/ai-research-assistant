@@ -22,6 +22,8 @@ from config import (
     SEARCH_LIMIT_DOAJ,
     SEARCH_LIMIT_OPENALEX,
     SEARCH_LIMIT_S2,
+    SEARCH_LIMIT_CORE,
+    SEARCH_LIMIT_EPMC,
 )
 from models import PaperMeta
 
@@ -1106,7 +1108,7 @@ async def _search_crossref(keywords: list[str]) -> list[PaperMeta]:
             try:
                 resp = await client.get(
                     CROSSREF_URL,
-                    params={"query": kw, "rows": 15, "filter": "type:journal-article"},
+                    params={"query": kw, "rows": SEARCH_LIMIT_CORE, "filter": "type:journal-article"},
                     headers={
                         "User-Agent": "AI-Research-Assistant/1.0 (mailto:research@example.com)"
                     },
@@ -1155,7 +1157,7 @@ async def _search_doaj(keywords: list[str]) -> list[PaperMeta]:
             try:
                 resp = await client.get(
                     DOAJ_URL,
-                    params={"q": kw, "pageSize": 15},
+                    params={"q": kw, "pageSize": SEARCH_LIMIT_DOAJ},
                 )
                 if resp.status_code != 200:
                     continue
@@ -1302,7 +1304,7 @@ async def _search_epmc(keywords: list[str]) -> list[PaperMeta]:
                     params={
                         "query": kw,
                         "resultType": "core",
-                        "pageSize": 20,
+                        "pageSize": SEARCH_LIMIT_EPMC,
                         "format": "json",
                     },
                 )

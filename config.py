@@ -97,17 +97,7 @@ HYDE_MAX_TOKENS = _env("HYDE_MAX_TOKENS", 120, int)
 RERANK_STAGE1_MODEL = _env("RERANK_STAGE1_MODEL", "all-MiniLM-L6-v2")
 # 重排精度阈值: bge-reranker 得分低于此值的 chunk 过滤掉 (0=不过滤, 提升精度; 太高伤召回)
 
-# ===================================================================
-# Vision Model (默认关闭)
-# ===================================================================
-ENABLE_VISION = _env_bool("ENABLE_VISION", False)
-VISION_MODEL = _env("VISION_MODEL", "qwen-vl-max")
-# 学术范围白名单闸门 (锁定用户只能问论文/学术相关问题, 默认开启)
 SCOPE_GATE_ENABLED = _env_bool("SCOPE_GATE_ENABLED", True)
-VISION_API_KEY = os.getenv("VISION_API_KEY", "")
-VISION_BASE_URL = _env(
-    "VISION_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
-)
 
 # ===================================================================
 # Academic Search
@@ -130,7 +120,6 @@ IMAGE_DIR = PROJECT_ROOT / os.getenv("IMAGE_DIR", "data/images")
 # 4096 让每个检索单元覆盖更全; 配合 1M 上下文窗口, prompt 可容纳整块。
 CHUNK_SIZE = _env("CHUNK_SIZE", 4096, int)
 RETRIEVAL_TOP_K = _env("RETRIEVAL_TOP_K", 5, int)
-MAX_CONTEXT_LENGTH = _env("MAX_CONTEXT_LENGTH", 300, int)  # chars per chunk in prompt
 
 # ===================================================================
 # LLM Call Parameters (all LLM calls use these defaults)
@@ -289,9 +278,6 @@ CORS_ORIGINS = _env_list(
 # ===================================================================
 AVAILABLE_LLM_MODELS = _env_list(
     "AVAILABLE_LLM_MODELS", ["deepseek-v4-pro", "deepseek-v4-flash"]
-)
-AVAILABLE_VISION_MODELS = _env_list(
-    "AVAILABLE_VISION_MODELS", ["qwen-vl-max", "qwen-vl-plus", "glm-4v"]
 )
 
 # ===================================================================

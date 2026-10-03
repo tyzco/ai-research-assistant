@@ -14,6 +14,81 @@ PAPER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _column_order_switches(blocks: list, page_width: float) -> tuple[int, int]:
+    """统计"正文块"在给定顺序下的左右栏切换次数。
+
+    只看窄块 (<=70% 页宽) 且文本量足够的块 —— 跨栏标题/宽图/宽表会污染判断。
+    返回 (切换次数, 参与统计的块数); 块太少返回 (0, 0) 表示无法判定。
+    """
+    narrow = [
+        b for b in blocks
+        if (b[2] - b[0]) <= page_width * 0.7 and len((b[4] or "").strip()) >= 60
+    ]
+    if len(narrow) < 6:
+        return 0, 0
+    mid = page_width / 2
+    seq = [0 if (b[0] + b[2]) / 2 < mid else 1 for b in narrow]
+    return sum(1 for a, b in zip(seq, seq[1:]) if a != b), len(seq)
+
+
+def two_column_blocks(page) -> list | None:
+    """双栏页面按栏重排后的文本块 (只换顺序, 不增删)。未检测到串栏 → None。
+
+    背景: PyMuPDF 默认按内容流顺序输出, 部分双栏论文会串栏 —— 实测某论文第 4 页
+    顺序为 左→右→右→右→左→左 (左栏的 Table II/III 排到了右栏正文之后), 一个 chunk
+    里左栏半句接右栏半句再跳回左栏。抽样 29 篇有正文可判定的论文, 4 篇中招。
+
+    安全性: 只**重排同一批文本块**, 不增删内容; 未命中检测的页面完全走原路径,
+    因此对正常的 86% 零影响。返回 None 时调用方应回退 page.get_text()。
+    """
+    try:
+        blocks = [b for b in page.get_text("blocks") if (b[4] or "").strip()]
+    except Exception:
+        return None
+    if len(blocks) < 8:
+        return None
+
+    width = page.rect.width
+    switches, n = _column_order_switches(blocks, width)
+    if n == 0:
+        return None
+    # 切换率低 → 本来就是按栏顺序, 不动
+    if switches / n < config.TWO_COLUMN_SWITCH_RATIO:
+        return None
+    # 两侧都要有足够的正文块, 否则不是双栏页
+    mid = width / 2
+    narrow = [
+        b for b in blocks
+        if (b[2] - b[0]) <= width * 0.7 and len((b[4] or "").strip()) >= 60
+    ]
+    left = [b for b in narrow if (b[0] + b[2]) / 2 < mid]
+    right = [b for b in narrow if (b[0] + b[2]) / 2 >= mid]
+    if len(left) < 3 or len(right) < 3:
+        return None
+
+    # 跨栏块 (页眉/宽图/宽表) 归到其 y 所在的位置, 与左栏同组 → 保持原有纵向顺序
+    def key(b):
+        is_narrow = (b[2] - b[0]) <= width * 0.7
+        col = 0 if (not is_narrow or (b[0] + b[2]) / 2 < mid) else 1
+        return (col, b[1])
+
+    ordered = sorted(blocks, key=key)
+    # 内容守恒校验: 重排前后必须是同一批文本, 否则宁可放弃 (不冒丢字风险)
+    if sorted(b[4] for b in ordered) != sorted(b[4] for b in blocks):
+        return None
+    return ordered
+
+
+def page_text_two_column(page) -> str | None:
+    """双栏页面按栏重排文本。**仅在检测到串栏时**返回重排结果, 否则 None。
+    调用方 (parse_pdf) 在 None 时回退到 page.get_text(), 保证未命中页面行为不变。
+    """
+    blocks = two_column_blocks(page)
+    if blocks is None:
+        return None
+    return "\n".join((b[4] or "").strip() for b in blocks)
+
+
 def assess_text_quality(parsed: dict) -> dict:
     """解析质量评估闸门: 拦截"解析出来是垃圾"的文档, 不要污染知识库。
 
@@ -111,6 +186,8 @@ def parse_pdf(pdf_bytes: bytes, pdf_name: str) -> dict:
     # 图片上限 (DeepSeek 审查 #4: 防止大 PDF 内存/磁盘激增)
     max_images = getattr(config, "MAX_IMAGES_PER_PDF", 200)
 
+    reordered_pages = 0  # 触发双栏重排的页数 (观测用)
+
     try:
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     except Exception as e:
@@ -122,6 +199,12 @@ def parse_pdf(pdf_bytes: bytes, pdf_name: str) -> dict:
             page_num = page_idx + 1
             try:
                 text = page.get_text().strip()
+                # 双栏串栏修正: 命中才重排 (只换顺序, 已做内容守恒校验), 未命中完全不改
+                if config.TWO_COLUMN_REORDER_ENABLED:
+                    _reordered = page_text_two_column(page)
+                    if _reordered:
+                        text = _reordered.strip()
+                        reordered_pages += 1
             except Exception as e:
                 logger.warning(f"Page {page_num} text extraction failed: {e}")
                 text = ""
@@ -178,6 +261,9 @@ def parse_pdf(pdf_bytes: bytes, pdf_name: str) -> dict:
     finally:
         doc.close()
 
+    result["reordered_pages"] = reordered_pages
+    if reordered_pages:
+        logger.debug(f"{pdf_name}: 双栏重排 {reordered_pages} 页")
     return result
 
 

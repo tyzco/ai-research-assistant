@@ -124,6 +124,11 @@ DOC_QUALITY_MAX_GARBAGE_RATIO = _env("DOC_QUALITY_MAX_GARBAGE_RATIO", 0.15, floa
 # 字符单一度: 最高频字符占比。真实论文最大 12.4%, CID 乱码可达 90%+ → 50% 留 4 倍余量
 DOC_QUALITY_MAX_DOMINATION_RATIO = _env("DOC_QUALITY_MAX_DOMINATION_RATIO", 0.50, float)
 
+# 双栏重排: 页内正文块左右栏切换率 >= 此值 → 判定串栏, 按栏重排 (只换顺序, 不增删内容)
+# 实测 29 篇有正文可判定的论文: 25 篇按栏正常 (切换率低), 4 篇中招 (切换率 0.32-0.43)
+TWO_COLUMN_SWITCH_RATIO = _env("TWO_COLUMN_SWITCH_RATIO", 0.30, float)
+TWO_COLUMN_REORDER_ENABLED = _env_bool("TWO_COLUMN_REORDER_ENABLED", True)
+
 # ===================================================================
 # Retrieval Limits
 # ===================================================================

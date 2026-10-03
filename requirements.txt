@@ -18,3 +18,16 @@ numpy>=1.24.0
 aiosqlite>=0.20.0
 structlog>=24.0.0
 stripe>=10.0
+
+# 文档导出 (exporter.py 的 docx 分支); Docker 镜像仅装本文件, 缺失会导致 /export/paper?format=docx 500
+python-docx>=1.1.0
+
+# 以下为运行时按需 import 的第三方包（函数内局部 import，缺失时对应功能降级/报错）
+# 之前遗漏: Docker 镜像只装本文件, 导致这些功能在容器里不可用
+beautifulsoup4>=4.12.0   # agent/tools_extra/webfetch.py 网页抓取解析
+jieba>=0.42.1            # api.py 中文查询分词 (USE_JIEBA_TOKENIZATION)
+openpyxl>=3.1.0          # agent/tools_extra/dataio.py + exporter 的 Excel 导出
+tiktoken>=0.6.0          # agent/context_engine.py 上下文 token 计数
+
+# 可选升级路径: 切 bge-m3 嵌入时才需要 (默认 BAAI/bge-small-zh 走 sentence-transformers)
+# FlagEmbedding>=1.2.0

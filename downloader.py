@@ -109,7 +109,10 @@ def _fast_image_filter(
     if max(width, height) / max(1, min(width, height)) > config.IMAGE_MAX_ASPECT_RATIO:
         return False
     # 首页/尾页丢弃 (DeepSeek 审查 #1: 原 `>= page_count-1` 误丢倒数第二页, 尾页泄漏)
-    if page_num <= 1 or page_num >= page_count:
+    # 开关见 IMAGE_FILTER_SKIP_FIRST_PAGE / IMAGE_FILTER_SKIP_LAST_PAGE
+    if config.IMAGE_FILTER_SKIP_FIRST_PAGE and page_num <= 1:
+        return False
+    if config.IMAGE_FILTER_SKIP_LAST_PAGE and page_num >= page_count:
         return False
     # 颜色过滤：色彩太少的可能是单色图标
     try:

@@ -181,8 +181,14 @@ def _safe_name(title: str) -> str:
 
 
 def _tex_escape(text: str) -> str:
-    """转义 LaTeX 特殊字符。"""
+    """转义 LaTeX 特殊字符。
+
+    `\\` 必须排第一: 其余每条规则都会**插入反斜杠**(`&`→`\\&`)。若 `\\` 最后执行,
+    它会把这些刚插入的反斜杠再转义成 `\\textbackslash{}`, 结果是 `a_b` → `a\\textbackslash{}_b`
+    —— 下划线没转义、还多出垃圾, 导出 .tex 无法编译。
+    """
     replacements = {
+        "\\": r"\textbackslash{}",  # 先跑, 只转义源文本里原有的反斜杠
         "&": r"\&",
         "%": r"\%",
         "$": r"\$",
@@ -192,7 +198,6 @@ def _tex_escape(text: str) -> str:
         "}": r"\}",
         "~": r"\textasciitilde{}",
         "^": r"\^{}",
-        "\\": r"\textbackslash{}",
     }
     for char, replacement in replacements.items():
         text = text.replace(char, replacement)

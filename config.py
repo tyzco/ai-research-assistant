@@ -62,7 +62,6 @@ DEEPSEEK_FALLBACK_API_KEY = os.getenv("DEEPSEEK_FALLBACK_API_KEY", "")
 # ===================================================================
 # Embedding (本地模型)
 # ===================================================================
-EMBEDDING_PROVIDER = _env("EMBEDDING_PROVIDER", "local")
 LOCAL_EMBEDDING_MODEL = _env("LOCAL_EMBEDDING_MODEL", "BAAI/bge-small-zh")
 LOCAL_EMBEDDING_DIM = _env("LOCAL_EMBEDDING_DIM", 512, int)
 # 嵌入后端: "sentence_transformers" | "flag_embedding" | "" (留空按模型名自动检测)
@@ -97,6 +96,7 @@ HYDE_MAX_TOKENS = _env("HYDE_MAX_TOKENS", 120, int)
 RERANK_STAGE1_MODEL = _env("RERANK_STAGE1_MODEL", "all-MiniLM-L6-v2")
 # 重排精度阈值: bge-reranker 得分低于此值的 chunk 过滤掉 (0=不过滤, 提升精度; 太高伤召回)
 
+# 学术范围白名单闸门 (锁定用户只能问论文/学术相关问题, 默认开启)
 SCOPE_GATE_ENABLED = _env_bool("SCOPE_GATE_ENABLED", True)
 
 # ===================================================================
@@ -191,7 +191,9 @@ SEARCH_LIMIT_UNPAYWALL = _env("SEARCH_LIMIT_UNPAYWALL", 15, int)
 # ===================================================================
 # Agent
 # ===================================================================
-AGENT_MAX_STEPS = _env("AGENT_MAX_STEPS", 10, int)
+# 默认 15 = 前端实际发送值 (此前 config=10 / api 默认=20 / 前端=15 三方不一致, 配置从未生效)。
+# 写初稿路径前端会显式传更大的值 (30)。
+AGENT_MAX_STEPS = _env("AGENT_MAX_STEPS", 15, int)
 # Agent 单轮输出上限: 1000 → 4096。Agent 产出是"交付物"(综述/章节/审稿),
 # 1000 token 会截断长回答 → 体验差。设宽以容纳完整交付物; 代价是单轮延迟/成本上升。
 # 更健壮的方案是检测 finish_reason=="length" 后续写 (未来可做)。
@@ -244,9 +246,6 @@ MEMORY_MAX_RECENT = _env(
 MEMORY_HISTORY_TURNS = _env(
     "MEMORY_HISTORY_TURNS", 8, int
 )  # max history turns sent to LLM
-MEMORY_KG_HISTORY_TURNS = _env(
-    "MEMORY_KG_HISTORY_TURNS", 4, int
-)  # max history turns for KB mode
 
 # ===================================================================
 # Rate Limiting
@@ -276,17 +275,13 @@ CORS_ORIGINS = _env_list(
 # ===================================================================
 # Frontend Model Options
 # ===================================================================
-AVAILABLE_LLM_MODELS = _env_list(
-    "AVAILABLE_LLM_MODELS", ["deepseek-v4-pro", "deepseek-v4-flash"]
-)
 
 # ===================================================================
 # RAG Pipeline Parameters
 # ===================================================================
 # Query rewrite: skip expansion for short queries
 REWRITE_MIN_LENGTH = _env("REWRITE_MIN_LENGTH", 15, int)
-# Semantic validation: reject expansion if cosine similarity < this
-EXPANSION_SIMILARITY_THRESHOLD = _env("EXPANSION_SIMILARITY_THRESHOLD", 0.75, float)
+# 注: 改写语义校验阈值见下方 EXPANSION_SIMILARITY_THRESHOLD_BASE / _ADAPTIVE
 # Coreference resolution: only try if question < this length
 COREF_MAX_LENGTH = _env("COREF_MAX_LENGTH", 20, int)
 # Complex query: trigger rerank if intent matches these types
@@ -333,13 +328,8 @@ INTENT_SEMANTIC_FLOOR = _env("INTENT_SEMANTIC_FLOOR", 0.60, float)
 # ===================================================================
 # 重排序触发条件: 意图复杂度 >= 此阈值 → 触发
 RERANK_INTENT_THRESHOLD = _env("RERANK_INTENT_THRESHOLD", 0.6, float)
-# 检索质量触发: 前3篇向量的最大余弦相似度均低于此值 → 即使意图简单也触发重排
-RERANK_QUALITY_TRIGGER = _env("RERANK_QUALITY_TRIGGER", 0.45, float)
-# 结果多样性阈值: 检索到的 chunk 之间的余弦相似度均值 > 此值 → 可能重复，触发重排
-RERANK_DOCUMENT_DIVERSITY = _env("RERANK_DOCUMENT_DIVERSITY", 0.85, float)
-# Light 模式: 意图在 [0.6, 0.8) → 只做 top-15 精排，不回源
-# Full 模式: 意图 >= 0.8 → top-15 精排 + 回源扩展
-RERANK_LIGHT_INTENT_MAX = _env("RERANK_LIGHT_INTENT_MAX", 0.79, float)
+# 长问句兜底: 超过此长度即使意图分低也重排 (长问句常含多约束/多跳)
+RERANK_LONG_QUERY_MIN_LEN = _env("RERANK_LONG_QUERY_MIN_LEN", 15, int)
 
 # ===================================================================
 # Adaptive Retrieval Parameters
@@ -372,20 +362,9 @@ IMAGE_MIN_COLORS = _env("IMAGE_MIN_COLORS", 5, int)
 
 # Stage 1: 尺寸+比例 (快速淘汰, ~90%噪声)
 IMAGE_FILTER_STAGE1_ENABLED = _env_bool("IMAGE_FILTER_STAGE1_ENABLED", True)
-# Stage 2: 位置过滤 — 首页/末页跳过, 上下边距30%内跳过
+# Stage 2: 位置过滤 — 首页/末页跳过
 IMAGE_FILTER_SKIP_FIRST_PAGE = _env_bool("IMAGE_FILTER_SKIP_FIRST_PAGE", True)
 IMAGE_FILTER_SKIP_LAST_PAGE = _env_bool("IMAGE_FILTER_SKIP_LAST_PAGE", True)
-IMAGE_FILTER_EDGE_MARGIN_RATIO = _env("IMAGE_FILTER_EDGE_MARGIN_RATIO", 0.30, float)
-# Stage 3: 颜色复杂度 — 单调色 (logo/图标/分割线) 跳过
-IMAGE_FILTER_MIN_COLORS_MODE = _env(
-    "IMAGE_FILTER_MIN_COLORS_MODE", "quantize"
-)  # "quantize" | "histogram"
-IMAGE_FILTER_MAX_WHITESPACE_RATIO = _env(
-    "IMAGE_FILTER_MAX_WHITESPACE_RATIO", 0.85, float
-)
-# Stage 4: 去重 (同一论文内相似图只保留一张)
-IMAGE_FILTER_DEDUPLICATE = _env_bool("IMAGE_FILTER_DEDUPLICATE", True)
-IMAGE_DEDUP_SIMILARITY_THRESHOLD = _env("IMAGE_DEDUP_SIMILARITY_THRESHOLD", 0.92, float)
 
 # ===================================================================
 # Spam/Quality Filter Keywords (内容型数据, 代码常驻)

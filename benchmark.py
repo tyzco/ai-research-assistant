@@ -10,6 +10,7 @@ CN-EN token 估算(#2), 批量嵌入(#6), JSON 报告(#9), 成本可配(#8)。
 """
 import argparse
 import asyncio
+import json
 import os
 import sys
 import time

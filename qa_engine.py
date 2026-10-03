@@ -9,10 +9,17 @@ from openai import AsyncOpenAI
 
 from config import (
     COMPLEX_INTENT_TYPES,
+    COREF_MAX_LENGTH,
     DEEPSEEK_API_KEY,
     DEEPSEEK_BASE_URL,
     DEEPSEEK_MODEL,
+    EXPANSION_SIMILARITY_ADAPTIVE,
+    EXPANSION_SIMILARITY_THRESHOLD_BASE,
+    INTENT_COMPLEXITY_SCORES,
     INTENT_KEYWORDS,
+    RERANK_INTENT_THRESHOLD,
+    RERANK_LONG_QUERY_MIN_LEN,
+    REWRITE_MIN_LENGTH,
     LLM_COREF_MAX_TOKENS,
     LLM_COREF_TEMPERATURE,
     LLM_COREF_TIMEOUT,
@@ -102,7 +109,7 @@ COREF_RESOLVE_PROMPT = """根据对话历史，将用户的最新问题改写为
 
 async def _resolve_coreference(question: str, history: str) -> str:
     """多轮指代消解：将"它有什么缺点"→"RAG有什么缺点"。仅在短问题+有历史时触发。"""
-    if not history or len(question) >= 20:
+    if not history or len(question) >= COREF_MAX_LENGTH:
         return question
     try:
         client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
@@ -159,8 +166,8 @@ async def _expand_query(question: str) -> str:
         expanded = resp.choices[0].message.content.strip()
         if len(expanded) < 10:
             return question
-        # 语义校验：改写与原问题相似度不低于 0.75，避免引入噪声
-        if _validate_expansion(question, expanded):
+        # 语义校验：改写后与原问题语义一致才采用 (阈值按查询长度自适应, 见 _expansion_threshold)
+        if _validate_expansion(question, expanded, _expansion_threshold(question)):
             return expanded
         return question
     except Exception as e:
@@ -168,7 +175,26 @@ async def _expand_query(question: str) -> str:
         return question
 
 
-def _validate_expansion(original: str, expanded: str, threshold: float = 0.75) -> bool:
+def _expansion_threshold(question: str) -> float:
+    """改写校验阈值按查询长度自适应 (config.EXPANSION_SIMILARITY_ADAPTIVE)。
+
+    短查询信息量少, 改写稍偏就丢原意 → 收紧; 长查询约束强, 可放宽允许多样化改写。
+    """
+    n = len(question or "")
+    short = EXPANSION_SIMILARITY_ADAPTIVE.get("short") or {}
+    long_ = EXPANSION_SIMILARITY_ADAPTIVE.get("long") or {}
+    if short and n < short.get("max_len", 0):
+        return short.get("threshold", EXPANSION_SIMILARITY_THRESHOLD_BASE)
+    if long_ and n > long_.get("min_len", 10**9):
+        return long_.get("threshold", EXPANSION_SIMILARITY_THRESHOLD_BASE)
+    return EXPANSION_SIMILARITY_THRESHOLD_BASE
+
+
+def _validate_expansion(
+    original: str,
+    expanded: str,
+    threshold: float = EXPANSION_SIMILARITY_THRESHOLD_BASE,
+) -> bool:
     """校验改写后的查询是否语义一致。用 bge 嵌入 + 余弦相似度。"""
     import numpy as np
 
@@ -184,11 +210,24 @@ def _validate_expansion(original: str, expanded: str, threshold: float = 0.75) -
 def _classify_intent(question: str) -> str:
     """意图路由：分类查询类型以选择最优检索策略。
     三层漏斗第 1+2 层: 关键词快路径 → 嵌入语义兜底 → 默认事实。
-    关键词从 config.INTENT_KEYWORDS 统一读取。"""
+    关键词从 config.INTENT_KEYWORDS 统一读取。
+
+    修复: 原实现返回**首个**命中的标签, 而 INTENT_KEYWORDS 里 "定义" 排第一且含
+    高频词 "是什么" —— "CNN的原理是什么" 会被判成简单定义, 既不该跳重排也跳了改写。
+    现按命中数取最优, 打平时用 INTENT_COMPLEXITY_SCORES 取更复杂的一方
+    (即 config 注释所述 "为意图路由提供连续权重")。
+    """
     q = (question or "").lower()
+    best_label, best_hits, best_score = None, 0, -1.0
     for label, keywords in INTENT_KEYWORDS.items():
-        if any(kw in q for kw in keywords):
-            return label
+        hits = sum(1 for kw in keywords if kw in q)
+        if not hits:
+            continue
+        score = INTENT_COMPLEXITY_SCORES.get(label, 0.0)
+        if hits > best_hits or (hits == best_hits and score > best_score):
+            best_label, best_hits, best_score = label, hits, score
+    if best_label:
+        return best_label
     # 第 2 层: 规则未命中 → 嵌入语义分类 (承接"意思常规但改了表达"的查询)
     try:
         from intent_classifier import classify_intent
@@ -202,9 +241,21 @@ def _classify_intent(question: str) -> str:
 
 
 def _is_complex_query(question: str) -> bool:
-    """策略路由：判断是否需要 Rerank 重排序。"""
+    """策略路由：判断是否需要 Rerank 重排序。
+
+    连续复杂度分数 (config.INTENT_COMPLEXITY_SCORES) >= RERANK_INTENT_THRESHOLD → 重排;
+    分数不足但问题够长 (含多约束/多跳) → 仍然重排。
+    修复: 原实现只看 COMPLEX_INTENT_TYPES 标签集合, 已定义的连续分数与阈值从未被引用。
+    """
     intent = _classify_intent(question)
-    return intent in tuple(COMPLEX_INTENT_TYPES) or len(question) > 15
+    score = INTENT_COMPLEXITY_SCORES.get(intent)
+    if score is not None and score >= RERANK_INTENT_THRESHOLD:
+        return True
+    # 兼容标签集合 (config.COMPLEX_INTENT_TYPES 可独立增删) + 长问句兜底
+    return (
+        intent in tuple(COMPLEX_INTENT_TYPES)
+        or len(question) > RERANK_LONG_QUERY_MIN_LEN
+    )
 
 
 # 复杂意图关键词集：由 config.INTENT_KEYWORDS + COMPLEX_INTENT_TYPES 派生 (DeepSeek 审查 #6)
@@ -270,11 +321,11 @@ async def ask_question(
     except Exception:
         pass
     resolved_question = question
-    if mem_ctx and len(question) < 20:
+    if mem_ctx and len(question) < COREF_MAX_LENGTH:
         resolved_question = await _resolve_coreference(question, mem_ctx)
 
     # 查询改写（短问题跳过，节省 2-3s；复杂意图短问题仍改写）
-    if len(resolved_question) < 15 and not any(
+    if len(resolved_question) < REWRITE_MIN_LENGTH and not any(
         kw in resolved_question for kw in COMPLEX_EXPAND_KEYWORDS
     ):
         expanded = resolved_question

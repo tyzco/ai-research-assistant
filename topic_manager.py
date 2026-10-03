@@ -78,19 +78,22 @@ def _save_one(db, tid: str, state: TopicState):
     """增量保存单个课题 (DeepSeek 对话建议: 替代全量保存的写放大问题)。"""
     import json as _json
 
-    strategy_json = None
+    # 传 dict 给 db.save_topic, 由它做**唯一一次**序列化。
+    # 之前在这里先 json.dumps 成字符串、db 再 dumps 一次 → 库里是双重编码;
+    # 读取端只 loads 一次拿到 str → SearchStrategy(**str) 抛 TypeError 被吞,
+    # 于是 state.search_strategy 退化成字符串, 下次保存再加一层 → 深度逐次增长
+    # (实测库里已有 4-6 层)。写入/读取两端现在对称。
+    strategy_obj = None
     if state.search_strategy is not None:
         try:
             if hasattr(state.search_strategy, "model_dump"):
-                strategy_json = _json.dumps(
-                    state.search_strategy.model_dump(), ensure_ascii=False
-                )
+                strategy_obj = state.search_strategy.model_dump()
+            elif isinstance(state.search_strategy, dict):
+                strategy_obj = state.search_strategy
             else:
-                strategy_json = _json.dumps(
-                    state.search_strategy, ensure_ascii=False, default=str
-                )
+                strategy_obj = {"raw": str(state.search_strategy)[:5000]}
         except Exception:
-            strategy_json = str(state.search_strategy)[:5000]
+            strategy_obj = {"raw": str(state.search_strategy)[:5000]}
 
     db.save_topic(
         topic_id=tid,
@@ -100,7 +103,7 @@ def _save_one(db, tid: str, state: TopicState):
         total_papers=state.stats.total_papers,
         uploaded_papers=state.stats.uploaded_papers,
         total_images=state.stats.total_images,
-        search_strategy=strategy_json if strategy_json else None,
+        search_strategy=strategy_obj,
         step=state.step,
         current=state.progress.current,
         dl_total=state.progress.dl_total,

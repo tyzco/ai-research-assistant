@@ -26,6 +26,7 @@ from enum import Enum
 from typing import Any, Optional
 
 from config import AGENT_MAX_TOKENS, AGENT_TEMPERATURE, DEEPSEEK_MODEL
+from llm_client import chat_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -679,7 +680,7 @@ class ResearchTeam:
                     temperature=AGENT_TEMPERATURE,
                     max_tokens=AGENT_MAX_TOKENS,
                     extra_body={"thinking": {"type": "disabled"}},
-                    max_retries=2,
+                    retries=2,
                 )
                 msg = resp.choices[0].message
                 tool_calls = getattr(msg, "tool_calls", None)
@@ -699,7 +700,7 @@ class ResearchTeam:
                                 temperature=AGENT_TEMPERATURE,
                                 max_tokens=AGENT_MAX_TOKENS,
                                 extra_body={"thinking": {"type": "disabled"}},
-                                max_retries=2,
+                                retries=2,
                             )
                             _chunk = _r2.choices[0].message.content or ""
                             content += _chunk

@@ -367,6 +367,3 @@ class AdaptiveHybridRetriever:
         import asyncio
 
         return asyncio.run(self.search(query, top_k, filter_expr))
-
-        # 级联重排
-        return self._cascade_rerank(query, fused, top_k), alpha

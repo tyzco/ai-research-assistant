@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 from auth import create_token, get_current_user, login_user, register_user, require_user
 from config import (
+    AGENT_MAX_STEPS,
     CN_EN_TERMS,
     CORS_ORIGINS,
     DEEPSEEK_MODEL,
@@ -39,6 +40,7 @@ from config import (
     LLM_GEN_TIMEOUT,
     LLM_QUICK_MAX_TOKENS,
     LLM_QUICK_TEMPERATURE,
+    LLM_QUICK_TIMEOUT,
     LLM_TRANSLATE_MAX_TOKENS,
     LLM_TRANSLATE_TEMPERATURE,
     LLM_TRANSLATE_TIMEOUT,
@@ -891,10 +893,16 @@ async def api_search_papers_stream(request: Request):
         )
         t0 = time.time()
 
-        # 完整检索 + 冷门拓宽: 保证展示/建库 ≥100 篇最相关论文 (可下载优先, top-100 截断)
+        # 完整检索 + 冷门拓宽: 保证展示/建库 ≥MAX_SEARCH_RESULTS 篇最相关论文 (可下载优先)
+        from config import MAX_SEARCH_RESULTS
         from search import fetch_relevant_papers
 
-        papers = await fetch_relevant_papers(query, target=100)
+        papers = await fetch_relevant_papers(
+            query,
+            target=MAX_SEARCH_RESULTS,
+            keywords_en=keywords_en,
+            keywords_cn=keywords_cn,
+        )
         seen, uniq = set(), []
         for p in papers:
             if p.paper_id in seen:
@@ -1521,7 +1529,9 @@ def _resolve_kb_table(topic_id: str) -> str:
 
 
 @app.post("/ask")
-async def api_ask(req: AskRequest, user_id: str = Depends(get_current_user)):
+async def api_ask(
+    req: AskRequest, request: Request, user_id: str = Depends(get_current_user)
+):
     """RAG 问答：委托 qa_engine.ask_question 完整链路——
     指代消解 → 查询改写(校验) → 自适应混合检索 → 级联重排 → 父子分块扩展 → 三层 Prompt 生成。"""
     _assert_topic_access(req.topic_id, user_id)
@@ -1941,6 +1951,7 @@ async def api_agent_quick(request: Request):
         model=model,
         temperature=LLM_QUICK_TEMPERATURE,
         max_tokens=LLM_QUICK_MAX_TOKENS,
+        timeout=LLM_QUICK_TIMEOUT,
         messages=[{"role": "user", "content": prompt}],
     )
     answer = resp.choices[0].message.content.strip()
@@ -1973,7 +1984,7 @@ async def api_agent_pi(request: Request, user_id: str | None = Depends(get_curre
         return blk
     _quota_guard(request)  # 按量付费闸门: 超额 → 402
 
-    max_steps = req.get("max_steps", 20)
+    max_steps = req.get("max_steps", AGENT_MAX_STEPS)
     max_time = req.get("max_time", 300)
     goal = req.get("goal", "")
     skills = req.get("skills") or None  # 显式技能名数组, None=auto 意图选择
@@ -2016,7 +2027,7 @@ async def api_agent_pi_stream(request: Request, user_id: str | None = Depends(ge
         raise HTTPException(400, "需要 task 参数")
     if (blk := await _scope_gate(task)) is not None:
         return blk
-    max_steps = req.get("max_steps", 20)
+    max_steps = req.get("max_steps", AGENT_MAX_STEPS)
     max_time = req.get("max_time", 300)
     goal = req.get("goal", "")
     skills = req.get("skills") or None

@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="light">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PaperLink &mdash; 直达论文</title>
+<style>
+/* ============================================================
+   PaperLink · 学术研究助手 — 暖纸 × 学术墨黑 + 金色发丝线
+   依据 ui-ux-pro-max (学术调性: Crimson Pro 标题 / Atkinson Hyperlegible 正文,
+   黑#171717 + 金#D4AF37, 微交互) + taste-skill (单强调色/反卡片滥用)。
+   保留全部 class 名, 仅重设计视觉层 + 聊天区重构。
+   ============================================================ */
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap');
+:root,.light{--bg:#faf9f7;--card:#fff;--text:#171717;--muted:#6b6560;--border:#e7e5e4;--brand:#16655d;--brand-light:#0d9488;--brand-strong:#0f5f57;--green:#047857;--hover:#f5f5f4;--input-bg:#fff;--gold:#a16207;--gold-soft:rgba(161,98,7,.12);--shadow:0 1px 3px rgba(23,23,23,.06),0 4px 16px rgba(23,23,23,.04);--red:#b91c1c;--ring:rgba(22,101,93,.14)}
+.dark{--bg:#16140f;--card:#211e19;--text:#e7e5e4;--muted:#a8a29e;--border:#3f3b36;--brand:#2dd4bf;--brand-light:#5eead4;--brand-strong:#0d9488;--green:#34d399;--hover:#2b2823;--input-bg:#211e19;--gold:#d4af37;--gold-soft:rgba(212,175,55,.14);--shadow:0 1px 3px rgba(0,0,0,.35),0 6px 20px rgba(0,0,0,.22);--red:#f87171;--ring:rgba(45,212,191,.18)}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Geist',-apple-system,BlinkMacSystemFont,'PingFang SC','Noto Sans SC','Segoe UI',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+/* 层级用字重/字距控制, 不靠衬线+超大号 (taste-skill: dashboard 禁衬线) */
+h1,h2,h3,h4,.msg h1,.msg h2,.msg h3,.msg .card h1,.msg .card h2{font-weight:600;letter-spacing:-.01em}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
+/* 暖调顶部光晕 — 替代 AI 蓝紫 */
+.glow{position:fixed;top:-256px;left:0;right:0;height:512px;background:radial-gradient(ellipse at 50% 0,rgba(15,118,110,.06) 0,transparent 70%);pointer-events:none;z-index:0}
+/* Sidebar */
+.sidebar{width:220px;background:var(--card);border-right:1px solid var(--border);display:flex;flex-direction:column;position:sticky;top:0;height:100vh;z-index:10;flex-shrink:0}
+.sidebar h2{font-size:14px;font-weight:700;letter-spacing:-.01em;padding:15px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:9px}
+.sidebar h2 i{width:28px;height:28px;border-radius:9px;background:linear-gradient(135deg,var(--brand-strong),#0d9488);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-style:normal;box-shadow:0 1px 3px rgba(0,0,0,.14)}
+.sidebar .btn-new{width:calc(100% - 20px);padding:9px;margin:12px 10px;background:linear-gradient(135deg,var(--brand-strong),#0d9488);color:#fff;border:none;border-radius:10px;font-size:12px;font-weight:600;cursor:pointer;transition:transform .12s,box-shadow .12s;box-shadow:0 2px 6px rgba(0,0,0,.18)}
+.sidebar .btn-new:hover{box-shadow:0 3px 10px rgba(0,0,0,.22);filter:brightness(1.05)}
+.sidebar .btn-new:active{transform:scale(.97)}
+.topic-list{flex:1;overflow-y:auto;padding:6px 8px}
+.topic-item{padding:9px 12px;border-radius:10px;cursor:pointer;font-size:11px;margin:3px 2px;border-left:3px solid transparent;transition:background .15s,border-color .15s}
+.topic-item:hover{background:var(--hover)}
+.topic-item.active{background:color-mix(in srgb,var(--brand) 9%,transparent)}
+.topic-item .tname{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.topic-item .tmeta{font-size:10px;color:var(--muted)}
+/* Main */
+.main{flex:1;display:flex;flex-direction:column;max-height:100vh}
+/* ===== 专业应用头部 ===== */
+.topbar{position:relative;padding:0 16px;height:54px;background:color-mix(in srgb,var(--card) 88%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;flex-shrink:0;z-index:20}
+.topbar .brand{display:flex;align-items:center;gap:9px;min-width:0}
+.topbar .brand-mark{width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,var(--brand-strong),#0d9488);color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:800;box-shadow:0 1px 3px rgba(0,0,0,.14);flex-shrink:0}
+.topbar .brand-name{font-size:14px;font-weight:700;letter-spacing:-.01em}
+.topbar .conn{font-size:10px;color:var(--muted)}
+.top-actions{display:flex;align-items:center;gap:7px}
+.topbar select,.topbar .chip{font-size:11px;padding:6px 11px;border:1px solid var(--border);border-radius:9px;background:var(--card);color:var(--text);cursor:pointer;transition:border-color .15s,box-shadow .15s;outline:none;font-weight:500}
+.topbar select:hover,.topbar .chip:hover{border-color:var(--brand)}
+.topbar select:focus,.topbar .chip:focus{border-color:var(--brand);box-shadow:0 0 0 3px var(--ring)}
+.topbar .chip:active{transform:scale(.96)}
+.topbar .icon-btn{width:30px;height:30px;padding:0;display:inline-flex;align-items:center;justify-content:center}
+.topbar .sep{color:var(--muted);font-size:10px}
+.agent-on{background:var(--brand-strong)!important;color:#fff!important;border-color:var(--brand-strong)!important}
+.chat{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px}
+/* Messages */
+@keyframes popIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+.msg{animation:popIn .3s cubic-bezier(.16,1,.3,1) both}
+.msg.user{display:flex;justify-content:flex-end}
+.msg.user .bubble{max-width:80%;background:var(--brand-strong);color:#fff;border-radius:16px 16px 4px 16px;padding:10px 16px;font-size:13px;line-height:1.55;box-shadow:0 2px 6px rgba(0,0,0,.15)}
+.msg{display:flex;flex-direction:column;align-items:flex-start}
+.msg.user{align-items:flex-end}
+.msg .card{max-width:88%;background:var(--card);border:1px solid var(--border);border-radius:16px;padding:16px 18px;font-size:13px;line-height:1.7;box-shadow:0 1px 2px rgba(0,0,0,.03),0 8px 24px color-mix(in srgb,var(--text) 4%,transparent);transition:border-color .15s}
+.u-actions{display:flex;gap:4px;margin-top:3px}
+.u-actions button{background:none;border:none;color:var(--muted);cursor:pointer;font-size:11px;padding:2px 6px;border-radius:6px}
+.u-actions button:hover{background:var(--hover);color:var(--text)}
+.msg .card:hover{border-color:color-mix(in srgb,var(--brand) 35%,var(--border))}
+/* Action buttons — 灰底 → 强调色 hover, 触觉反馈 */
+.msg-actions{margin-top:9px;padding-top:9px;border-top:1px solid var(--border);display:flex;gap:8px;flex-wrap:wrap}
+.msg-actions button,.msg-actions a{display:inline-flex!important;align-items:center;gap:5px;padding:7px 15px;font-size:13px;font-weight:600;background:var(--hover);border:1.5px solid var(--border);border-radius:10px;color:var(--text);cursor:pointer;transition:all .15s;text-decoration:none;line-height:1.2}
+.msg-actions button:hover,.msg-actions a:hover{background:var(--brand-strong);color:#fff;border-color:var(--brand-strong)}
+.msg-actions button:active,.msg-actions a:active{transform:scale(.97)}
+/* Markdown */
+.msg h1{font-size:16px;font-weight:700;letter-spacing:-.01em;margin-bottom:7px}
+.msg h2{font-size:15px;font-weight:600;letter-spacing:-.01em;margin:10px 0 5px}
+.msg h3{font-size:13px;font-weight:600;margin:7px 0 3px}
+.msg pre{background:#1c1917;color:#e7e5e4;border-radius:9px;padding:11px 14px;font-size:12px;line-height:1.55;overflow-x:auto;margin:7px 0}
+.msg code{background:var(--hover);padding:2px 6px;border-radius:5px;font-size:12px;color:var(--brand)}
+.msg pre code{background:transparent;padding:0;color:inherit}
+.msg blockquote{margin:7px 0;padding:7px 13px;color:var(--muted);font-size:12px;background:var(--hover);border-radius:8px}
+.msg a{color:var(--brand)}
+.msg a:hover{text-decoration:underline}
+.msg ul,.msg ol{padding-left:20px;margin:5px 0}
+/* Section titles */
+.cn-header,.en-header{font-weight:700;font-size:12px;padding:7px 0;margin:7px 0 5px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border)}
+.cn-header{color:var(--red)}
+.en-header{color:var(--brand)}
+.cn-header .badge,.en-header .badge{font-size:10px;padding:2px 9px;border-radius:10px;font-weight:500}
+.cn-header .badge{background:color-mix(in srgb,var(--red) 12%,transparent);color:var(--red)}
+.en-header .badge{background:color-mix(in srgb,var(--brand) 12%,transparent);color:var(--brand)}
+/* Paper card */
+.paper{display:flex;align-items:flex-start;gap:9px;padding:11px 13px;border-radius:11px;margin-bottom:4px;background:var(--card);border:1px solid var(--border);transition:border-color .15s,box-shadow .15s}
+.paper:hover{border-color:var(--brand);box-shadow:var(--shadow)}
+.paper .icon{font-size:16px;flex-shrink:0;margin-top:2px}
+.paper .info{flex:1;min-width:0}
+.paper .info .ptitle{font-size:12px;font-weight:500;margin-bottom:3px;line-height:1.4}
+.paper .info .ptitle a{color:var(--text);text-decoration:none}
+.paper .info .ptitle a:hover{color:var(--brand)}
+.paper .info .pmeta{font-size:10px;color:var(--muted);margin-bottom:4px}
+.paper .tags{display:flex;gap:5px;flex-wrap:wrap;align-items:center}
+.tag{display:inline-flex;align-items:center;gap:2px;padding:3px 9px;border-radius:6px;font-size:10px;font-weight:500;text-decoration:none}
+.tag.green{background:color-mix(in srgb,var(--green) 12%,transparent);color:var(--green)}
+.tag.yellow{background:#fef9c3;color:#854d0e}.dark .tag.yellow{background:#713f12;color:#fde047}
+.tag.red{background:color-mix(in srgb,var(--red) 10%,transparent);color:var(--red)}
+.tag.blue{background:color-mix(in srgb,var(--brand) 12%,transparent);color:var(--brand)}
+.tag.gray{background:var(--hover);color:var(--muted);cursor:pointer}
+.tag.gray:hover{background:var(--border)}
+/* purple tag 归并到强调色 — 单一强调色原则 */
+.tag.purple{background:color-mix(in srgb,var(--brand) 12%,transparent);color:var(--brand);text-decoration:none}
+/* Skill selector + Agent toggle */
+.skill-sel{font-size:10px;padding:4px 7px;border:1px solid var(--border);border-radius:7px;background:var(--card);color:var(--text);cursor:pointer;max-width:90px}
+.agent-on{background:var(--brand-strong)!important;color:#fff!important}
+/* Pi-Agent trace */
+.pi-trace{padding:8px 12px;margin:4px 0;border-radius:8px;font-size:10px;border:1px solid var(--border);background:color-mix(in srgb,var(--brand) 4%,var(--hover));animation:popIn .3s ease-out}
+.pi-trace.tool-ok{border-color:color-mix(in srgb,var(--green) 35%,var(--border))}
+.pi-trace.tool-err{border-color:color-mix(in srgb,var(--red) 35%,var(--border))}
+.pi-trace .step-num{font-weight:600;color:var(--brand);margin-right:4px}
+/* Progress bar */
+.progress{position:fixed;bottom:20px;right:20px;z-index:100;width:300px;background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px;box-shadow:0 12px 40px rgba(0,0,0,.15);display:none}
+.progress .bar{width:100%;height:8px;background:var(--hover);border-radius:4px;overflow:hidden;margin:10px 0}
+.progress .fill{height:100%;background:linear-gradient(90deg,var(--brand-strong),var(--gold));border-radius:4px;transition:width .4s ease-out;animation:softPulse 2s infinite}
+@keyframes softPulse{0%,100%{opacity:.85}50%{opacity:1}}
+.progress .title{font-weight:600;font-size:12px;color:var(--brand);display:flex;justify-content:space-between}
+.progress .detail{font-size:10px;color:var(--muted);margin-top:4px}
+/* Loading */
+.loading{padding:16px 20px;background:var(--card);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow)}
+.skeleton{background:linear-gradient(90deg,var(--hover) 25%,var(--border) 50%,var(--hover) 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:6px;height:14px;margin:5px 0}
+.skeleton.w60{width:60%}.skeleton.w80{width:80%}.skeleton.w90{width:90%}.skeleton.w100{width:100%}
+.skeleton.title{height:18px;width:45%;margin-bottom:8px}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.loading .status{font-size:12px;font-weight:600;color:var(--brand);margin-bottom:6px}
+/* Upload */
+.upload-zone{border:2px dashed var(--border);border-radius:16px;padding:24px;text-align:center;cursor:pointer;margin:0 14px 8px;transition:.15s}
+.upload-zone:hover{border-color:var(--brand);background:color-mix(in srgb,var(--brand) 4%,transparent)}
+/* Input */
+.input-bar{padding:12px 18px 16px;display:flex;gap:10px;background:linear-gradient(0deg,color-mix(in srgb,var(--bg) 60%,transparent),transparent)}
+.input-bar textarea{flex:1;border:1px solid var(--border);border-radius:16px;padding:12px 16px;font-size:13px;resize:none;outline:none;font-family:inherit;line-height:1.5;max-height:120px;background:var(--input-bg);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.03),0 4px 16px color-mix(in srgb,var(--text) 4%,transparent);transition:border-color .15s,box-shadow .15s}
+.input-bar textarea:focus{border-color:var(--brand);box-shadow:0 0 0 3px var(--ring)}
+.input-bar .send-btn{padding:11px 22px;background:var(--brand-strong);color:#fff;border:none;border-radius:16px;font-size:13px;font-weight:600;cursor:pointer;transition:transform .12s,box-shadow .12s;box-shadow:0 2px 6px rgba(0,0,0,.18)}
+.input-bar .send-btn:hover{box-shadow:0 3px 10px rgba(0,0,0,.24);transform:translateY(-1px)}
+.input-bar .send-btn:active{transform:translateY(0) scale(.96)}
+.input-bar .send-btn:disabled{opacity:.5;cursor:not-allowed}
+/* 全局焦点可见性 (无障碍) */
+:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+/* Shimmer 文字动画 */
+.shimmer-text{display:inline-block;color:var(--muted);animation:shimmer-text 2s ease-in-out infinite}
+@keyframes shimmer-text{0%,100%{opacity:.45}50%{opacity:1}}
+/* Agent step card */
+.agent-step{padding:10px 14px;margin:4px 0;border-radius:10px;font-size:11px;border:1px solid var(--border);background:color-mix(in srgb,var(--brand) 4%,var(--hover));animation:popIn .3s ease-out}
+.agent-step .label{font-weight:600;color:var(--brand);margin-bottom:4px}
+.agent-step .detail{color:var(--muted);font-size:10px}
+
+/* Strategy cards */
+.strat-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:6px 0}
+.strat-card{background:var(--hover);border-radius:10px;padding:10px 12px}
+.strat-card .db{font-size:10px;color:var(--muted);margin-bottom:4px}
+.strat-card pre{font-size:11px;white-space:pre-wrap;color:var(--text);background:transparent;margin:0;padding:0}
+/* Footnote */
+.footnote{font-size:9px;color:var(--muted);text-align:center;padding:8px;border-top:1px solid var(--border);margin-top:auto}
+.footnote a{color:var(--muted)}
+.pulse{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--brand);animation:pulse 1.5s ease-in-out infinite;vertical-align:middle;margin-right:4px}
+@keyframes pulse{0%,100%{opacity:.3;transform:scale(.8)}50%{opacity:1;transform:scale(1.2)}}
+.dots-bar{display:flex;gap:3px;margin:4px 0 8px;flex-wrap:wrap}
+.dots-bar i{display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--border);transition:all .3s}
+.dots-bar i.on{background:var(--brand);box-shadow:0 0 4px var(--brand-light)}
+.topbar .dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:4px;vertical-align:middle}
+.topbar .dot.live{background:var(--green);animation:dotLive 2s ease-in-out infinite}
+.topbar .dot.idle{background:var(--muted)}
+@keyframes dotLive{0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--green) 40%,transparent)}50%{box-shadow:0 0 0 5px color-mix(in srgb,var(--green) 0%,transparent)}}
+.count-pop{animation:countPop .35s ease-out}
+@keyframes countPop{0%{transform:scale(1)}40%{transform:scale(1.2)}100%{transform:scale(1)}}
+/* 可访问性 (a11y): 键盘焦点可见 + 尊重减弱动效偏好 (纯增量, 不破坏现有布局) */
+:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+@media (prefers-reduced-motion: reduce){*,*::before,*::after{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important;scroll-behavior:auto !important}}
+</style>
+</head>
+<body>
+<div class="glow"></div>
+<div id="fbar" style="position:fixed;top:0;left:0;right:0;height:2px;z-index:200;display:none;background:linear-gradient(90deg,transparent,var(--brand),transparent);background-size:60px 100%;animation:shimmer 1s linear infinite"></div>
+
+<aside class="sidebar">
+  <h2><i>P</i>PaperLink</h2>
+  <div style="padding:0 10px"><button class="btn-new" onclick="N()">+ 新建课题</button></div>
+  <div style="padding:2px 12px 4px;display:flex;align-items:center;justify-content:space-between"><span style="font-size:10px;color:var(--muted)" id="topicCount"></span><label style="font-size:10px;color:var(--muted);cursor:pointer;display:inline-flex;align-items:center;gap:3px"><input type="checkbox" id="showArch" onchange="S.showArch=this.checked;L()">已归档</label></div>
+  <nav class="topic-list" id="tl"></nav>
+  <div class="footnote">
+    本平台仅提供论文元数据索引<br>不存储或分发受版权保护的论文全文
+    <br><br>  </div>
+</aside>
+
+<main class="main">
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark" id="bm">P</span><span class="brand-name" id="ht">PaperLink</span></div>
+    <span class="conn" id="st"></span><span class="dot live" id="ldot" style="display:none"></span>
+    <span style="margin-left:auto"></span>
+    <div class="top-actions">
+      <span id="quotaChip" class="chip" style="font-size:11px;cursor:pointer;display:inline-flex;align-items:center;gap:5px" onclick="refreshQuota()" title="DeepSeek 账户余额"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M3 10h18"/><path d="M16 14h2"/></svg><span id="quotaLabel">--</span></span>
+      <button class="chip" onclick="showSubs()" title="管理订阅方向" style="display:inline-flex;align-items:center;gap:5px"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8a4 4 0 0 1 4 4"/><path d="M8 4a8 8 0 0 1 8 8"/><circle cx="12" cy="16" r="2" fill="currentColor" stroke="none"/></svg>订阅</button>
+      <!-- 收款暂缓: 充值按钮隐藏, 冷启动期不误导用户 (Stripe 接入时恢复) -->
+      <select id="exportFmt" onchange="EX(this.value)" title="导出">
+        <option value="">导出</option>
+        <option value="markdown">↓ MD</option>
+        <option value="docx">↓ DOCX</option>
+        <option value="latex">↓ LaTeX</option>
+        <option value="bibtex">↓ BibTeX</option>
+      </select>
+      <button class="chip icon-btn" id="userChip" onclick="showLogin()" title="登录/注册" style="display:inline-flex;align-items:center;gap:5px"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 20c1.5-3.2 4.4-5 8-5s6.5 1.8 8 5"/></svg><span id="userLabel">登录</span></button>
+      <button class="chip icon-btn" onclick="T()" title="暗色模式" aria-label="切换暗色模式"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
+    </div>
+  </header>
+  <div id="approval-bar" style="display:none;margin:0 14px 8px;padding:10px 14px;background:color-mix(in srgb,var(--brand) 8%,transparent);border:2px solid var(--brand);border-radius:12px;font-size:12px">
+    <div style="font-weight:600;color:var(--brand);margin-bottom:6px">&#9888; 人工审批闸门</div>
+    <div id="approval-text" style="margin-bottom:8px"></div>
+    <div style="display:flex;gap:8px">
+      <button onclick="approvalGo()" style="padding:5px 14px;background:var(--green);color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:12px">确认通过</button>
+      <button onclick="showApprovalFeedback()" style="padding:5px 14px;background:var(--brand);color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:12px">修改后通过</button>
+    </div>
+    <textarea id="approval-fb" style="display:none;width:100%;margin-top:6px;padding:6px 10px;border:1px solid var(--border);border-radius:8px;font-size:12px;resize:none;background:var(--bg);color:var(--text)" rows="2" placeholder="输入修正意见..."></textarea>
+    <button id="approval-submit" onclick="TA_submit()" style="display:none;margin-top:6px;padding:5px 14px;background:var(--green);color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:12px">提交并继续</button>
+  </div>
+  <div class="chat" id="cc"></div>
+  <div class="upload-zone" id="uz" style="display:none" onclick="document.getElementById('fi').click()" ondragover="event.preventDefault()" ondrop="H(event)">
+    <input type="file" id="fi" accept=".pdf" multiple style="display:none" onchange="F(this.files)">
+    <div style="font-size:28px;margin-bottom:6px">📤</div>
+    <p style="font-size:13px;color:var(--muted)">拖拽或点击上传 PDF 论文</p>
+  </div>
+  <div class="input-bar">
+    <div id="suggestBar" style="font-size:11px;color:var(--muted);padding:2px 4px;margin-bottom:4px;display:none">💡 建议: <span id="suggestText"></span> <button class="chip" id="suggestGo" onclick="doSuggest(S._suggestAction)" style="display:none;font-size:11px;margin-left:6px">执行 →</button></div>
+    <div id="actionBar" style="display:none;gap:8px;margin-bottom:6px">
+      <button class="chip" onclick="nextSearch()" style="background:var(--brand);color:#fff;border-color:var(--brand);font-weight:600">🔍 搜索相关论文</button>
+      <button class="chip" onclick="nextUpload()">📤 上传 PDF 建库</button>
+    </div>
+    <textarea id="ui" rows="1" placeholder="输入研究方向，先看这题值不值得做…" onkeydown="if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();X()}" oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px'" oncompositionstart="this.dataset.composing='1'" oncompositionend="this.dataset.composing='0'"></textarea>
+    <button class="send-btn" id="btnStop" onclick="ST()" style="display:none;padding:8px 10px;font-size:11px;background:#e5484d;color:#fff;border:none;border-radius:14px;cursor:pointer;white-space:nowrap">⏹ 停止</button>
+    <button class="send-btn" onclick="X()">发送</button>
+  </div>
+</main>
+
+<div class="progress" id="pg">
+  <div class="title"><span>📥 构建知识库</span><span id="pc" style="font-size:10px">0/0</span></div>
+  <div class="bar"><div class="fill" id="pf" style="width:0%"></div></div>
+  <div class="detail"><span id="pd">准备中…</span></div>
+</div>
+
+<script>
+(function(){
+const A=window.location.origin||'http://localhost:8001';
+var S={ts:[],tid:null,q:'',msgs:[],strategy:null,pps:[],ppv:null,phase:'welcome',writeMode:false,writeReq:[],pg:0,pi:null,agent:false,agentSteps:[],piSteps:[],sessions:{},useKB:false,skill:'auto',useAgent:true};
+var PHASES={welcome:'等待输入',strategy:'策略就绪',searching:'搜索中',papers_loaded:'论文已加载',building:'构建知识库',ready:'可以提问',thinking:'生成中'};
+window._papersVisible = false;
+
+function setPhase(p){var prev=S.phase;S.phase=p;saveSession();R()}
+function saveSession(){if(!S.tid)return;var snap={q:S.q,msgs:S.msgs.slice(),strategy:S.strategy,pps:S.pps,phase:S.phase};S.sessions[S.tid]=snap;try{localStorage.setItem('session_'+S.tid,JSON.stringify(snap))}catch(e){}}
+function loadSession(id){var cached=S.sessions[id];if(!cached){try{var raw=localStorage.getItem('session_'+id);if(raw){cached=JSON.parse(raw);S.sessions[id]=cached}}catch(e){}}return cached}
+function restoreFrom(id){var snap=loadSession(id);if(!snap)return false;S.q=snap.q;S.msgs=snap.msgs||[];S.strategy=snap.strategy;S.pps=snap.pps||[];S.phase=snap.phase||'strategy';S.tid=id;return true}
+async function loadTopics(){await L();/* 落地即「选题判断」首页, 不自动恢复上次课题 (钩子优先); 上次课题经侧边栏点击恢复 */Y()}
+(function I(){if(localStorage.aia_d==='1')document.documentElement.className='dark';syncMode();loadTopics();checkAuth()})();
+function TT(){var h=document.documentElement;h.className=h.className==='dark'?'light':'dark';localStorage.aia_d=h.className==='dark'?'1':'0'}
+async function L(){try{var f=S.showArch?'all':'active';var data=await(await fetch(A+'/topics?filter='+f,{headers:authHeaders()})).json();S.ts=data;K()}catch(e){setTimeout(L,3000)}}
+function Y(){S.msgs=[{r:'s',c:'# PaperLink\n\n输入研究方向 / 提问 / 上传论文\n\n搜索 12 个学术数据库 · 自动构建知识库 · 深度问答'}];R()}
+function NN(){clearInterval(S.pi);S.tid=null;S.q='';S.msgs=[];S.strategy=null;S.pps=[];S.pg=0;setPhase('welcome');localStorage.removeItem('aia_t');document.getElementById('uz').style.display='none';document.getElementById('pg').style.display='none';Y()}
+async function WW(id){if(S.tid&&S.tid!==id)saveSession();S.tid=id;S.ppv=null;S.pg=0;localStorage.aia_t=id;S._resetScroll=true;S._autoScroll=false;var t=S.ts.find(function(x){return x.topic_id===id});S.q=t?t.query||'':'';if(!S.q){Y();return}if(restoreFrom(id)){document.getElementById('uz').style.display='block';R();L();return}var restoreMessages=S.msgs;S.msgs=[{r:'s',c:'# '+S.q+'\n\n加载中…'}];setPhase('strategy');R();try{var r=await fetch(A+'/create_topic',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({query:S.q,topic_id:id})});var d=await r.json();S.strategy=d.strategy;var sc='# '+S.q+'\n\n检索策略: '+(d.strategy.keywords_cn||[]).slice(0,4).join(' · ')+'\n\n输入问题开始问答，或拖拽论文PDF上传';S.msgs=[{r:'s',c:sc}];saveSession();document.getElementById('uz').style.display='block';R();L()}catch(e){S.msgs=restoreMessages.length?restoreMessages:[{r:'s',c:'# '+S.q+'\n\n加载失败: '+e.message}];R()}}
+async function SR(q,ke,kc){
+  S.pps=[];setPhase('searching');document.getElementById('ldot').style.display='inline-block';document.getElementById('fbar').style.display='block';document.getElementById('ldot').className='dot live';R();
+  try{
+    var r=await fetch(A+'/search_papers/stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:q,keywords_en:ke,keywords_cn:kc})});
+    var reader=r.body.getReader(),decoder=new TextDecoder(),buf='';
+    while(true){
+      var _a=await reader.read(),value=_a.value,done=_a.done;
+      if(done)break;
+      buf+=decoder.decode(value,{stream:true});
+      var lines=buf.split('\n');buf=lines.pop()||'';
+      for(var i=0;i<lines.length;i++){var l=lines[i];
+        if(l.indexOf('data: ')!==0)continue;
+        try{
+          var d=JSON.parse(l.slice(6));
+          if(d.event==='batch'){
+            var seen=new Set(S.pps.map(function(x){return x.paper_id}));
+            for(var j=0;j<(d.papers||[]).length;j++){var p=d.papers[j];
+              if(!seen.has(p.paper_id)){seen.add(p.paper_id);S.pps.push(p)}}
+            R()
+          }else if(d.event==='done'){
+            console.log('Search done: '+d.total+' papers in '+d.elapsed);var dots=document.querySelectorAll('.dots-bar i');for(var k=0;k<dots.length&&k<12;k++)dots[k].className='on'
+          }
+        }catch(e){}
+      }
+    }
+    setPhase('papers_loaded');window._papersVisible=true;saveSession();R()
+  }catch(e){console.log('stream search failed: '+e.message);setPhase('strategy');document.getElementById('ldot').className='dot idle';document.getElementById('fbar').style.display='none';R()}
+}async function XX(){var el=document.getElementById('ui');var t=el.value.trim();if(!t||S.phase==='thinking'||S.phase==='building')return;el.value='';el.style.height='auto';S._resetScroll=true;S._autoScroll=true;if(!S.tid){/* 统一流程: 无课题 → 先选题判断 (钩子) */S.q=t;Ae('user',t);S.msgs[S.msgs.length-1].g=true;await GAP(t);document.getElementById('actionBar').style.display='flex';saveSession();R();return}if(S.writeMode){/* plan 模式: 用户的回答累积进写稿需求, 继续反问/写 */Ae('user',t);S.writeReq.push('【你的回答】'+t);await writeDraft();saveSession();R();return}Ae('user',t);if(S.useAgent){await PI(t)}else{await CHAT(t)}S.discussed=true;showWriteBtn();refreshSuggest()}
+function showWriteBtn(){var ab=document.getElementById('actionBar');if(!ab||!S.discussed)return;ab.innerHTML='<button class="chip" onclick="writeDraft()" style="background:var(--brand);color:#fff;border-color:var(--brand);font-weight:600">✍️ 辅助写初稿</button>';ab.style.display='flex'}
+async function CHAT(q){setPhase('thinking');try{var hist=S.msgs.filter(function(m){return m.r==='u'||m.r==='a'}).slice(-10);var r=await fetch(A+'/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q,history:hist})});var d=await r.json();if(!r.ok){Ae('s',d.detail||('请求失败 ('+r.status+')'));return}Ae('a',d.answer||'生成失败')}catch(e){Ae('s','提问失败: '+(e.message||'网络错误'))}setPhase('papers_loaded');saveSession();R()}
+async function GAP(q){setPhase('thinking');try{var r=await fetch(A+'/research_gap',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({topic:q})});if(!r.ok){try{var de=await r.json();Ae('s',de.detail||('请求失败 ('+r.status+')'))}catch(e){Ae('s','请求失败 ('+r.status+')')}setPhase('papers_loaded');R();return}var reader=r.body.getReader(),decoder=new TextDecoder(),buf='',ans='',lastR=0;S.msgs.push({r:'a',c:'▌ 正在检索文献…'});R();while(true){var _a=await reader.read(),value=_a.value,done=_a.done;if(done)break;buf+=decoder.decode(value,{stream:true});var lines=buf.split('\n');buf=lines.pop()||'';for(var i=0;i<lines.length;i++){var l=lines[i];if(l.indexOf('data: ')!==0)continue;try{var d=JSON.parse(l.slice(6));if(d.event==='status'){S.msgs[S.msgs.length-1].c='▌ '+d.message;R()}else if(d.event==='token'){ans+=d.token;var now=Date.now();if(now-lastR>80){S.msgs[S.msgs.length-1].c=ans;var me=document.querySelector('#msg-'+(S.msgs.length-1)+' .md-body');if(me)me.innerHTML=md(ans+'▌');lastR=now}}else if(d.event==='done'){S.msgs[S.msgs.length-1].c=ans||'（无回答）';R()}else if(d.event==='error'){S.msgs[S.msgs.length-1].c='❌ '+d.message;R()}}catch(e){}}}if(lastR===0){S.msgs[S.msgs.length-1].c=ans||'（无回答）';R()}}catch(e){Ae('s','选题判断失败: '+(e.message||'网络错误'))}setPhase('papers_loaded');R()}
+async function lightCreate(q){try{var r=await fetch(A+'/create_topic',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({query:q})});var d=await r.json();if(!r.ok||!d.topic_id)return false;S.tid=d.topic_id;S.q=q;S.strategy=d.strategy;localStorage.aia_t=d.topic_id;saveSession();return true}catch(e){return false}}
+async function nextSearch(){var b=document.getElementById('actionBar');if(b)b.style.display='none';if(!S.tid&&S.q){if(!(await lightCreate(S.q))){Ae('s','建课题失败，请重试');return}}if(S.tid){SR(S.q,(S.strategy||{}).keywords_en,(S.strategy||{}).keywords_cn);setPhase('papers_loaded');R()}refreshSuggest()}
+async function nextUpload(){var b=document.getElementById('actionBar');if(b)b.style.display='none';if(!S.tid&&S.q){if(!(await lightCreate(S.q))){Ae('s','建课题失败，请重试');return}}var u=document.getElementById('uz');if(u)u.style.display='block';refreshSuggest()}
+async function checkUpdates(){try{var r=await fetch(A+'/updates',{headers:authHeaders()});var d=await r.json();if(d.total_new_papers>0){var lines=(d.updates||[]).map(function(x){return '- '+esc(x.query)+'：检索到 '+x.new_papers+' 篇相关论文 ('+(x.time||'').slice(0,10)+')'}).join('\n');Ae('s','## 🔔 你的研究方向追踪（'+d.total_new_papers+' 篇相关论文）\n\n'+lines+'\n\n_每日自动检索公开学术库，数字为最近一次快照，非严格新增量。_')}}catch(e){}}
+async function QQ(q){setPhase('thinking');try{var hist=S.msgs.filter(function(m){return m.r==='u'||m.r==='a'}).slice(-10);var r=await fetch(A+'/ask/stream',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({topic_id:S.tid,question:q,history:hist})});if(!r.ok){try{var de=await r.json();Ae('s',de.detail||('请求失败 ('+r.status+')'))}catch(e){Ae('s','请求失败 ('+r.status+')')}return}var reader=r.body.getReader(),decoder=new TextDecoder(),buf='',ans='';S.msgs.push({r:'a',c:'▌'});R();while(true){var _a=await reader.read(),value=_a.value,done=_a.done;if(done)break;buf+=decoder.decode(value,{stream:true});var lines=buf.split('\n');buf=lines.pop()||'';for(var i=0;i<lines.length;i++){var l=lines[i];if(l.indexOf('data: ')!==0)continue;try{var d=JSON.parse(l.slice(6));if(d.token!==undefined){ans+=d.token;S.msgs[S.msgs.length-1].c=ans+'▌';R()}else if(d.error){S.msgs[S.msgs.length-1].c='❌ '+d.error;R()}}catch(e){}}}S.msgs[S.msgs.length-1].c=ans||'（无回答）';R()}catch(e){Ae('s','提问失败: '+(e.message||'网络错误'))}setPhase('papers_loaded');saveSession();R()}
+function HH(e){e.preventDefault();FF(e.dataTransfer.files)}
+async function FF(files){if(!files.length||!S.tid)return;setPhase('thinking');var fd=new FormData();for(var i=0;i<files.length;i++)fd.append('files',files[i]);try{var r=await fetch(A+'/upload_pdf/'+S.tid,{method:'POST',headers:authHeaders(),body:fd});var d=await r.json();setPhase('ready');document.getElementById('uz').style.display='none';Ae('s','✅ 知识库就绪！'+d.papers+'篇, '+d.chunks+'个文本块');await L()}catch(e){Ae('s','❌ '+e.message)}setPhase('papers_loaded');R()}
+async function BB(){if(S._building)return;S._building=true;var urls=S.pps.filter(function(p){return p.pdf_url}).map(function(p){return p.pdf_url});if(!urls.length){S._building=false;return alert('没有可下载的论文，请拖拽 PDF 上传')}S._kbDone=null;var pg=document.getElementById('pg');pg.style.display='block';document.getElementById('pc').textContent='0/'+urls.length;document.getElementById('pf').style.width='0%';clearInterval(S.pi);S.pi=setInterval(async function(){try{var r=await fetch(A+'/topic_status/'+S.tid,{headers:authHeaders()});var d=await r.json();if(d.status==='ready'){clearInterval(S.pi);if(S._kbDone)return;S._kbDone=true;S._building=false;document.getElementById('pf').style.width='100%';document.getElementById('pc').textContent='✅';document.getElementById('pd').textContent=d.progress;var dl=(S.pps||[]).filter(function(p){return urls.indexOf(p.pdf_url)>=0});var _cnt=(S._importedN||dl.length||0);var listHtml='<details><summary>📄 已入库论文（'+_cnt+' 篇，点击展开）</summary>'+dl.map(function(p,i){return '<div style="margin:2px 0">'+(i+1)+'. '+esc(p.title)+'</div>'}).join('')+'</details>';Ae('s','✅ **知识库就绪！**\n\n从 **'+urls.length+' 篇可下载论文**中成功解析 **'+_cnt+' 篇**加入知识库（不是下载到本地，可直接基于它们提问）：\n\n'+listHtml+'\n\n现在可以提问，或点下方「辅助写初稿」产出论文初稿。');var ui=document.getElementById('ui');if(ui)ui.placeholder='✅ 知识库已就绪，输入问题或点「辅助写初稿」';setPhase('ready');var ab=document.getElementById('actionBar');if(ab){ab.innerHTML='<button class="chip" onclick="document.getElementById(\'ui\').focus()" style="background:var(--hover);border:1px solid var(--border)">💬 先与知识库讨论</button>';ab.style.display='flex'};S.discussed=false;document.getElementById('uz').style.display='none';await L();refreshSuggest();setTimeout(function(){pg.style.display='none'},3000)}else if(d.step){var pct=d.total?Math.round(d.current/d.total*100):0;document.getElementById('pf').style.width=pct+'%';document.getElementById('pc').textContent=(d.current||0)+'/'+(d.total||urls.length);document.getElementById('pd').textContent=((d.step==='downloading')?'下载中… 中文':'解析/建库中… 中文')+(d.cn_papers||0)+' 英文'+(d.en_papers||0)}}catch(e){}},1200);setPhase('building');try{var r2=await fetch(A+'/download_bulk',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({urls:urls,topic_id:S.tid})});S._importedN=parseInt((r2.headers.get('X-Imported')||'0'))||0;if(!r2.ok){var de=await r2.json();alert(de.detail||'建库失败')}else{var _chk=r2.headers.get('X-Imported');if(_chk!==null){try{var blob=await r2.blob();var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='papers_'+S.tid+'.zip';a.click();Ae('s','📦 论文 zip 已下载到本地（浏览器下载目录），可直接检索浏览。若打不开请检查是否全部下载成功。')}catch(e){}}else{/* 非zip响应(如异常), 不触发下载 */}}}catch(e){clearInterval(S.pi);pg.style.display='none';S._building=false;alert('建库失败，请重试')}setPhase('papers_loaded');R()}
+async function PI(task,steps){S.piSteps=[];S.agent=true;setPhase('thinking');showStop(true);R();try{
+  var body={task:task,goal:S.q||'',max_steps:(steps||15),topic_id:S.tid||''};
+  var skl=S.skill||'auto';
+  if(skl!=='auto'&&skl!=='research_team'){body.skills=[skl]}
+  var ac=new AbortController();S._abort=ac;
+  var r=await fetch(A+'/agent/pi/stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:ac.signal});
+  if(!r.ok){S.agent=false;showStop(false);try{var de=await r.json();Ae('s',de.detail||('请求失败 ('+r.status+')'))}catch(e){Ae('s','请求失败 ('+r.status+')')}setPhase('papers_loaded');saveSession();R();return}
+  var reader=r.body.getReader(),decoder=new TextDecoder(),buf='',stepsTxt='',piAns='';
+  S.msgs.push({r:'a',c:'▌'});R();
+  while(true){
+    var _a=await reader.read(),value=_a.value,done=_a.done;
+    if(done)break;
+    buf+=decoder.decode(value,{stream:true});
+    var lines=buf.split('\n');buf=lines.pop()||'';
+    for(var i=0;i<lines.length;i++){var l=lines[i];
+      if(l.indexOf('data: ')!==0)continue;
+      try{var d=JSON.parse(l.slice(6));
+        if(d.event==='step'){piAns='';stepsTxt+='#'+d.turn+' '+(d.success?'✓':'✗')+' '+(d.tool)+' ('+(d.elapsed_ms||0)+'ms)\n';S.msgs[S.msgs.length-1].c=stepsTxt+'▌';R()}
+        else if(d.event==='token'){piAns+=d.token;S.msgs[S.msgs.length-1].c=(stepsTxt?stepsTxt+'\n\n':'')+piAns+'▌';R()}
+        else if(d.event==='result'){
+          S.agent=false;showStop(false);
+          if(d.paused){S._piRunId=d.run_id||'';document.getElementById('approval-bar').style.display='block';document.getElementById('approval-text').innerHTML='<b>⚠️ 需要人工确认</b><br>Agent 请求执行: <b>'+(d.need_confirm?d.need_confirm.tool_name:'工具')+'</b><br>确认后执行，或拒绝让 Agent 换路';Ae('s','## ⚠️ 需要人工确认\n\nAgent 请求执行: **'+(d.need_confirm?d.need_confirm.tool_name:'')+'**\n\n_等待人工确认..._');break}
+          var res=d.result||'';
+          /* plan 模式: 若结果是澄清问题(带标记)则保持反问; 否则是初稿 → 退出 plan */
+          if(S.writeMode&&res.indexOf('【请回答以上问题后继续】')<0){S.writeMode=false}
+          S.msgs[S.msgs.length-1].c=res||stepsTxt||'（无结果）';R();
+          if(d.trace){var cc=document.getElementById('cc');if(cc)cc.insertAdjacentHTML('beforeend',renderTrace(d.trace))}
+          /* v3 主动推进: Agent 完成实质工作后, 主动递上下一步建议 */
+          var _usedTools=d.trace&&d.trace.tools_used&&d.trace.tools_used.length;
+          refreshSuggest();
+          if(_usedTools||(res&&res.length>300)){setTimeout(function(){var st=document.getElementById('suggestText');if(st&&st.textContent)Ae('s','🔜 下一步建议: '+st.textContent)},250)}
+        }else if(d.event==='error'){S.agent=false;S.msgs[S.msgs.length-1].c='❌ '+(d.message||'错误');R()}
+      }catch(e){}
+    }
+  }
+  S.agent=false;showStop(false);
+}catch(e){S.agent=false;showStop(false);if(e&&e.name==='AbortError'){Ae('s','⏹ Agent 已停止')}else{Ae('s','Agent Error: '+(e.message||'network'))}}
+setPhase('papers_loaded');saveSession();R()}
+// ===== Research Team (13 Agents + 双轨审批) =====
+S._teamGate=null;S._teamRunId='';
+async function TM(task){S.piSteps=[];S.agent=true;setPhase('thinking');R();
+  try{
+    var r=await fetch(A+'/team/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({task:task})});
+    var d=await r.json();
+    S.agent=false;
+    S._teamRunId=d.run_id||'';
+    if(d.status==='awaiting_approval'){
+      S._teamGate=d;
+      document.getElementById('approval-bar').style.display='block';
+      document.getElementById('approval-text').innerHTML='<b>'+d.name+'</b><br>'+d.request.summary.substring(0,300);
+      Ae('s','## '+d.name+'\\n\\n'+d.request.summary.substring(0,400)+'\\n\\n_等待人工审批..._')
+    }else if(d.status==='completed'){
+      Ae('a',d.result||'(empty)');
+      if(d.history){var th='## 科研团队流程\\n\\n';d.history.forEach(function(h){th+='- ['+h.layer+'] **'+h.name+'** '+h.description+'\\n'});Ae('s',th)}
+    }else{Ae('s','Team error')}
+  }catch(e){S.agent=false;Ae('s','Team Error: '+(e.message||'network'))}
+  setPhase('papers_loaded');saveSession();R()
+}
+async function TA_approve(fb){document.getElementById('approval-bar').style.display='none';S.agent=true;setPhase('thinking');R();
+  try{
+    var r=await fetch(A+'/team/approve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({run_id:S._teamRunId||'',feedback:fb||''})});
+    var d=await r.json();
+    S.agent=false;
+    if(d.status==='awaiting_approval'){
+      S._teamGate=d;
+      document.getElementById('approval-bar').style.display='block';
+      document.getElementById('approval-text').innerHTML='<b>'+d.name+'</b><br>'+d.request.summary.substring(0,300);
+      Ae('s','## '+d.name+'\\n\\n'+d.request.summary.substring(0,400)+'\\n\\n_等待人工审批..._')
+    }else if(d.status==='completed'){Ae('a',d.result||'(empty)');
+      if(d.history){var th='## 科研团队流程\n\n';d.history.forEach(function(h){th+='- ['+h.layer+'] **'+h.name+'** '+h.description+'\n'});Ae('s',th)}
+    }else if(d.detail){Ae('s','Team: '+(d.detail||'error'))}
+    else{Ae('a',d.result||'(empty)')}
+  }catch(e){S.agent=false;Ae('s','Team Error: '+(e.message||'network'))}
+  setPhase('papers_loaded');saveSession();R()
+}
+function showApprovalFeedback(){if(S._piRunId){PA_approve(false)}else{document.getElementById('approval-fb').style.display='block';document.getElementById('approval-submit').style.display='block'}}
+function TA_submit(){var fb=document.getElementById('approval-fb').value;document.getElementById('approval-fb').style.display='none';document.getElementById('approval-submit').style.display='none';if(S._piRunId){PA_approve(false)}else{TA_approve(fb)}}
+function approvalGo(){if(S._piRunId){PA_approve(true)}else{TA_approve('')}}
+// ===== Pi-Agent 人工确认 (危险工具暂停后 确认/拒绝) =====
+S._piRunId='';
+async function PA_approve(confirm){document.getElementById('approval-bar').style.display='none';S.agent=true;setPhase('thinking');showStop(true);R();
+  try{
+    var ac=new AbortController();S._abort=ac;
+    var r=await fetch(A+'/agent/pi/approve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({run_id:S._piRunId||'',confirmed:confirm}),signal:ac.signal});
+    var d=await r.json();
+    S.agent=false;showStop(false);
+    if(d.paused){S._piRunId=d.run_id||S._piRunId;document.getElementById('approval-bar').style.display='block';document.getElementById('approval-text').innerHTML='<b>需要人工确认</b><br>'+(d.need_confirm?d.need_confirm.tool_name:'工具');Ae('s','## ⚠️ 需要人工确认\n\nAgent 请求执行: **'+(d.need_confirm?d.need_confirm.tool_name:'')+'**')}
+    else if(d.result){Ae('a',d.result);if(d.trace){var cc=document.getElementById('cc');if(cc)cc.insertAdjacentHTML('beforeend',renderTrace(d.trace))}}
+    else{Ae('s','Agent: '+(d.result||'未完成任务'))}
+  }catch(e){S.agent=false;showStop(false);if(e&&e.name==='AbortError'){Ae('s','⏹ Agent 已停止')}else{Ae('s','Agent Error: '+(e.message||'network'))}}
+  setPhase('papers_loaded');saveSession();R()}
+function syncMode(){var a=document.getElementById('btnAgent');if(a){a.textContent=S.useAgent?'Agent ON':'Agent';a.className=S.useAgent?'agent-on':''}}
+function TA(){S.useAgent=!S.useAgent;syncMode()}
+function showStop(on){var b=document.getElementById('btnStop');if(b)b.style.display=on?'inline-block':'none'}
+function ST(){if(S._abort){S._abort.abort();S._abort=null}showStop(false)}
+function renderTrace(t){if(!t)return'';var h='<details style="margin:8px 0;font-size:12px;border:1px solid var(--border);border-radius:8px;padding:6px 10px"><summary>🔬 Agent 执行过程 ('+(t.turns||0)+' 轮 · '+(t.elapsed||'?')+'s)</summary><div style="margin-top:6px">';var steps=t.steps||[];if(!steps.length){h+='<div style="color:var(--muted)">（直接回答，无工具调用）</div>'}for(var i=0;i<steps.length;i++){var s=steps[i],ok=s.success?'✅':'❌',tool=s.tool==='llm'?'推理':(s.tool||'?');h+='<div style="padding:3px 0;border-bottom:1px dashed var(--border)">'+ok+' <b>'+esc(tool)+'</b> <span style="color:var(--muted)">#'+(s.turn||i+1)+' · '+(s.tokens||0)+' tok · '+(s.elapsed_ms||0)+'ms</span></div>'}h+='</div></details>';return h}
+function SK(v){S.skill=v;if(v!=='auto'){S.useAgent=true;TA()}}
+async function EX(fmt){if(!fmt||!S.q)return;var sections={};var msgs=S.msgs.filter(function(m){return m.r==='u'||m.r==='a'});for(var i=0;i<msgs.length;i+=2){var role=msgs[i]&&msgs[i].r==='u'?'Q':'Section';var key=role+Math.floor(i/2+1);sections[key]=msgs[i]?msgs[i].c:''}var refs=[];S.pps.slice(0,10).forEach(function(p){refs.push({authors:p.authors||'Unknown',year:p.year||2025,title:p.title||'',doi:p.doi||''})});try{var r=await fetch(A+'/export/paper',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:S.q,sections:sections,references:refs,format:fmt})});var d=await r.json();if(d.filepath){window.open(A+'/file/download?filepath='+encodeURIComponent(d.filepath))}else{alert('Export failed: '+JSON.stringify(d))}}catch(e){alert('Export error: '+e.message)}document.getElementById('exportFmt').value=''}
+async function CIT(pid){if(!pid)return;setPhase('thinking');R();try{var r=await fetch(A+'/citation/chain',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({paper_id:pid,direction:'both',depth:1})});var d=await r.json();if(d.ok){var h='## Citation Chain\n\nFrom: '+(d.seed&&d.seed.title?d.seed.title.substring(0,80):pid)+'\n\n### Citing Papers ('+d.citations.length+')\n';d.citations.slice(0,8).forEach(function(c,i){h+=(i+1)+'. **'+c.title.substring(0,60)+'** ('+(c.year||'?')+') cites:'+(c.citation_count||0)+(c.is_influential?' ★':'')+'\n'});h+='\n### References ('+d.references.length+')\n';d.references.slice(0,8).forEach(function(r,i){h+=(i+1)+'. **'+r.title.substring(0,60)+'** ('+(r.year||'?')+') cites:'+(r.citation_count||0)+'\n'});Ae('s',h)}else{Ae('s','Citation chain unavailable: '+(d.error||'no data'))}}catch(e){Ae('s','Citation error: '+(e.message||'network'))}setPhase('papers_loaded');R()}
+async function FB(q,a,r){try{await fetch(A+'/feedback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q||'',answer:a||'',rating:r})})}catch(e){}}
+function CP(id){var el=document.getElementById(id);if(!el)return;var t=el.innerText;var ok=function(){var btn=document.querySelector('[data-cp="'+id+'"]');if(btn){btn.innerHTML='✅ 已复制';setTimeout(function(){btn.innerHTML='📋 复制'},1500)}};if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(ok).catch(function(){_fbCopy(t);ok()})}else{_fbCopy(t);ok()}}
+function _fbCopy(t){try{var ta=document.createElement('textarea');ta.value=t;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta)}catch(e){}}
+function Ae(r,c){S.msgs.push({r:(r==='user'?'u':r),c:c});R()}
+var _editIdx=-1;
+function editMsg(i){_editIdx=i;R()}
+function cancelEdit(){_editIdx=-1;R()}
+async function saveEdit(i){var ta=document.getElementById('editArea');if(!ta)return;var t=ta.value.trim();_editIdx=-1;if(!t){R();return}var wasGap=!!S.msgs[i].g;S.msgs=S.msgs.slice(0,i+1);S.msgs[i].c=t;saveSession();R();/* 检查点重新生成: 按消息来源重跑 */if(wasGap){S.q=t;await GAP(t);document.getElementById('actionBar').style.display='flex';return}if(S.tid){if(S.useAgent){await PI(t)}else{await CHAT(t)}}else{await GAP(t)}}
+function R(){
+  var h='';S.msgs.forEach(function(m,i){
+    h+='<div class="msg '+(m.r==='u'?'user':'')+'" id="msg-'+i+'" style="animation-delay:'+(i*.04)+'s">';
+    if(m.r==='u'){if(_editIdx===i){h+='<div class="bubble" style="background:var(--card);color:var(--text);border:1px solid var(--brand)"><textarea id="editArea" style="width:100%;min-height:60px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 10px;font-size:13px;resize:vertical">'+esc(m.c)+'</textarea><div style="display:flex;gap:8px;margin-top:6px"><button onclick="saveEdit('+i+')" style="background:var(--brand);color:#fff;border:none;border-radius:8px;padding:5px 12px;cursor:pointer;font-size:12px">保存并重新生成</button><button onclick="cancelEdit()" style="background:var(--hover);border:1px solid var(--border);border-radius:8px;padding:5px 12px;cursor:pointer;font-size:12px">取消</button></div></div>'}else{h+='<div class="bubble">'+esc(m.c)+'</div>';h+='<div class="u-actions"><button onclick="editMsg('+i+')" title="编辑这条并重新生成">✏️ 编辑</button></div>'}}
+    else if(m.r==='a'){h+='<div class="card"><div class="md-body">'+md(m.c)+'</div><div class="msg-actions"><button data-cp="msg-'+i+'" onclick="CP(\x27msg-'+i+'\x27)">📋 复制</button>';var p=S.msgs[i-1];if(p&&p.r==='u'){h+='<button onclick="QQ(\x27'+escA(p.c)+'\x27)">🔄 重新生成</button>'}h+='<button onclick="FB(\x27'+escA(p?p.c:'')+'\x27,\x27'+escA(m.c.substring(0,200))+'\x27,1)" style="background:var(--hover);border:1px solid var(--border);border-radius:6px;padding:3px 8px;cursor:pointer;font-size:12px">👍</button><button onclick="FB(\x27'+escA(p?p.c:'')+'\x27,\x27'+escA(m.c.substring(0,200))+'\x27,-1)" style="background:var(--hover);border:1px solid var(--border);border-radius:6px;padding:3px 8px;cursor:pointer;font-size:12px;margin-left:2px">👎</button>';h+='</div></div>';}
+    else h+='<div class="card">'+md(m.c)+'</div>';
+    h+='</div>';
+  });
+  if(S.phase==='building')h+='<div class="loading"><div class="status"><span class="pulse"></span> 正在下载论文并构建知识库…</div><div class="skeleton w80"></div><div class="skeleton w100"></div><div class="skeleton w60"></div></div>';
+  if(S.phase==='thinking')h+='<div class="loading"><div class="status"><span class="pulse"></span> '+(S.agent?'Agent 思考中…':'生成回答中…')+'</div><div class="skeleton w80"></div><div class="skeleton w100"></div><div class="skeleton w60"></div></div>';
+  if(S.strategy&&S.strategy.boolean_queries&&S.strategy.boolean_queries.length){
+    h+='<div class="msg card" style="animation-delay:.1s"><div style="font-weight:600;font-size:12px;margin-bottom:6px">🔍 检索策略</div>';
+    h+='<div style="margin-bottom:6px">'+(S.strategy.keywords_cn||[]).map(function(k){return '<span class="tag blue">'+esc(k)+'</span>'}).join(' ')+'</div>';
+    h+='<div class="strat-grid">';(S.strategy.boolean_queries||[]).slice(0,4).forEach(function(bq){h+='<div class="strat-card"><div class="db">'+esc(bq.database||'')+'</div><pre>'+esc(bq.query||'')+'</pre></div>';});h+='</div></div>';
+  }
+  if(S.agentSteps.length){h+='<div class="msg card" style="animation-delay:.05s"><div style="font-weight:600;font-size:13px;margin-bottom:8px;color:var(--brand)">🤖 Agent 执行过程</div>';S.agentSteps.forEach(function(s,i){var icon=s.tool_result?'✅':'🧠';var label=s.tool_result?'工具返回':'思考分析';var cls=s.tool_result?'':'shimmer-text';h+='<div class="agent-step" style="animation-delay:'+(i*.1)+'s"><div class="label">'+icon+' Step '+s.step+': '+label+'</div>';if(s.tool_result){try{var tr=JSON.parse(s.tool_result);if(tr.total)h+='<div class="detail">📄 搜索到 '+tr.total+' 篇论文</div>';if(tr.best_kb)h+='<div class="detail">📚 推荐知识库: '+tr.best_kb+'</div>';if(tr.answer)h+='<div class="detail">💬 '+tr.answer.substring(0,100)+'...</div>'}catch(e){h+='<div class="detail">'+esc(String(s.tool_result).substring(0,120))+'</div>'}}else{h+='<div class="detail '+cls+'">'+esc(s.thought||'分析中…')+'</div>'}h+='</div>'});h+='</div>'}if(S.phase==='searching'&&!S.pps.length){h+='<div class="loading" style="animation-delay:.2s"><div class="status">🔍 正在多源搜索论文…</div><div class="skeleton w80"></div><div class="skeleton w100"></div><div class="skeleton w60"></div></div>'}
+  if(S.pps.length){h+='<div class="msg card" style="animation-delay:.1s;font-size:11px">📄 '+S.pps.length+' papers · <span style="cursor:pointer;color:var(--brand);text-decoration:underline" onclick="togglePapers()">Toggle panel</span></div>'}
+  document.getElementById('cc').innerHTML=h;
+  renderPapers();
+  document.getElementById('ht').textContent=S.q||'PaperLink';
+  var el=document.getElementById('st');var txt=PHASES[S.phase]||S.phase;if(el.textContent!==txt){el.innerHTML='<span class=\\"count-pop\\" style=\\"display:inline-block\\">'+txt+'</span>';setTimeout(function(){el.textContent=txt},350)}else{el.textContent=txt};
+  var cc=document.getElementById('cc');
+  if(S._autoScroll!==false){cc.scrollTop=cc.scrollHeight}
+  if(S._resetScroll){cc.scrollTop=0;S._resetScroll=false}
+}
+document.addEventListener('DOMContentLoaded',function(){document.getElementById('cc').addEventListener('scroll',function(){var cc=this;S._autoScroll=cc.scrollHeight-cc.scrollTop-cc.clientHeight<80})});
+function PR(p){var dl_url=p.download_url||p.pdf_url,prv_url=p.preview_url||p.doi_url||p.cnki_url||'#';return'<div class="paper"><div class="icon"></div><div class="info"><div class="ptitle"><a href="javascript:void(0)" onclick="PV(\x27'+escA(p.paper_id)+'\x27)" title="点击预览摘要">'+esc(p.title)+'</a></div><div class="pmeta">'+esc(p.authors||'')+' · '+(p.year||'')+' · '+(p.source||'')+'</div><div class="tags">'+(dl_url?'<a href="'+esc(dl_url)+'" download class="tag green">⬇ 下载</a>':'<span class="tag yellow" title="闭源论文：请用学校图书馆账号自行下载后，上传到系统">🔒 闭源·学校账号下载</span>')+(prv_url&&prv_url!=='#'?'<a href="'+esc(prv_url)+'" target="_blank" class="tag purple">🔍 在线</a>':'')+(p.cnki_url?'<a href="'+esc(p.cnki_url)+'" target="_blank" class="tag red">📚 知网</a>':'')+(p.google_scholar_url?'<a href="'+esc(p.google_scholar_url)+'" target="_blank" class="tag blue">GS</a>':'')+(p.doi_url?'<a href="'+esc(p.doi_url)+'" target="_blank" class="tag gray">DOI</a>':'')+'<span class="tag gray" style="cursor:pointer" onclick="PV(\x27'+escA(p.paper_id)+'\x27)">👁 预览</span><span class="tag gray" style="cursor:pointer" onclick="navigator.clipboard.writeText(\x27'+escA(p.title)+'\x27)">📋</span></div></div></div>'}
+function PV(pid){var p=S.pps.find(function(x){return x.paper_id===pid});if(!p)return;S.ppv=p;buildPreview(p)}
+function buildPreview(p){
+  var old=document.getElementById('ppv');if(old)old.remove();
+  var el=document.createElement('div');el.id='ppv';
+  el.style.cssText='position:fixed;top:0;right:0;width:420px;height:100vh;background:var(--card);border-left:1px solid var(--border);padding:16px;overflow-y:auto;z-index:50;box-shadow:-4px 0 20px rgba(0,0,0,.3)';
+  var h='<button onclick="var x=document.getElementById(\x27ppv\x27);if(x)x.remove();S.ppv=null" style="float:right;background:none;border:none;color:var(--muted);cursor:pointer;font-size:20px">&times;</button>';
+  h+='<h3 style="font-size:13px;color:var(--brand);margin:0 0 6px;line-height:1.5">'+esc(p.title||'')+'</h3>';
+  h+='<p style="font-size:10px;color:var(--muted);margin:0 0 10px">'+esc(p.authors||'?')+' &middot; '+(p.year||'?')+' &middot; '+esc(p.source||'')+'</p>';
+  h+='<div style="font-size:11px;color:var(--muted);line-height:1.6;max-height:250px;overflow-y:auto;border-top:1px solid var(--border);padding-top:8px;margin-bottom:8px"><b>Abstract:</b> '+esc((p.abstract||'Not available').substring(0,1200))+'</div>';
+  if(p.pdf_url){
+    h+='<div style="margin:8px 0"><a href="'+esc(p.pdf_url)+'" target="_blank" class="tag green" style="font-size:11px;padding:6px 12px;text-decoration:none;display:inline-block">📄 打开全文（新标签页）</a></div>';
+  }
+  h+='<div style="display:flex;gap:6px;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:10px">';
+  if(p.doi_url)h+='<a href="'+esc(p.doi_url)+'" target="_blank" class="tag gray" style="font-size:11px;padding:5px 10px;text-decoration:none">DOI</a>';
+  if(p.cnki_url)h+='<a href="'+esc(p.cnki_url)+'" target="_blank" class="tag gray" style="font-size:11px;padding:5px 10px;text-decoration:none">CNKI</a>';
+  if(p.pdf_url)h+='<a href="'+esc(p.pdf_url)+'" download class="tag green" style="font-size:11px;padding:5px 10px;text-decoration:none">Download PDF</a>';
+  h+='<button c';
+  if(p.doi||p.paper_id)h+='<button class="tag gray" style="font-size:11px;padding:5px 10px;cursor:pointer;margin-left:2px" onclick="CIT('+escA(p.doi||p.paper_id)+')">Citation Chain</button>';
+  h+='</div>';
+  el.innerHTML=h;document.getElementById('cc').appendChild(el);
+}
+function K(){var el=document.getElementById('tl');var cnt=document.getElementById('topicCount');if(cnt)cnt.textContent=S.ts.length+' 个课题';if(!S.ts.length){el.innerHTML='<div style="text-align:center;color:var(--muted);font-size:10px;padding:16px">'+(S.showArch?'无课题':'无进行中课题')+'</div>';return}var h='';for(var i=0;i<S.ts.length;i++){var t=S.ts[i];var st=(t.status==='ready'||t.papers>0)?(t.papers||'')+' papers':'new';var badge='';if(t.status==='settled'){st='✓ 已结题';badge=' style="color:var(--green)"'}else if(t.status==='aborted'){st='✕ 已中止';badge=' style="color:var(--muted)"'}else if(t.status==='archived'){st='🗄 归档';badge=' style="color:var(--muted)"'}var btn=(t.status==='settled'||t.status==='aborted')?'':('<button onclick="event.stopPropagation();SD(\x27'+t.topic_id+'\x27)" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px;padding:0 5px" title="结题归档">✓</button>');h+='<div class="topic-item'+(t.topic_id===S.tid?' active':'')+'" data-tid="'+t.topic_id+'"><div style="flex:1;display:flex;column"><div class="tname">'+esc(t.query||'New')+'</div><div class="tmeta"'+badge+'>'+st+'</div></div>'+btn+'<button onclick="event.stopPropagation();D(\x27'+t.topic_id+'\x27)" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:16px;padding:0 6px" title="Delete">x</button></div>'}el.innerHTML=h}
+function SD(tid){if(!confirm('将该课题标记为已结题并归档？(会从活跃列表隐藏)'))return;fetch(A+'/topic/'+tid+'/state',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({status:'settled'})}).then(function(r){return r.json()}).then(function(d){if(d.ok)L();else alert(d.message||'操作失败')}).catch(function(){})}
+(function(){var tl=document.getElementById('tl');tl.addEventListener('click',function(e){if(e.target.tagName==='BUTTON')return;var item=e.target.closest('.topic-item');if(item){var tid=item.getAttribute('data-tid');if(tid)WW(tid)}},true)})()
+function md(t){if(!t)return'';var h=esc(t);function mi(s){s=s.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');s=s.replace(/`([^`]+)`/g,'<code>$1</code>');s=s.replace(/\[([^\]]+)\]\(([^)]+)\)/g,'<a href="$2" target="_blank">$1</a>');s=s.replace(/(^|[^*])\*([^*\s][^*]*?)\*/g,'$1<em>$2</em>');return s}var codeBlocks=[];h=h.replace(/```([\s\S]*?)```/g,function(m,c){codeBlocks.push('<pre>'+c+'</pre>');return'C'+(codeBlocks.length-1)+''});var lines=h.split('\n'),out=[],i=0;while(i<lines.length){var ln=lines[i],mm;if(mm=ln.match(/^### (.*)$/)){out.push('<h3>'+mi(mm[1])+'</h3>');i++}else if(mm=ln.match(/^## (.*)$/)){out.push('<h2>'+mi(mm[1])+'</h2>');i++}else if(mm=ln.match(/^# (.*)$/)){out.push('<h1>'+mi(mm[1])+'</h1>');i++}else if(ln.match(/^\|.*\|$/)){var rows=[];while(i<lines.length&&lines[i].match(/^\|.*\|$/)){var cells=lines[i].replace(/^\||\|$/g,'').split('|').map(function(c){return mi(c.trim())});if(!/^[-: ]+$/.test(cells.join(''))&&!cells.every(function(c){return/^:?-+:?$/.test(c.trim())}))rows.push('<tr>'+cells.map(function(c){return'<td>'+c+'</td>'}).join('')+'</tr>');i++}if(rows.length)out.push('<table>'+rows.join('')+'</table>')}else if(ln.match(/^[-*] /)){var its=[];while(i<lines.length&&lines[i].match(/^[-*] /)){its.push('<li>'+mi(lines[i].replace(/^[-*] /,''))+'</li>');i++}out.push('<ul>'+its.join('')+'</ul>')}else if(mm=ln.match(/^(\d+)\. (.*)$/)){var oi=[];while(i<lines.length&&(mm=lines[i].match(/^\d+\. (.*)$/))){oi.push('<li>'+mi(mm[1])+'</li>');i++}out.push('<ol>'+oi.join('')+'</ol>')}else if(mm=ln.match(/^&gt; (.*)$/)){out.push('<blockquote>'+mi(mm[1])+'</blockquote>');i++}else if(ln.match(/^C\d+$/)){out.push(codeBlocks[+ln.slice(2,-2)]);i++}else if(ln.trim()===''){i++}else{var para=[];while(i<lines.length&&lines[i].trim()!==''&&!lines[i].match(/^#{1,3} |^\|.*\|$|^[-*] |^\d+\. |^&gt; /)&&!lines[i].match(/^C\d+$/)){para.push(mi(lines[i]));i++}out.push('<p>'+para.join('<br>')+'</p>')}}return out.join('')}
+function togglePapers(){window._papersVisible = !window._papersVisible; renderPapers()}
+function renderPapers(){
+  var el = document.getElementById('papers-panel');
+  if (!S.pps.length) { if(el) el.remove(); return }
+  if (!window._papersVisible) { if(el) el.remove(); return }
+  if (!el) {
+    el = document.createElement('div'); el.id = 'papers-panel';
+    el.style.cssText = 'position:fixed;top:0;right:0;width:420px;height:100vh;background:var(--card);border-left:1px solid var(--border);padding:16px;overflow-y:auto;z-index:49;box-shadow:-4px 0 20px rgba(0,0,0,.3)';
+    document.body.appendChild(el);
+  }
+  var oa = S.pps.filter(function(p){return p.pdf_url}).length;
+  var cn = S.pps.filter(function(p){return isCN(p.title)||(p.title||'').startsWith('[CNKI]')});
+  var en = S.pps.filter(function(p){return !isCN(p.title)&&!(p.title||'').startsWith('[CNKI]')});
+  var sh = Math.min((S.pg+1)*10, S.pps.length);
+  var h = '<button onclick="window._papersVisible=false;var e=document.getElementById(\x27papers-panel\x27);if(e)e.remove()" style="float:right;background:none;border:none;color:var(--muted);cursor:pointer;font-size:20px">&times;</button>';
+  h += '<div style="font-weight:600;font-size:13px;margin-bottom:8px">'+S.pps.length+' papers ('+oa+' OA downloadable)</div>';
+  h += '<div style="margin-bottom:10px"><button onclick="B()" style="width:100%;padding:10px;background:var(--brand);color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600">⚡ 一键构建知识库 ('+oa+' 篇)</button><div style="display:flex;gap:6px;margin-top:6px"><button class="tag gray" onclick="copyDOIs()" style="cursor:pointer;font-size:11px;padding:5px 10px">复制 DOI</button><button class="tag gray" onclick="downloadZip()" style="cursor:pointer;font-size:11px;padding:5px 10px">⬇ 下载全文 zip</button></div></div>';
+  h += '<div style="font-size:10px;color:var(--muted);background:var(--hover);border-radius:6px;padding:8px 10px;margin-bottom:10px;line-height:1.6"><b>获取全文:</b> OA 论文可直接下载建库；闭源论文请用学校图书馆账号下载后拖拽上传（遵守版权，不碰盗版源）</div>';
+  if (cn.length) { h += '<div class="cn-header">Chinese <span class="badge">'+cn.length+'</span></div>'; for(var i=0;i<Math.min(sh,cn.length);i++) h+=PR(cn[i]) }
+  if (en.length) { var se = Math.max(0,sh-(cn.length?Math.min(sh,cn.length):0)); h += '<div class="en-header">English <span class="badge">'+en.length+'</span></div>'; for(var j=0;j<se;j++) h+=PR(en[j]) }
+  if (S.pps.length>sh) h += '<div style="text-align:center;margin-top:6px"><button class="tag gray" onclick="S.pg++;renderPapers()" style="cursor:pointer;font-size:11px;padding:5px 14px">Load more ('+(S.pps.length-sh)+')</button></div>';
+  el.innerHTML = h;
+}
+
+async function DD(id){if(!confirm('Delete topic?'))return;try{await fetch(A+'/topic/'+id,{method:'DELETE'});S.ts=S.ts.filter(function(t){return t.topic_id!==id});if(S.tid===id)NN();K()}catch(e){}}
+async function showSubs(){var m=document.getElementById('subModal');if(m)m.style.display='flex';var list=document.getElementById('subList');if(!list)return;list.innerHTML='加载中…';try{var r=await fetch(A+'/subscribe',{headers:authHeaders()});var d=await r.json();var subs=d.subscriptions||[];if(!subs.length){list.innerHTML='<div style="color:var(--muted);padding:10px">暂无订阅方向。新建课题会自动订阅该方向。</div>';return}list.innerHTML=subs.map(function(s){return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px dashed var(--border)"><span style="flex:1;font-size:13px">'+esc(s.query)+'</span><span style="color:var(--muted);font-size:10px;margin-right:8px">累计 '+(s.total_papers_found||0)+' 篇</span><button onclick="unsub(\''+s.id+'\')" style="background:var(--hover);border:1px solid var(--border);border-radius:6px;padding:3px 8px;cursor:pointer;font-size:11px;color:#e5484d">退订</button></div>'}).join('')}catch(e){list.innerHTML='<div style="color:var(--muted)">加载失败</div>'}}
+async function unsub(id){try{var r=await fetch(A+'/subscribe/'+id,{method:'DELETE',headers:authHeaders()});if(r.ok){showSubs()}else{var de=await r.json();alert(de.detail||'退订失败')}}catch(e){alert('退订失败')}}
+function checkAuth(){try{var t=localStorage.getItem('pl_token');if(!t){updateUserChip();return}fetch(A+'/me',{headers:authHeaders()}).then(function(r){if(!r.ok){localStorage.removeItem('pl_token');localStorage.removeItem('pl_user');updateUserChip()}}).catch(function(){})}catch(e){}}
+async function downloadZip(){var ds=S.pps.filter(function(p){return p.pdf_url}).map(function(p){return p.pdf_url});if(!ds.length)return alert('无下载链接');if(!S.tid)return alert('请先创建课题');var _ui=document.getElementById('ui');var _oldPh=_ui?_ui.placeholder:'';if(_ui)_ui.placeholder='⬇ 正在打包 '+ds.length+' 篇论文 zip，请稍候…';try{var r=await fetch(A+'/download_bulk',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({urls:ds,topic_id:S.tid})});if(!r.ok){var de=await r.json();alert(de.detail||'下载失败');if(_ui)_ui.placeholder=_oldPh;return}var blob=await r.blob();var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='papers_'+S.tid+'.zip';a.click();if(_ui)_ui.placeholder='✅ zip 已下载到本地下载目录';setTimeout(function(){if(_ui)_ui.placeholder=_oldPh},4000)}catch(e){if(_ui)_ui.placeholder=_oldPh;alert('下载失败')}}
+async function writeDraft(){var b=document.getElementById('actionBar');if(b)b.style.display='none';if(!S.tid){alert('请先创建课题');return}if(!S.writeMode){/* 首次: 进入 plan 模式, 注入选题判断报告 */S.writeMode=true;S.writeReq=[];var gap='';var gm=S.msgs.filter(function(m){return m.r==='a'&&((m.c||'').indexOf('研究空白')>=0||(m.c||'').indexOf('已有工作概览')>=0)});if(gm.length)gap=String(gm[gm.length-1].c).slice(0,1500);S.writeReq.push('【课题】'+S.q);if(gap)S.writeReq.push('【选题判断报告】'+gap);Ae('s','✍️ **辅助写初稿（plan 模式）**\n\n我会先向你确认初稿的关键细节（研究问题 / 目标期刊用途 / 要纳入的参考文献 / 结构 / 局限），问清后再开始逐节写。你可以直接回答我的问题。')}var hasAns=S.writeReq.some(function(x){return x.indexOf('【你的回答】')>=0});var reqTxt=S.writeReq.join('\n\n');var rule=hasAns?('【规则】\n- 如果用户的回答仍不足以确定初稿（研究问题、目标期刊/用途、要纳入的参考文献、结构、局限），继续提出 3-5 个澄清问题（只问不写），最后一行写：【请回答以上问题后继续】\n- 如果已经清楚，直接逐节写出完整初稿（摘要/引言/相关工作/方法/实验计划/结论），每节论点引用库内文献[编号]，末尾给参考文献列表。写完调用 check_draft_quality 自检一次，对未达标项针对性修订（最多一轮）；修订后无论是否全过都必须交付最终初稿，末尾诚实标注仍未满足的项；不要讨论自检工具本身。'):('【规则】\n- 用户尚未提供任何具体要求。**必须直接向我提出 3-5 个澄清问题**（研究问题、目标期刊/用途、要从知识库选哪些文献作参考文献、结构要求、需要处理的问题与局限）。\n- **禁止调用任何工具**（不要 agent_ask、不要 search、不要查库）——你已有足够信息提问。\n- **不要写初稿**，只提问题，最后单独一行写：【请回答以上问题后继续】');PI('辅助写论文初稿，基于课题知识库。以下是已确认的信息：\n'+reqTxt+'\n\n'+rule,30)}
+async function copyDOIs(){var ds=S.pps.filter(function(p){return p.doi}).map(function(p){return p.doi});if(!ds.length)return;navigator.clipboard.writeText(ds.join("\\n"));alert("\\u5df2\\u590d\\u5236 "+ds.length+" \\u4e2aDOI")}
+function esc(s){var d=document.createElement('div');d.textContent=s||'';return d.innerHTML}
+function escA(s){return(s||'').replace(/\\/g,"\\\\").replace(/'/g,"\\'").replace(/"/g,"&quot;")}
+function isCN(t){t=t||'';for(var i=0;i<t.length;i++){var c=t.charCodeAt(i);if(c>=19968&&c<=40869)return true}return false}
+
+// Expose only the functions needed for HTML onclick handlers
+window.N = NN;
+window.T = TT;
+window.X = XX;
+window.H = HH;
+window.F = FF;
+window.B = BB;
+window.CP = CP;
+window.D = DD;
+window.W = WW;
+window.PV = PV;
+window.togglePapers = togglePapers;
+window.copyDOIs = copyDOIs;
+window.QQ = QQ;
+window.S = S;
+window.renderPapers = renderPapers;
+window.FB = FB;
+window.PI = PI;
+window.TA = TA;
+window.SK = SK;
+window.syncMode = syncMode;
+window.ST = ST;
+window.showStop = showStop;
+window.renderTrace = renderTrace;
+window.TM = TM;
+window.TA_approve = TA_approve;
+window.TA_submit = TA_submit;
+window.showApprovalFeedback = showApprovalFeedback;
+window.EX = EX;
+window.CIT = CIT;
+// ===== 登录/注册 (auth 入口: 补足 JWT 后端的 UI 触达) =====
+function authHeaders(h){h=h||{};var t=localStorage.getItem('pl_token');if(t)h['Authorization']='Bearer '+t;return h}
+function updateUserChip(){var u=localStorage.getItem('pl_user');var el=document.getElementById('userChip'),lb=document.getElementById('userLabel');if(!el)return;if(u){if(lb)lb.textContent=u;el.title='退出登录';el.onclick=logout}else{if(lb)lb.textContent='登录';el.title='登录/注册';el.onclick=showLogin}}
+function showLogin(){var m=document.getElementById('modal');if(m)m.style.display='flex';var i=document.getElementById('lgUser');if(i)i.focus()}
+function closeModal(){var m=document.getElementById('modal');if(m)m.style.display='none'}
+async function doLogin(){var u=document.getElementById('lgUser').value.trim(),p=document.getElementById('lgPass').value;if(!u||!p)return alert('请输入用户名和密码');try{var r=await fetch(A+'/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});var d=await r.json();if(!r.ok)return alert(d.detail||'登录失败');localStorage.setItem('pl_token',d.access_token);localStorage.setItem('pl_user',d.user||u);closeModal();updateUserChip();L()}catch(e){alert('登录失败: '+e.message)}}
+async function doRegister(){var u=document.getElementById('lgUser').value.trim(),p=document.getElementById('lgPass').value;if(!u||!p)return alert('请输入用户名和密码');try{var r=await fetch(A+'/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});var d=await r.json();if(!r.ok)return alert(d.detail||'注册失败');localStorage.setItem('pl_token',d.access_token);localStorage.setItem('pl_user',d.user||u);closeModal();updateUserChip();L()}catch(e){alert('注册失败: '+e.message)}}
+function logout(){localStorage.removeItem('pl_token');localStorage.removeItem('pl_user');updateUserChip();L()}
+// ===== Zotero 导入入口 (补足本地 Zotero 桥的 UI 触达) =====
+async function showZotero(){var m=document.getElementById('zmodal'),box=document.getElementById('zlist');if(!m)return;m.style.display='flex';box.innerHTML='加载中…';try{var r=await fetch(A+'/zotero/scan');var d=await r.json();if(!r.ok||!d.ok)throw new Error(d.detail||d.error||'scan 失败');if(!d.papers||!d.papers.length){box.innerHTML='<div style="color:var(--muted);padding:12px 0">未检测到本地 Zotero 期刊文献（扫描 ~/Zotero/zotero.sqlite）。<br>请先在 Zotero 建立文献库再试。</div>';return}box.innerHTML=d.papers.map(function(p,i){return '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px dashed var(--border)"><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(p.title||'条目'+(i+1))+(p.year?' <span style="color:var(--muted)">('+esc(p.year)+')</span>':'')+'</span><button class="chip" onclick="importZotero(\''+escA(p.zotero_key)+'\')">导入</button></div>'}).join('')}catch(e){box.innerHTML='<div style="color:var(--red,#e5484d)">Zotero 读取失败: '+esc(e.message)+'</div>'}}
+async function importZotero(key){try{var s=null;try{s=await(await fetch(A+'/zotero/scan')).json()}catch(e){}var found=s&&s.papers?(s.papers.find(function(p){return p.zotero_key===key})||{}):{};var meta={title:found.title||'',DOI:found.doi||'',year:found.year||'',collections:[]};var r=await fetch(A+'/zotero/import',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify(meta)});var d=await r.json();if(!r.ok||!d.ok)throw new Error(d.detail||d.error||'导入失败');alert('已导入: '+(d.title||'')+(d.tip?'\n'+d.tip:''));document.getElementById('zmodal').style.display='none';S.tid=d.topic_id;S.q=d.title;await L()}catch(e){alert('导入失败: '+e.message)}}
+function MD(m){S.mode=m;var sb=document.getElementById('suggestBar');if(sb&&m==='gap')sb.style.display='none';var modes=[['modeGap','gap'],['modeFind','find'],['modeWrite','write'],['modeTeam','team']];for(var i=0;i<modes.length;i++){var b=document.getElementById(modes[i][0]);if(b){if(m===modes[i][1]){b.style.background='var(--brand)';b.style.color='#fff';b.style.borderColor='var(--brand)';b.style.fontWeight='600'}else{b.style.background='';b.style.color='';b.style.borderColor='transparent';b.style.fontWeight=''}}}}
+function refreshQuota(){try{fetch(A+'/quota',{headers:authHeaders()}).then(function(r){return r.json()}).then(function(d){var el=document.getElementById('quotaChip'),lb=document.getElementById('quotaLabel');if(!el)return;var bal=d.deepseek_balance;if(bal!==null&&bal!==undefined){if(lb)lb.textContent='¥'+bal;el.style.color='';el.title='DeepSeek 账户余额 ¥'+bal;el.onclick=null}else{if(lb)lb.textContent='余额 --';el.title='DeepSeek 账户余额'}}).catch(function(){})}catch(e){}}
+// 阶段感知主动建议: 预判用户在选题→初稿旅程的位置, 递上下一步
+function refreshSuggest(){var sb=document.getElementById('suggestBar'),st=document.getElementById('suggestText'),go=document.getElementById('suggestGo');if(!sb||!st)return;if(!S.tid){sb.style.display='none';return}fetch(A+'/suggest?topic_id='+(S.tid||''),{headers:authHeaders()}).then(function(r){return r.json()}).then(function(d){if(d.suggest){S._suggestAction=d.action;S._suggestStage=d.stage;st.textContent=d.suggest;sb.style.display='block';if(go){go.style.display='inline-block'}}else{sb.style.display='none';if(go)go.style.display='none'}}).catch(function(){sb.style.display='none'})}
+// 一键执行建议的动作 (并记录接受 → 自我进化优化路由)
+function doSuggest(a){if(!a)return;try{fetch(A+'/suggest/accept',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({stage:S._suggestStage,action:a})}).catch(function(){})}catch(e){}var el=document.getElementById('ui');if(a==='new_topic'){if(el)el.focus()}else if(a==='search'){if(S.tid){SR(S.q,(S.strategy||{}).keywords_en,(S.strategy||{}).keywords_cn)}}else if(a==='build_kb'){var oa=S.pps&&S.pps.filter(function(p){return p.pdf_url});if(oa&&oa.length){BB()}else{alert('暂无可下载 OA 论文，请拖拽 PDF 上传')}}else if(a==='ask'){if(el)el.focus()}else if(a==='write'){if(S.tid){PI('请基于当前课题「'+S.q+'」写一篇论文初稿：摘要/引言/相关工作/方法/结论，带引用并声明局限')}}}
+window.authHeaders=authHeaders;window.updateUserChip=updateUserChip;window.showLogin=showLogin;window.closeModal=closeModal;window.doLogin=doLogin;window.doRegister=doRegister;window.logout=logout;window.showZotero=showZotero;window.importZotero=importZotero;window.MD=MD;window.refreshQuota=refreshQuota;window.refreshSuggest=refreshSuggest;window.doSuggest=doSuggest;window.nextSearch=nextSearch;window.nextUpload=nextUpload;window.editMsg=editMsg;window.saveEdit=saveEdit;window.cancelEdit=cancelEdit;window.downloadZip=downloadZip;window.writeDraft=writeDraft;window.showSubs=showSubs;window.unsub=unsub;window.checkAuth=checkAuth;
+S.mode='gap';MD('gap');refreshQuota();setInterval(refreshQuota,30000);refreshSuggest();checkUpdates();
+updateUserChip();
+})();
+</script>
+<div id="modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:999;align-items:center;justify-content:center">
+  <div style="background:var(--bg);border:1px solid var(--border);border-radius:14px;padding:22px;width:320px;max-width:90vw">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"><b>登录 / 注册</b><button onclick="closeModal()" style="border:none;background:none;cursor:pointer;font-size:16px">✕</button></div>
+    <input id="lgUser" placeholder="用户名 (2-32字符)" style="width:100%;box-sizing:border-box;margin-bottom:8px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text)"/>
+    <input id="lgPass" type="password" placeholder="密码 (至少6位)" style="width:100%;box-sizing:border-box;margin-bottom:12px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text)"/>
+    <div style="display:flex;gap:8px">
+      <button onclick="doLogin()" style="flex:1;padding:8px;background:var(--brand);color:#fff;border:none;border-radius:8px;cursor:pointer">登录</button>
+      <button onclick="doRegister()" style="flex:1;padding:8px;background:var(--border);color:var(--text);border:none;border-radius:8px;cursor:pointer">注册</button>
+    </div>
+    <div style="margin-top:10px;font-size:11px;color:var(--muted)">匿名使用不受影响。登录后新建课题归你名下，历史匿名课题仍共享可见。</div>
+  </div>
+</div>
+<div id="zmodal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:999;align-items:center;justify-content:center">
+  <div style="background:var(--bg);border:1px solid var(--border);border-radius:14px;padding:22px;width:460px;max-width:92vw;max-height:72vh;overflow:auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"><b>从 Zotero 导入</b><button onclick="document.getElementById('zmodal').style.display='none'" style="border:none;background:none;cursor:pointer;font-size:16px">✕</button></div>
+    <div id="zlist" style="font-size:12px"></div>
+  </div>
+</div>
+<div id="subModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:999;align-items:center;justify-content:center">
+  <div style="background:var(--bg);border:1px solid var(--border);border-radius:14px;padding:22px;width:420px;max-width:92vw;max-height:72vh;overflow:auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"><b>📡 订阅管理</b><button onclick="document.getElementById('subModal').style.display='none'" style="border:none;background:none;cursor:pointer;font-size:16px">✕</button></div>
+    <div id="subList" style="font-size:12px"></div>
+  </div>
+</div>
+</body>
+</html>

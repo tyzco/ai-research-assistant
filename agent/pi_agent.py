@@ -22,6 +22,7 @@ from typing import Optional
 
 from config import (
     AGENT_MAX_TOKENS,
+    AGENT_MAX_STEPS,
     AGENT_PLAN_ENABLED,
     AGENT_PLAN_MIN_CHARS,
     AGENT_REFLEXION_ENABLED,
@@ -68,7 +69,7 @@ class PiAgent:
 
     def __init__(
         self,
-        max_steps: int = 20,
+        max_steps: int = AGENT_MAX_STEPS,
         max_time_seconds: int = 300,
         goal: str = "",
         enable_tool_check: bool = True,

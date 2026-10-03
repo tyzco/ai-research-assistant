@@ -251,5 +251,6 @@
       "is_cn": true
     }
   ],
-  "table": "papers_16bd735b3239"
+  "table": "papers_85c9bdccc589",
+  "_note": "原表 papers_16bd735b3239 已不存在(其 topic 已删); 改指向现存表 papers_85c9bdccc589(936 行)"
 }

@@ -23,6 +23,8 @@ os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 logging.basicConfig(level=logging.WARNING)
 
+logger = logging.getLogger(__name__)
+
 from eval_common import load_eval_qa  # noqa: E402
 from evaluate_rag_standards import _judge_llm, _parse_score  # noqa: E402
 
@@ -57,14 +59,20 @@ def _judge_support(claim: str, contexts: list[str]) -> str:
 
 
 def _retrieve_kb(table_name: str, claim: str, k: int = 3) -> list[dict]:
-    """用论断本身检索全库, 判断信息是否在库里 (检索层没接住 vs 库外知识)。"""
+    """用论断本身检索全库, 判断信息是否在库里 (检索层没接住 vs 库外知识)。
+
+    用 `search_sync`: 本函数是同步的, 而 `search` 是 `async def` —— 调它只会拿到一个
+    coroutine 对象, 解包即 TypeError, 又被下面的 except 吞掉, 导致本函数**永远返回 []**
+    (grounding 因此永不触发)。旁边本就有同步版 `search_sync`, 之前用错了。
+    """
     from hybrid_retriever import AdaptiveHybridRetriever
 
     hr = AdaptiveHybridRetriever(table_name)
     try:
-        res, _ = hr.search(claim, top_k=k)
+        res, _ = hr.search_sync(claim, top_k=k)
         return res
-    except Exception:
+    except Exception as e:
+        logger.warning(f"_retrieve_kb failed: {e}")
         return []
 
 

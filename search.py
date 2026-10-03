@@ -17,13 +17,19 @@ from config import (
     SEMANTIC_SCHOLAR_API_KEY,
     SOURCE_WEIGHTS,
     SPAM_KEYWORDS,
+    MAX_SEARCH_RESULTS,
     SEARCH_LIMIT_ARXIV,
+    SEARCH_LIMIT_CORE,
     SEARCH_LIMIT_CROSSREF,
     SEARCH_LIMIT_DOAJ,
-    SEARCH_LIMIT_OPENALEX,
-    SEARCH_LIMIT_S2,
-    SEARCH_LIMIT_CORE,
     SEARCH_LIMIT_EPMC,
+    SEARCH_LIMIT_OPENALEX,
+    SEARCH_LIMIT_OPENALEX_CN,
+    SEARCH_LIMIT_PUBMED,
+    SEARCH_LIMIT_PWC,
+    SEARCH_LIMIT_S2,
+    SEARCH_LIMIT_UNPAYWALL,
+    SEARCH_TIMEOUT_UNPAYWALL,
 )
 from models import PaperMeta
 
@@ -844,7 +850,7 @@ async def _search_openalex_cn(keywords: list[str]) -> list[PaperMeta]:
                     OPENALEX_URL,
                     params={
                         "search": kw,
-                        "per_page": SEARCH_LIMIT_OPENALEX,
+                        "per_page": SEARCH_LIMIT_OPENALEX_CN,
                         "sort": "cited_by_count:desc",
                         "filter": "language:zh,has_doi:true",
                     },
@@ -1024,13 +1030,13 @@ async def _enrich_abstracts(papers: list[PaperMeta]) -> int:
 
 
 async def _enrich_via_unpaywall(papers: list[PaperMeta]) -> int:
-    """对无 pdf_url 但有 DOI 的论文，并行调 Unpaywall 查合法免费 PDF（限5篇,3s超时）。
-    免费 API，每分钟 100 次，无需注册。"""
-    candidates = [p for p in papers if not p.pdf_url and p.doi][:15]
+    """对无 pdf_url 但有 DOI 的论文，并行调 Unpaywall 查合法免费 PDF。
+    免费 API，每分钟 100 次，无需注册。限额/超时见 SEARCH_LIMIT_UNPAYWALL / SEARCH_TIMEOUT_UNPAYWALL。"""
+    candidates = [p for p in papers if not p.pdf_url and p.doi][:SEARCH_LIMIT_UNPAYWALL]
     if not candidates:
         return 0
 
-    async with httpx.AsyncClient(timeout=5.0) as client:
+    async with httpx.AsyncClient(timeout=SEARCH_TIMEOUT_UNPAYWALL) as client:
 
         async def _one(p):
             try:
@@ -1069,7 +1075,7 @@ async def _search_core(keywords: list[str]) -> list[PaperMeta]:
             try:
                 resp = await client.get(
                     CORE_URL,
-                    params={"q": kw, "limit": SEARCH_LIMIT_CROSSREF, "scroll": "false"},
+                    params={"q": kw, "limit": SEARCH_LIMIT_CORE, "scroll": "false"},
                     headers={"User-Agent": "AI-Research-Assistant/1.0"},
                 )
                 if resp.status_code != 200:
@@ -1108,7 +1114,11 @@ async def _search_crossref(keywords: list[str]) -> list[PaperMeta]:
             try:
                 resp = await client.get(
                     CROSSREF_URL,
-                    params={"query": kw, "rows": SEARCH_LIMIT_CORE, "filter": "type:journal-article"},
+                    params={
+                        "query": kw,
+                        "rows": SEARCH_LIMIT_CROSSREF,
+                        "filter": "type:journal-article",
+                    },
                     headers={
                         "User-Agent": "AI-Research-Assistant/1.0 (mailto:research@example.com)"
                     },
@@ -1206,7 +1216,7 @@ async def _search_pubmed(keywords: list[str]) -> list[PaperMeta]:
                     params={
                         "db": "pubmed",
                         "term": kw,
-                        "retmax": 15,
+                        "retmax": SEARCH_LIMIT_PUBMED,
                         "retmode": "json",
                     },
                 )
@@ -1265,7 +1275,7 @@ async def _search_pwc(keywords: list[str]) -> list[PaperMeta]:
             try:
                 resp = await client.get(
                     PWC_URL,
-                    params={"q": kw, "items_per_page": SEARCH_LIMIT_DOAJ},
+                    params={"q": kw, "items_per_page": SEARCH_LIMIT_PWC},
                 )
                 if resp.status_code != 200:
                     continue
@@ -1341,27 +1351,42 @@ def _paper_dedup_key(p) -> str:
     return (p.title or "").lower().strip()[:60]
 
 
-async def fetch_relevant_papers(query: str, target: int = 100, min_keep: int = 50) -> list:
+async def fetch_relevant_papers(
+    query: str,
+    target: int = MAX_SEARCH_RESULTS,
+    min_keep: int = None,
+    keywords_en: list | None = None,
+    keywords_cn: list | None = None,
+) -> list:
     """保证建库数量: 检索最相关的 target 篇论文 (默认 100), 冷门课题自动拓宽关键词。
 
     策略:
       1. 首轮: 生成策略关键词 + 联想词 → search_papers_for_topic
+         (调用方已给出 keywords_en/cn 时直接复用, 省掉一次策略 LLM 调用)
       2. 若 < target: 用联想词 (related_en/cn) 作为补充查询逐个再搜, 合并去重
       3. 相关性重排 (_rerank_by_relevance), 可下载 (pdf_url) 的优先
       4. 截断到 target 篇; 但若可下载论文不足 min_keep, 用无 PDF 但相关的补齐
 
     返回按相关性排序的 PaperMeta 列表 (可下载的排前面)。
     """
+    min_keep = min_keep if min_keep is not None else max(1, target // 2)
     from models import PaperMeta  # noqa: F401
 
-    try:
-        strategy = await generate_search_strategy(query)
-        kw_en = (strategy.get("keywords_en") or [])[:3]
-        kw_cn = (strategy.get("keywords_cn") or [])[:4]
-        rel_en = strategy.get("related_terms_en") or []
-        rel_cn = strategy.get("related_terms_cn") or []
-    except Exception:
-        kw_en, kw_cn, rel_en, rel_cn = [], [], [], []
+    strategy: dict = {}
+    kw_en = [k for k in (keywords_en or []) if k][:3]
+    kw_cn = [k for k in (keywords_cn or []) if k][:4]
+    rel_en: list = []
+    rel_cn: list = []
+    # 调用方已给关键词 → 跳过策略生成 (此前该参数被前端下发但服务端丢弃, 白跑一次 LLM)
+    if not (kw_en or kw_cn):
+        try:
+            strategy = await generate_search_strategy(query)
+            kw_en = (strategy.get("keywords_en") or [])[:3]
+            kw_cn = (strategy.get("keywords_cn") or [])[:4]
+        except Exception:
+            kw_en, kw_cn = [], []
+    rel_en = strategy.get("related_terms_en") or []
+    rel_cn = strategy.get("related_terms_cn") or []
 
     # 首轮: 主查询
     try:

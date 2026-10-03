@@ -115,7 +115,13 @@ async def build_knowledge_base(
     batch_rows: list[dict] = []
 
     for p in fulltext_papers:
-        for chunk_idx, chunk_text in enumerate(fulltext_chunks[p.paper_id]):
+        for chunk_idx, _entry in enumerate(fulltext_chunks[p.paper_id]):
+            # 兼容两种形态: str (旧调用方, 无页码) / {"text", "page_num"} (chunk_text_paged)
+            if isinstance(_entry, dict):
+                chunk_text = _entry.get("text", "")
+                page_num = int(_entry.get("page_num") or 0)
+            else:
+                chunk_text, page_num = _entry, 0
             batch_texts.append(chunk_text)
             batch_rows.append(
                 {
@@ -129,7 +135,7 @@ async def build_knowledge_base(
                     "is_fulltext": True,
                     "is_image": False,
                     "image_path": "",
-                    "page_number": 0,
+                    "page_number": page_num,  # 真实页码 (此前恒 0 → 引用页码全是编的)
                     "chunk_index": chunk_idx + 1,  # 0=abstract, 1+=fulltext
                     "text": chunk_text,
                     "vector": [],

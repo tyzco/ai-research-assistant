@@ -48,7 +48,7 @@ from config import (
     PROJECT_ROOT,
     RATE_LIMIT_REQUESTS_PER_SEC,
 )
-from downloader import chunk_text, parse_pdf
+from downloader import assess_text_quality, chunk_text, chunk_text_paged, parse_pdf
 from knowledge_base import build_knowledge_base, store_image_descriptions
 from models import AskRequest, CreateTopicRequest, PaperMeta, TopicStatus
 from monitor import metrics, sanitize_input
@@ -1114,19 +1114,30 @@ async def api_download_bulk(request: Request, user_id: str = Depends(get_current
         papers: list[PaperMeta] = []
         fulltext_chunks: dict[str, list[str]] = {}
         all_images: list[dict] = []
+        rejected: list[dict] = []  # 质量闸门拦下的文件 (明确告知, 不静默丢弃)
 
         for fname, content in pdf_contents:
             try:
                 state.progress.current += 1  # 进度: 逐篇解析/索引
                 # DeepSeek 审查 #13: CPU 密集解析放入线程池
                 result = await asyncio.to_thread(parse_pdf, content, fname)
+                # 解析质量闸门: 垃圾解析结果不入库 (见 downloader.assess_text_quality)
+                _q = assess_text_quality(result)
+                if not _q["ok"]:
+                    logger.warning(f"Ingest rejected (quality): {fname} — {_q['reason']}")
+                    rejected.append({"file": fname, "reason": _q["reason"]})
+                    continue
                 paper_id = uuid.uuid4().hex[:16]
                 papers.append(
                     PaperMeta(
                         paper_id=paper_id, title=fname.replace(".pdf", ""), is_oa=True
                     )
                 )
-                chunks = await asyncio.to_thread(chunk_text, result["full_text"])
+                chunks = await asyncio.to_thread(
+                    chunk_text_paged,
+                    result["full_text"],
+                    result.get("page_offsets") or [],
+                )
                 if chunks:
                     fulltext_chunks[paper_id] = chunks
                 for img in result["images"]:
@@ -1160,6 +1171,7 @@ async def api_download_bulk(request: Request, user_id: str = Depends(get_current
             imported_chunks = sum(len(v) for v in fulltext_chunks.values())
 
         imported_images = len(all_images)
+        state.progress.rejected = len(rejected)  # 质量闸门拦截数 (轮询可见)
 
         state.lancedb_table = table_name
         state.stats.uploaded_papers = imported_papers
@@ -1199,6 +1211,7 @@ async def api_upload_pdf(
     papers: list[PaperMeta] = []
     fulltext_chunks: dict[str, list[str]] = {}
     all_images: list[dict] = []
+    rejected: list[dict] = []  # 质量闸门拦下的文件 (明确告知用户, 不静默丢弃)
 
     import asyncio
 
@@ -1215,13 +1228,21 @@ async def api_upload_pdf(
             continue
         # DeepSeek 审查 #13: CPU 密集解析放入线程池, 不阻塞事件循环
         result = await asyncio.to_thread(parse_pdf, pdf_bytes, file.filename)
+        # 解析质量闸门: 扫描件/字体未嵌入的 PDF 读出来是垃圾, 入库只会污染检索
+        _q = assess_text_quality(result)
+        if not _q["ok"]:
+            logger.warning(f"Upload rejected (quality): {file.filename} — {_q['reason']}")
+            rejected.append({"file": file.filename, "reason": _q["reason"]})
+            continue
         paper_id = uuid.uuid4().hex[:16]
         papers.append(
             PaperMeta(
                 paper_id=paper_id, title=file.filename.replace(".pdf", ""), is_oa=True
             )
         )
-        chunks = await asyncio.to_thread(chunk_text, result["full_text"])
+        chunks = await asyncio.to_thread(
+            chunk_text_paged, result["full_text"], result.get("page_offsets") or []
+        )
         if chunks:
             fulltext_chunks[paper_id] = chunks
         for img in result["images"]:
@@ -1258,6 +1279,7 @@ async def api_upload_pdf(
         "papers": len(papers),
         "chunks": sum(len(v) for v in fulltext_chunks.values()),
         "images": len(all_images),
+        "rejected": rejected,  # 质量闸门拦下的文件及原因 (前端提示用户, 不静默丢)
     }
 
 
@@ -1309,9 +1331,15 @@ async def api_topic_status(topic_id: str, user_id: str = Depends(get_current_use
     cn_papers = getattr(progress, "cn_papers", 0) if progress else 0
     en_papers = getattr(progress, "en_papers", 0) if progress else 0
     dl_failed = getattr(progress, "dl_failed", 0) if progress else 0
+    rejected_n = getattr(progress, "rejected", 0) if progress else 0
     return {
         "status": "ready" if ready else "building",
-        "progress": f"{uploaded} 篇论文, {total_images} 张图片" if ready else state.step,
+        "progress": (
+            f"{uploaded} 篇论文, {total_images} 张图片"
+            + (f"; {rejected_n} 篇因解析质量不达标被拦截" if rejected_n else "")
+            if ready
+            else state.step
+        ),
         "step": state.step,
         "current": current,
         "total": dl_total,

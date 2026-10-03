@@ -54,6 +54,7 @@ class TopicProgress(BaseModel):
     cn_papers: int = 0  # 中文论文数
     en_papers: int = 0  # 英文论文数
     dl_failed: int = 0  # 下载失败数
+    rejected: int = 0  # 解析质量闸门拦下的文件数 (扫描件/乱码, 未入库)
 
 
 class TopicStats(BaseModel):

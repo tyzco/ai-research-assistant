@@ -114,6 +114,17 @@ LANCEDB_DIR = PROJECT_ROOT / os.getenv("LANCEDB_DIR", "data/lancedb_data")
 IMAGE_DIR = PROJECT_ROOT / os.getenv("IMAGE_DIR", "data/images")
 
 # ===================================================================
+# 文档解析质量闸门 (拦截"解析出来是垃圾"的 PDF, 不污染知识库)
+# ===================================================================
+# 实测 43 篇 arXiv 论文: 每页中位 3351 字 (最小 668), 乱码率中位 0.01% (最大 0.83%)。
+# 阈值取得远离正常分布 → 只拦真坏的 (扫描件/字体未嵌入), 正常论文零误杀。
+DOC_QUALITY_GATE_ENABLED = _env_bool("DOC_QUALITY_GATE_ENABLED", True)
+DOC_QUALITY_MIN_CHARS_PER_PAGE = _env("DOC_QUALITY_MIN_CHARS_PER_PAGE", 200, int)
+DOC_QUALITY_MAX_GARBAGE_RATIO = _env("DOC_QUALITY_MAX_GARBAGE_RATIO", 0.15, float)
+# 字符单一度: 最高频字符占比。真实论文最大 12.4%, CID 乱码可达 90%+ → 50% 留 4 倍余量
+DOC_QUALITY_MAX_DOMINATION_RATIO = _env("DOC_QUALITY_MAX_DOMINATION_RATIO", 0.50, float)
+
+# ===================================================================
 # Retrieval Limits
 # ===================================================================
 # 分块大小 (字符): 论文长, 2048 太小 → 检索到的段落覆盖不全 (答案跨块会丢)。

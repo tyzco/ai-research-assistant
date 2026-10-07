@@ -48,7 +48,14 @@ from config import (
     PROJECT_ROOT,
     RATE_LIMIT_REQUESTS_PER_SEC,
 )
-from downloader import assess_text_quality, chunk_text, chunk_text_paged, parse_pdf
+from downloader import (
+    assess_text_quality,
+    chunk_text,
+    chunk_text_paged,
+    chunk_text_sectioned,
+    parse_docx,
+    parse_pdf,
+)
 from knowledge_base import build_knowledge_base, store_image_descriptions
 from models import AskRequest, CreateTopicRequest, PaperMeta, TopicStatus
 from monitor import metrics, sanitize_input
@@ -1216,35 +1223,61 @@ async def api_upload_pdf(
     import asyncio
 
     for file in files:
-        if not file.filename or not file.filename.endswith(".pdf"):
+        fname = (file.filename or "").lower()
+        is_pdf = fname.endswith(".pdf")
+        is_docx = fname.endswith(".docx")
+        if not (is_pdf or is_docx):
+            rejected.append(
+                {"file": file.filename, "reason": "仅支持 .pdf / .docx"}
+            )
             continue
-        pdf_bytes = await file.read()
-        # DeepSeek 审查 #15: 大小上限 + PDF 魔数校验 (真 PDF 以 %PDF 开头)
-        if len(pdf_bytes) > MAX_UPLOAD_BYTES:
+        raw_bytes = await file.read()
+        # DeepSeek 审查 #15: 大小上限 + 魔数校验
+        if len(raw_bytes) > MAX_UPLOAD_BYTES:
             logger.warning(f"Upload skipped (too large): {file.filename}")
-            continue
-        if not pdf_bytes[:1024].lstrip().startswith(b"%PDF"):
-            logger.warning(f"Upload skipped (not a valid PDF): {file.filename}")
+            rejected.append({"file": file.filename, "reason": "文件过大"})
             continue
         # DeepSeek 审查 #13: CPU 密集解析放入线程池, 不阻塞事件循环
-        result = await asyncio.to_thread(parse_pdf, pdf_bytes, file.filename)
-        # 解析质量闸门: 扫描件/字体未嵌入的 PDF 读出来是垃圾, 入库只会污染检索
+        if is_docx:
+            # DOCX 有显式标题层级 → 结构感知切分, 每块绑定所属章节 (PDF 做不到)
+            if not raw_bytes[:4].startswith(b"PK"):
+                logger.warning(f"Upload skipped (not a valid DOCX): {file.filename}")
+                rejected.append({"file": file.filename, "reason": "不是有效的 .docx (zip) 文件"})
+                continue
+            result = await asyncio.to_thread(parse_docx, raw_bytes, file.filename)
+            result["images"] = []
+            chunks = await asyncio.to_thread(
+                chunk_text_sectioned,
+                result["full_text"],
+                result.get("sections") or [],
+            )
+        else:
+            if not raw_bytes[:1024].lstrip().startswith(b"%PDF"):
+                logger.warning(f"Upload skipped (not a valid PDF): {file.filename}")
+                rejected.append({"file": file.filename, "reason": "不是有效的 PDF 文件"})
+                continue
+            result = await asyncio.to_thread(parse_pdf, raw_bytes, file.filename)
+            chunks = await asyncio.to_thread(
+                chunk_text_paged, result["full_text"], result.get("page_offsets") or []
+            )
+
+        # 解析质量闸门: 扫描件/字体未嵌入/空文档读出来是垃圾, 入库只会污染检索
         _q = assess_text_quality(result)
-        if not _q["ok"]:
-            logger.warning(f"Upload rejected (quality): {file.filename} — {_q['reason']}")
-            rejected.append({"file": file.filename, "reason": _q["reason"]})
+        if not _q["ok"] or not chunks:
+            reason = _q["reason"] or "无可索引文本"
+            logger.warning(f"Upload rejected (quality): {file.filename} — {reason}")
+            rejected.append({"file": file.filename, "reason": reason})
             continue
+
         paper_id = uuid.uuid4().hex[:16]
         papers.append(
             PaperMeta(
-                paper_id=paper_id, title=file.filename.replace(".pdf", ""), is_oa=True
+                paper_id=paper_id,
+                title=Path(file.filename).stem,
+                is_oa=True,
             )
         )
-        chunks = await asyncio.to_thread(
-            chunk_text_paged, result["full_text"], result.get("page_offsets") or []
-        )
-        if chunks:
-            fulltext_chunks[paper_id] = chunks
+        fulltext_chunks[paper_id] = chunks
         for img in result["images"]:
             img["paper_id"] = paper_id
         all_images.extend(result["images"])

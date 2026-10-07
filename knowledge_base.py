@@ -24,7 +24,15 @@ from embedder import _embed_texts_sync
 
 def _get_table(db, table_name: str):
     try:
-        return db.open_table(table_name)
+        t = db.open_table(table_name)
+        # 存量库迁移 (幂等): 老表无 section 列 → 补上, 否则带 section 的行写不进去
+        if "section" not in {f.name for f in t.schema}:
+            try:
+                t.add_columns({"section": "''"})
+                logger.info(f"Migrated {table_name}: added column 'section'")
+            except Exception as e:
+                logger.warning(f"Add column 'section' on {table_name} failed: {e}")
+        return t
     except ValueError as e:
         # LanceDB 表不存在抛 ValueError (DeepSeek 审查 #1: 精确捕获, 其他异常向上抛避免数据丢失)
         if "not found" not in str(e).lower():
@@ -46,6 +54,8 @@ def _get_table(db, table_name: str):
                     pa.field("image_path", pa.string()),
                     pa.field("page_number", pa.int32()),
                     pa.field("chunk_index", pa.int32()),
+                    # 章节定位: DOCX 有显式标题层级可绑定; PDF 无 (留空)
+                    pa.field("section", pa.string()),
                     pa.field("text", pa.string()),
                     pa.field("vector", pa.list_(pa.float32(), dim)),
                 ]
@@ -96,6 +106,7 @@ async def build_knowledge_base(
                     "image_path": "",
                     "page_number": 0,
                     "chunk_index": 0,
+                    "section": "",
                     "text": p.abstract,
                     "vector": [float(v) for v in vec],
                 }
@@ -116,12 +127,13 @@ async def build_knowledge_base(
 
     for p in fulltext_papers:
         for chunk_idx, _entry in enumerate(fulltext_chunks[p.paper_id]):
-            # 兼容两种形态: str (旧调用方, 无页码) / {"text", "page_num"} (chunk_text_paged)
+            # 兼容两种形态: str (旧调用方, 无页码) / {"text","page_num"[,"section"]}
             if isinstance(_entry, dict):
                 chunk_text = _entry.get("text", "")
                 page_num = int(_entry.get("page_num") or 0)
+                section = _entry.get("section") or ""
             else:
-                chunk_text, page_num = _entry, 0
+                chunk_text, page_num, section = _entry, 0, ""
             batch_texts.append(chunk_text)
             batch_rows.append(
                 {
@@ -137,6 +149,7 @@ async def build_knowledge_base(
                     "image_path": "",
                     "page_number": page_num,  # 真实页码 (此前恒 0 → 引用页码全是编的)
                     "chunk_index": chunk_idx + 1,  # 0=abstract, 1+=fulltext
+                    "section": section,  # 所属章节 (DOCX 可绑定; PDF 为空)
                     "text": chunk_text,
                     "vector": [],
                 }
@@ -207,6 +220,7 @@ def store_image_descriptions(
         r.setdefault("abstract", "")
         r.setdefault("doi", "")
         r.setdefault("page_number", 0)
+        r.setdefault("section", "")
         rows.append(r)
     table.add(rows)
 

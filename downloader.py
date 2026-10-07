@@ -89,6 +89,143 @@ def page_text_two_column(page) -> str | None:
     return "\n".join((b[4] or "").strip() for b in blocks)
 
 
+def _docx_table_to_text(table) -> str:
+    """把 Word 表格转成 Markdown 管道表 —— 保留行列结构, 不被切碎成散句。"""
+    rows = []
+    for row in table.rows:
+        cells = [" ".join(c.text.split()) for c in row.cells]
+        if any(cells):
+            rows.append("| " + " | ".join(cells) + " |")
+    if not rows:
+        return ""
+    header_sep = "| " + " | ".join("---" for _ in table.rows[0].cells) + " |"
+    return "\n".join([rows[0], header_sep] + rows[1:])
+
+
+def parse_docx(docx_bytes: bytes, name: str) -> dict:
+    """解析 .docx: 按标题层级切分, 每个段落绑定其所属标题路径。
+
+    与 PDF 的根本差异: Word 的标题层级 (Heading 1/2/3) 是**显式结构**, 不需要靠
+    字号/加粗去猜。因此这里能做真正的结构感知切分 —— 每个 chunk 都知道自己属于
+    「2.1 实验设置」, 检索命中后可以给出可核验的章节定位 (PDF 那条路做不到)。
+
+    返回 {
+        "full_text": str,
+        "sections": [{"heading": str, "level": int, "start": int, "end": int}],
+        "tables": int,
+        "quality": ...  (由 assess_text_quality 复用 pages 字段)
+    }
+    """
+    import io
+
+    import docx  # python-docx
+
+    out = {"full_text": "", "sections": [], "tables": 0, "pages": []}
+    try:
+        d = docx.Document(io.BytesIO(docx_bytes))
+    except Exception as e:
+        logger.warning(f"Failed to open DOCX '{name}': {e}")
+        return out
+
+    parts: list[str] = []
+    stack: list[tuple[int, str]] = []  # (level, title) 当前标题路径
+    cur_title, cur_start, cur_level = "（正文）", 0, 1
+    table_count = 0
+
+    def flush(end_pos: int, next_title: str, next_level: int = 1):
+        """收尾当前小节 (标题路径变化时调用)。"""
+        nonlocal cur_title, cur_start, cur_level
+        if end_pos > cur_start:
+            out["sections"].append(
+                {"heading": cur_title, "level": cur_level,
+                 "start": cur_start, "end": end_pos}
+            )
+        cur_title, cur_start, cur_level = next_title, end_pos, next_level
+
+    def heading_text(p):
+        """取段落文本; 标题段落返回 (层级, 文本), 否则 None。"""
+        style = (p.style.name or "") if p.style is not None else ""
+        if style.startswith("Heading"):
+            try:
+                lvl = int(style.split()[-1])
+            except (ValueError, IndexError):
+                lvl = 1
+            t = p.text.strip()
+            return (lvl, t) if t else None
+        if style in ("Title", "Subtitle") and p.text.strip():
+            return (0, p.text.strip())
+        return None
+
+    # 按**文档顺序**遍历 body: d.paragraphs / d.tables 是两个独立集合,
+    # 分开遍历会把所有表格挪到文末 (实测结果表被排到"结论"之后, 章节归属全错)。
+    from docx.table import Table as _DocxTable
+    from docx.text.paragraph import Paragraph as _DocxParagraph
+
+    for child in d.element.body.iterchildren():
+        tag = child.tag.rsplit("}", 1)[-1]
+        if tag == "p":
+            p = _DocxParagraph(child, d)
+            h = heading_text(p)
+            if h is not None:
+                lvl, title = h
+                # 维护标题路径: 同级或更高级 → 弹栈
+                while stack and stack[-1][0] >= lvl:
+                    stack.pop()
+                stack.append((lvl, title))
+                path = " > ".join(t for _, t in stack)
+                pos = len("".join(parts))
+                flush(pos, path, lvl or 1)
+                parts.append(f"{'#' * max(1, lvl)} {title}\n")
+                continue
+            txt = p.text.strip()
+            if txt:
+                parts.append(txt + "\n")
+        elif tag == "tbl":
+            md = _docx_table_to_text(_DocxTable(child, d))
+            if md:
+                table_count += 1
+                # 表格归属当前章节 (不另起节), 这样引用它的章节定位才是对的;
+                # 表格自身仍在文档原位, 不被挪到文末
+                parts.append(md + "\n")
+
+    flush(len("".join(parts)), "（结尾）", 1)
+
+    out["full_text"] = "".join(parts)
+    out["tables"] = table_count
+    # 复用 assess_text_quality: 它读 pages 算每页字数, 这里以"节"计数不适用,
+    # 故提供单页语义的 pages 占位 (整篇算 1 页), 阈值判定交给调用方按需关闭
+    out["pages"] = [{"page_num": 1, "text": out["full_text"]}]
+    return out
+
+
+def chunk_text_sectioned(
+    text: str,
+    sections: list[dict],
+    chunk_size: int = CHUNK_SIZE,
+    chunk_overlap: int | None = None,
+) -> list[dict]:
+    """**按章节**切分, 每块严格属于一个章节: [{"text", "page_num": 0, "section": str}]。
+
+    为什么按节切而不是整篇按字数切: 整篇切会让一个块横跨多个章节, 而块只能带一个
+    section 标签 —— 标签就变成了谎话 (实测一块从"3.2 主实验结果"跨到"4 结论", 却标成 3.2)。
+    既然要拿这个标签做可核验的溯源, 就必须保证块不跨节。
+
+    节内仍用同一个 splitter (递归语义切分 + 15% 重叠), 单节超长时正常分成多块。
+    """
+    if not sections:
+        return [{"text": c, "page_num": 0, "section": ""}
+                for c in chunk_text(text, chunk_size, chunk_overlap)]
+
+    out: list[dict] = []
+    for s in sections:
+        seg = text[s["start"]:s["end"]]
+        if not seg.strip():
+            continue
+        for c in chunk_text(seg, chunk_size, chunk_overlap):
+            out.append({"text": c, "page_num": 0, "section": s["heading"]})
+    return out
+
+
 def assess_text_quality(parsed: dict) -> dict:
     """解析质量评估闸门: 拦截"解析出来是垃圾"的文档, 不要污染知识库。
 

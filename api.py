@@ -1271,6 +1271,7 @@ async def api_upload_pdf(
     state.stats.total_papers = len(papers)
     state.stats.total_images = len(all_images)
     state.status = TopicStatus.READY
+    state.progress.rejected = len(rejected)  # 质量闸门拦截数 (轮询可见)
     save_topic_state(topic_id)
     state.step = "ready"
 
@@ -2800,6 +2801,12 @@ async def api_run_subscription(sub_id: str):
 if __name__ == "__main__":
     import uvicorn
 
+    from config import API_HOST, API_PORT
+
     uvicorn.run(
-        app, host="0.0.0.0", port=8001, limit_concurrency=20, timeout_keep_alive=30
+        app,
+        host=API_HOST,
+        port=API_PORT,
+        limit_concurrency=20,
+        timeout_keep_alive=30,
     )

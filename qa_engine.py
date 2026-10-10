@@ -547,12 +547,20 @@ async def ask_question(
         key = _ref_key(r)
         if key and key not in seen:
             seen.add(key)
+            _doi = r.get("doi")
             references.append(
                 {
                     "title": r.get("title", "N/A"),
                     "year": r.get("year"),
-                    "doi": r.get("doi"),
+                    "doi": _doi,
+                    # 来源链接: 有 DOI 给 DOI 链接, 否则退回 arXiv / 原文 URL
+                    "doi_url": f"https://doi.org/{_doi}" if _doi else None,
                     "source": "fulltext",
+                    # 证据片段: 该文献里与本次答案最相关的原句 (供用户当场核对)
+                    "evidence_snippet": pick_evidence_snippet(
+                        answer, r.get("text", "") or ""
+                    ),
+                    "locator": _locator(r),
                 }
             )
 
@@ -687,6 +695,53 @@ def verify_numeric_claims(answer: str, contexts: list[str]) -> dict:
         "unverified": unverified[:10],
         "unverified_ratio": (len(unverified) / checked) if checked else 0.0,
     }
+
+
+_SENT_SPLIT = re.compile(r"(?<=[。！？!?；;])\s*|\n+")
+
+
+def pick_evidence_snippet(answer: str, chunk_text: str, max_len: int = 220) -> str:
+    """从证据块里挑出与答案最相关的那一句, 作为可核验的**证据片段**。
+
+    为什么要有片段而不是只有出处: "见论文《X》第 3 页" 读者仍要自己翻; 给出原句
+    才能当场核对。零 LLM 调用 —— 用字符 bigram 重合度打分, 够用且确定性。
+    """
+    if not chunk_text:
+        return ""
+    answer = answer or ""
+
+    def bigrams(s: str) -> set:
+        s = re.sub(r"\s+", "", s)
+        return {s[i : i + 2] for i in range(max(0, len(s) - 1))}
+
+    a = bigrams(answer)
+    if not a:
+        return ""
+    best, best_score = "", -1.0
+    for s in _SENT_SPLIT.split(chunk_text):
+        s = (s or "").strip()
+        # 门槛提到 20 字: 12 字以下多是标题/页眉/表头 ("VERY DEEP CONVOLUTIONAL NETWORKS"),
+        # 它们 bigram 少, 一个词命中就能拿高分, 会把真正的证据句挤掉
+        if len(s) < 20:
+            continue
+        # 标题/页眉过滤: 学术 PDF 的标题行多为全大写英文且无句读, 长度也够,
+        # 会被当成"证据句"选出来 ("FOR LARGE-SCALE IMAGE RECOGNITION")。
+        # 判据: 无中日韩字符 且 字母中大写占比 > 70% → 视为表头, 跳过。
+        if not re.search(r"[一-鿿]", s):
+            letters = [c for c in s if c.isalpha()]
+            if letters and sum(1 for c in letters if c.isupper()) / len(letters) > 0.7:
+                continue
+        g = bigrams(s)
+        if not g:
+            continue
+        # 除以 sqrt(len): 纯 ratio 对短串严重偏置 (短串分母小), 开方后缓解又不至于
+        # 反过来只挑最长的句子
+        score = len(a & g) / (len(g) ** 0.5)
+        if score > best_score:
+            best, best_score = s, score
+    if not best:
+        return ""
+    return best[:max_len] + ("…" if len(best) > max_len else "")
 
 
 async def ask_with_context(table_name: str, question: str) -> tuple[str, list[str]]:

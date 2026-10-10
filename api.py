@@ -1785,7 +1785,7 @@ async def api_ask_stream(request: Request):
                     break
             result = task.result()
             # 结构化字段随 done 事件下发: 召回不足标记 + 数字核对结果
-            yield f"data: {json.dumps({'done': True, 'insufficient': bool(getattr(result, 'insufficient', False)), 'numeric_check': getattr(result, 'numeric_check', {}) or {}}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'done': True, 'insufficient': bool(getattr(result, 'insufficient', False)), 'numeric_check': getattr(result, 'numeric_check', {}) or {}, 'references': getattr(result, 'references', []) or []}, ensure_ascii=False)}\n\n"
         except Exception as e:
             logger.exception("ask stream failed: %s", e)
             if not task.done():

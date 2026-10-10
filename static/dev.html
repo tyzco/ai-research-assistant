@@ -48,6 +48,11 @@
   <div class="section">
     <h2>Agent 工具与技能</h2>
     <div class="kv" id="toolsBox"><div class="v">加载中…</div></div>
+
+<div class="card">
+  <h2>人工标注队列 (bad case 回流)</h2>
+  <div id="reviewBox" style="font-size:13px;line-height:1.7">加载中…</div>
+</div>
   </div>
 
   <div class="section">
@@ -90,8 +95,40 @@ function refreshStatus(){
       var hooks=s.hooks||{},ctx=s.context||{},tl=s.tools||{};
       h+='<br>Agent: hook 节点 '+Object.keys(hooks).length+' · 压缩 '+(ctx.compact_count||0)+' · 工具调用 '+(tl.total_calls||0)+' · 错误类型 '+Object.keys(tl.error_counts||{}).length;
       el.innerHTML=h;
+      refreshReview();
     }).catch(function(){el.innerHTML=h+'<br><i>Agent 统计不可用</i>'});
   }).catch(function(e){el.innerHTML='状态获取失败: '+esc(e.message)});
+}
+
+function refreshReview(){
+  var el=document.getElementById('reviewBox');if(!el)return;
+  fetch(A+'/review/queue?status=pending&limit=20').then(function(r){return r.json()}).then(function(d){
+    var st=d.stats||{};var h='待标注 <b>'+(st.pending||0)+'</b> · 已标注 <b>'+(st.labeled||0)+'</b>';
+    var bl=st.by_label||{};var keys=Object.keys(bl);
+    if(keys.length){h+='<br>标签分布: '+keys.map(function(k){return esc(k)+' '+bl[k]}).join(' · ')}
+    var bs=st.by_source||{};var sk=Object.keys(bs);
+    if(sk.length){h+='<br>来源: '+sk.map(function(k){return esc(k)+' '+bs[k]}).join(' · ')}
+    var items=d.items||[];
+    if(!items.length){h+='<br><span style="color:var(--muted)">队列为空（用户点踩或回答无库内引用时会自动进来）</span>'}
+    items.forEach(function(it){
+      h+='<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">'
+        +'<div class="v" style="font-size:12px">'+esc((it.question||'').slice(0,90))+'</div>'
+        +'<div style="font-size:11px;color:var(--muted)">['+esc(it.source)+'] '+esc(it.reason||'')+'</div>'
+        +'<div style="margin-top:4px">'
+        +['grounded','hallucinated','retrieval_miss','bad_question'].map(function(lb){
+            return '<button onclick="labelReview('+it.id+',\''+lb+'\')" style="margin-right:4px;font-size:11px;padding:2px 6px;cursor:pointer">'+lb+'</button>'
+          }).join('')
+        +'</div></div>';
+    });
+    el.innerHTML=h;
+  }).catch(function(e){el.innerHTML='标注队列获取失败: '+esc(e.message)});
+}
+
+function labelReview(id,label){
+  fetch(A+'/review/label',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id:id,label:label})})
+    .then(function(r){return r.json()}).then(function(){refreshReview()})
+    .catch(function(){});
 }
 
 function refreshTools(){

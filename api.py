@@ -1613,8 +1613,27 @@ async def api_ask(
     # 记录消息到 SQLite 供 /export 导出
     from database import get_db
 
-    get_db().add_message(req.topic_id, "user", question)
-    get_db().add_message(req.topic_id, "assistant", result.answer)
+    _db = get_db()
+    _db.add_message(req.topic_id, "user", question)
+    _db.add_message(req.topic_id, "assistant", result.answer)
+
+    # 低置信度自动回流: 明明建了知识库, 回答里却**一条库内引用都没有** →
+    # 说明答案没接地到用户上传的论文上, 值得人工看一眼。
+    # 用"有没有引用"这个可核验信号, 而不是 reranker 分数 —— 后者实测尺度不可用。
+    _grounded = "[论文:" in (result.answer or "") or "[论文：" in (result.answer or "")
+    if not _grounded:
+        try:
+            _db.enqueue_review(
+                question,
+                result.answer,
+                contexts=[{"title": r.get("title", ""), "text": (r.get("text") or "")[:300]}
+                          for r in (result.references or [])[:5]],
+                source="low_confidence",
+                reason="回答中无任何库内引用 (未接地到上传论文)",
+                user_id=user_id or "",
+            )
+        except Exception as e:
+            logger.warning(f"enqueue low-confidence review failed: {e}")
     return {
         "answer": result.answer,
         "references": result.references,
@@ -1636,8 +1655,67 @@ async def api_feedback(request: Request):
     user_id = sanitize_input(str(req.get("user_id", "") or ""))
     from database import get_db
 
-    get_db().record_feedback(question, answer, rating, comment, user_id=user_id)
-    return {"ok": True, "total": get_db().get_feedback_stats()["total"]}
+    db = get_db()
+    db.record_feedback(question, answer, rating, comment, user_id=user_id)
+    # bad case 自动回流: 点踩的回答直接进人工标注队列 (此前只统计不回流, 飞轮是断的)
+    queued = None
+    if rating < 0:
+        try:
+            queued = db.enqueue_review(
+                question,
+                answer,
+                source="user_feedback",
+                reason=(comment or "用户点踩")[:200],
+                user_id=user_id,
+            )
+        except Exception as e:
+            logger.warning(f"enqueue review failed: {e}")
+    return {"ok": True, "total": db.get_feedback_stats()["total"], "review_id": queued}
+
+
+@app.get("/review/queue")
+async def api_review_queue(
+    status: str = "pending",
+    limit: int = 50,
+    user_id: str | None = Depends(get_current_user),
+):
+    """人工标注队列 (bad case 回流后待校验的条目)。"""
+    from database import get_db
+
+    if status not in ("pending", "labeled", "skipped"):
+        raise HTTPException(400, "status 只支持 pending/labeled/skipped")
+    items = get_db().list_review_queue(status=status, limit=min(limit, 200))
+    return {"items": items, "count": len(items), "stats": get_db().review_stats()}
+
+
+@app.post("/review/label")
+async def api_review_label(request: Request, user_id: str | None = Depends(get_current_user)):
+    """提交人工标注: {id, label, note}
+    label 取值建议: grounded(有据) / hallucinated(幻觉) / retrieval_miss(漏召回) /
+                    bad_question(问题本身有问题)
+    """
+    req = await request.json()
+    item_id = req.get("id")
+    label = sanitize_input(str(req.get("label", "") or ""))
+    note = sanitize_input(str(req.get("note", "") or ""))[:500]
+    if not item_id or not label:
+        raise HTTPException(400, "需要 id 和 label 参数")
+    from database import get_db
+
+    ok = get_db().label_review(
+        int(item_id), label, note, labeled_by=user_id or "anonymous"
+    )
+    if not ok:
+        raise HTTPException(404, "条目不存在或已被标注")
+    return {"ok": True, "stats": get_db().review_stats()}
+
+
+@app.get("/review/stats")
+async def api_review_stats():
+    """标注队列统计: 待标注量 / 各类标签分布 / 来源分布。"""
+    from database import get_db
+
+    return get_db().review_stats()
 
 
 @app.get("/feedback/stats")

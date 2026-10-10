@@ -126,6 +126,24 @@ class Database:
                 updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
+            -- 人工标注队列: bad case 自动回流 → 人工校验 → 标注结果沉淀。
+            -- 触发来源: 用户点踩 / 低置信度 / 无引用答案 (见 api 的 /feedback 与 enqueue)。
+            CREATE TABLE IF NOT EXISTS review_queue (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                question    TEXT NOT NULL,
+                answer      TEXT DEFAULT '',
+                contexts    TEXT DEFAULT '[]',
+                source      TEXT DEFAULT 'user_feedback',
+                reason      TEXT DEFAULT '',
+                user_id     TEXT DEFAULT '',
+                status      TEXT NOT NULL DEFAULT 'pending',  -- pending | labeled | skipped
+                label       TEXT DEFAULT '',                  -- 人工判定
+                label_note  TEXT DEFAULT '',
+                labeled_by  TEXT DEFAULT '',
+                created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+                labeled_at  TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS learning_feedback (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 question    TEXT NOT NULL,
@@ -400,6 +418,106 @@ class Database:
             (topic_id,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    # ==================== 人工标注队列 (bad case 回流) ====================
+
+    def enqueue_review(
+        self,
+        question: str,
+        answer: str = "",
+        contexts: list | None = None,
+        source: str = "user_feedback",
+        reason: str = "",
+        user_id: str = "",
+    ) -> int:
+        """把一个 bad case 放进人工标注队列。同一问题+来源不重复入队 (去重)。"""
+        self._ensure_tables()
+        c = self._conn()
+        dup = c.execute(
+            "SELECT id FROM review_queue WHERE question = ? AND source = ? "
+            "AND status = 'pending' LIMIT 1",
+            (question, source),
+        ).fetchone()
+        if dup:
+            return dup["id"]
+        cur = c.execute(
+            """INSERT INTO review_queue
+               (question, answer, contexts, source, reason, user_id)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                question,
+                (answer or "")[:8000],
+                json.dumps(contexts or [], ensure_ascii=False)[:20000],
+                source,
+                reason,
+                user_id or "",
+            ),
+        )
+        c.commit()
+        return cur.lastrowid
+
+    def list_review_queue(self, status: str = "pending", limit: int = 50) -> list[dict]:
+        self._ensure_tables()
+        c = self._conn()
+        rows = c.execute(
+            "SELECT * FROM review_queue WHERE status = ? ORDER BY id DESC LIMIT ?",
+            (status, limit),
+        ).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            try:
+                d["contexts"] = json.loads(d.get("contexts") or "[]")
+            except (TypeError, ValueError):
+                d["contexts"] = []
+            out.append(d)
+        return out
+
+    def label_review(
+        self, item_id: int, label: str, note: str = "", labeled_by: str = ""
+    ) -> bool:
+        """人工标注一条: label 如 grounded / hallucinated / retrieval_miss / bad_question。"""
+        self._ensure_tables()
+        c = self._conn()
+        cur = c.execute(
+            """UPDATE review_queue
+               SET status='labeled', label=?, label_note=?, labeled_by=?,
+                   labeled_at=datetime('now')
+               WHERE id=? AND status='pending'""",
+            (label, note, labeled_by, item_id),
+        )
+        c.commit()
+        return cur.rowcount > 0
+
+    def review_stats(self) -> dict:
+        self._ensure_tables()
+        c = self._conn()
+        by_status = {
+            r["status"]: r["n"]
+            for r in c.execute(
+                "SELECT status, COUNT(*) n FROM review_queue GROUP BY status"
+            ).fetchall()
+        }
+        by_label = {
+            r["label"]: r["n"]
+            for r in c.execute(
+                "SELECT label, COUNT(*) n FROM review_queue "
+                "WHERE status='labeled' AND label != '' GROUP BY label"
+            ).fetchall()
+        }
+        by_source = {
+            r["source"]: r["n"]
+            for r in c.execute(
+                "SELECT source, COUNT(*) n FROM review_queue GROUP BY source"
+            ).fetchall()
+        }
+        return {
+            "pending": by_status.get("pending", 0),
+            "labeled": by_status.get("labeled", 0),
+            "skipped": by_status.get("skipped", 0),
+            "by_label": by_label,
+            "by_source": by_source,
+        }
 
     # ==================== Agent 中断快照 ====================
 

@@ -139,6 +139,9 @@ DOC_QUALITY_MAX_DOMINATION_RATIO = _env("DOC_QUALITY_MAX_DOMINATION_RATIO", 0.50
 # 实测 29 篇有正文可判定的论文: 25 篇按栏正常 (切换率低), 4 篇中招 (切换率 0.32-0.43)
 TWO_COLUMN_SWITCH_RATIO = _env("TWO_COLUMN_SWITCH_RATIO", 0.30, float)
 TWO_COLUMN_REORDER_ENABLED = _env_bool("TWO_COLUMN_REORDER_ENABLED", True)
+# PDF 表格结构化: get_text 把表格读成"竖着一列一列的数字流" (列名与数值糊在一起),
+# 用 find_tables 检出后把该区域替换成 Markdown 管道表。只重新组织同一批单元格文本, 不增删。
+TABLE_EXTRACT_ENABLED = _env_bool("TABLE_EXTRACT_ENABLED", True)
 
 # ===================================================================
 # 工具调用重试 (仅对瞬时故障: 超时/连接/限流/5xx)

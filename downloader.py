@@ -79,6 +79,155 @@ def two_column_blocks(page) -> list | None:
     return ordered
 
 
+def _rows_to_markdown(rows: list[list[str]]) -> str:
+    """二维单元格 → Markdown 管道表。单元格内换行用空格连接 (保持 token 边界)。
+
+    用空格而非 `<br>`: `<br>` 会把一个 token 拆成两个, 使上下游比对与后续检索都失真。
+    """
+    def _flat(c: str) -> str:
+        return " ".join((c or "").split())
+
+    # 展开"合并行": find_tables 在无横线的分组表里会把多行并成一个逻辑行
+    # (单元格内用 \n 分隔), 例如 4 个模型 4 个指标被并成 1 行 × 4 格。
+    # 当同一行的各单元格行数一致时还原成多行 —— 否则模型看到一个格子里挤着 4 个数值,
+    # 无法判断哪个数属于哪个模型。
+    expanded: list[list[str]] = []
+    for r in rows:
+        sub = [[c for c in (cell or "").split("\n")] for cell in r]
+        if len(r) > 1 and all(len(x) == len(sub[0]) and len(x) > 1 for x in sub):
+            for i in range(len(sub[0])):
+                expanded.append([x[i] for x in sub])
+        else:
+            expanded.append(list(r))
+    rows = expanded
+
+    cols = max(len(r) for r in rows)
+    norm = [list(r) + [""] * (cols - len(r)) for r in rows]
+    head = "| " + " | ".join(_flat(c) for c in norm[0]) + " |"
+    sep = "| " + " | ".join("---" for _ in range(cols)) + " |"
+    body = [
+        "| " + " | ".join(_flat(c) for c in r) + " |" for r in norm[1:] if any(r)
+    ]
+    return "\n".join([head, sep] + body)
+
+
+def _table_regions(page) -> list[dict]:
+    """检出本页表格, 返回 [{bbox, markdown}] (失败返回空 list, 不抛)。"""
+    out: list[dict] = []
+    try:
+        tabs = page.find_tables()
+    except Exception:
+        return out
+    for t in getattr(tabs, "tables", []) or []:
+        try:
+            rows = getattr(t, "row_count", 0) or 0
+            cols = getattr(t, "col_count", 0) or 0
+            # 太小的"表格"多是版式误检 (两格边框), 换掉反而更糟
+            if rows < 2 or cols < 2:
+                continue
+            # 用 extract() 的**原始单元格文本**自己拼 markdown, 不用 to_markdown():
+            # 实测 to_markdown() 会改坏数值 —— 单元格里的 `76.1` 被输出成 `76_._1`
+            # (find_tables 的 markdown 转义), 对指标表这是硬伤, 还会让下游的覆盖校验
+            # 永远匹配不上。extract() 拿到的是干净文本。
+            rows = t.extract()
+            rows = [[(c or "").strip() for c in row] for row in rows if row]
+            rows = [r for r in rows if any(r)]
+            if len(rows) < 2 or len(rows[0]) < 2:
+                continue
+            md = _rows_to_markdown(rows)
+            if not md:
+                continue
+            out.append({"bbox": tuple(t.bbox), "markdown": md})
+        except Exception:
+            continue
+    return out
+
+
+def _render_blocks_with_tables(page, blocks: list) -> str | None:
+    """把落在表格区域内的文本块**替换**为该表格的 Markdown, 其余块原样保留。
+
+    为什么要替换而不是追加: PDF 表格用 get_text 读出来是**竖着一列一列的数字流**
+    (实测某页输出 "Data c l N |V | |Vpre| Test MR 2 20 10662 18765 16448 CV SST-1"),
+    列名与数值糊在一起, 模型无法判断哪个数属于哪一行。追加会造成同一批数字出现两遍;
+    替换后表格既可读又不重复。
+
+    内容守恒: Markdown 用的就是同一批单元格文本 —— 只是重新组织, 不增删。
+    返回 None 表示本页没有表格 (调用方走原路径, 行为不变)。
+    """
+    regions = _table_regions(page)
+    if not regions:
+        return None, 0
+
+    def _in_table(b) -> dict | None:
+        cx, cy = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
+        for r in regions:
+            x0, y0, x1, y1 = r["bbox"]
+            if x0 - 2 <= cx <= x1 + 2 and y0 - 2 <= cy <= y1 + 2:
+                return r
+        return None
+
+    import re as _re
+
+    from collections import Counter as _Ctr
+
+    def _chars(s: str) -> "_Ctr":
+        """**token 多重集** —— 判定"表格 markdown 是否完整覆盖了扁平文本"。
+
+        试过三种判据, 前两种都被实测否掉:
+          1. 子串: markdown 是**列优先**(一格塞进整列值, 用 <br> 分隔), 扁平块是**行优先**,
+             顺序不同 → 必然判不覆盖 → 原块保留 → 同一批数字出现两遍
+          2. 字符多重集: 与顺序无关了, 但**丢 token 边界** —— 扁平块里的 `1024` 在 markdown
+             里被拆进两格时, 字符还是那些字符, 判定通过 → token 静默消失
+             (实测 5 篇论文丢了 c/a/and/mIoU/FPS/52.5)
+          3. token 多重集(本实现): 与顺序无关 **且** 保留 token 身份。
+             代价是 <br>/下划线造成的 token 形态差异会让部分表格判不覆盖 → 退回扁平文本
+             (可读性差但不丢字)。宁可漏修, 不冒丢字。
+        """
+        return _Ctr(t.lower() for t in _re.findall(r"[A-Za-z0-9_]{1,}", s or ""))
+
+
+    # === 逐表判定 (不是逐块, 也不是整页) ===
+    # 为什么按表整体判: 逐块比对时, 一个块里多出的 'a' 可以被表格里**其它单元格**的
+    # 'a' 抵消掉 —— 实测这样会静默丢掉 c/a/and 这类高频字符 (5 篇论文中招)。
+    # 表格是原子单元: 要么该表整体被 markdown 完整覆盖(丢弃扁平文本), 要么整表退回原文。
+    # 判定用字符多重集而非子串: markdown 是列优先、扁平块是行优先, 顺序不同但字符相同。
+    drop_ids: set[int] = set()
+    for r in regions:
+        mc = _chars(r["markdown"])
+        inside = [b for b in blocks if _in_table(b) is r]
+        if not inside:
+            continue
+        union = _Ctr()
+        for b in inside:
+            union += _chars((b[4] or "").strip())
+        if union and not (union - mc):
+            drop_ids |= {id(b) for b in inside}
+
+    out: list[str] = []
+    emitted: set[int] = set()
+    for b in blocks:
+        txt = (b[4] or "").strip()
+        r = _in_table(b)
+        if r is not None:
+            key = id(r)
+            if key not in emitted:
+                emitted.add(key)
+                out.append(r["markdown"])
+            if id(b) not in drop_ids and txt:
+                out.append(txt)  # 该表未被完整覆盖 → 保留扁平文本(接受重复, 不冒丢字)
+            continue
+        if txt:
+            out.append(txt)
+    for r in regions:
+        if id(r) not in emitted:
+            out.append(r["markdown"])
+    # 结构化成功 = 该表的扁平文本确实被替换掉了
+    _structured = sum(
+        1 for r in regions if any(id(b) in drop_ids for b in blocks if _in_table(b) is r)
+    )
+    return ("\n".join(out) if out else None), _structured
+
+
 def page_text_two_column(page) -> str | None:
     """双栏页面按栏重排文本。**仅在检测到串栏时**返回重排结果, 否则 None。
     调用方 (parse_pdf) 在 None 时回退到 page.get_text(), 保证未命中页面行为不变。
@@ -100,6 +249,40 @@ def _docx_table_to_text(table) -> str:
         return ""
     header_sep = "| " + " | ".join("---" for _ in table.rows[0].cells) + " |"
     return "\n".join([rows[0], header_sep] + rows[1:])
+
+
+_MATH_NS = "http://schemas.openxmlformats.org/officeDocument/2006/math"
+
+
+def _docx_extra_text(p_element) -> str:
+    """提取 python-docx 段落 API **读不到**的 Word 内容: OMML 公式 + 文本框。
+
+    背景 (实测): 富文本排版的东西用普通 API 会**静默丢失** ——
+      - 内嵌公式存为 OMML (`m:oMath`), 不在 paragraph.text 里
+      - 悬浮/嵌入文本框存在 run 内的 `w:txbxContent`, 整段不在 doc.paragraphs 里
+    对一个读论文的系统, 丢公式和丢"图注/补充说明"都是硬伤: 读者看到的正文会
+    缺一截, 而且**没有任何报错**。这里按 XML 把两类内容捞回来。
+
+    公式线性化成 $...$ (下游检索/展示都能看出这是公式, 而不是混进正文的乱码);
+    文本框加 [文本框] 前缀, 让模型知道这段不在正文流里。
+    """
+    try:
+        from docx.oxml.ns import qn
+
+        parts: list[str] = []
+        for omath in p_element.iter(f"{{{_MATH_NS}}}oMath"):
+            txt = "".join(
+                (t.text or "") for t in omath.iter(f"{{{_MATH_NS}}}t")
+            ).strip()
+            if txt:
+                parts.append(f"${txt}$")
+        for tb in p_element.iter(qn("w:txbxContent")):
+            txt = "".join((t.text or "") for t in tb.iter(qn("w:t"))).strip()
+            if txt:
+                parts.append(f"[文本框] {txt}")
+        return " ".join(parts)
+    except Exception:
+        return ""
 
 
 def parse_docx(docx_bytes: bytes, name: str) -> dict:
@@ -178,8 +361,10 @@ def parse_docx(docx_bytes: bytes, name: str) -> dict:
                 parts.append(f"{'#' * max(1, lvl)} {title}\n")
                 continue
             txt = p.text.strip()
-            if txt:
-                parts.append(txt + "\n")
+            # 段落 API 之外的内容 (公式/文本框) 单独捞, 不与正文混在一起
+            extra = _docx_extra_text(p._p)
+            if txt or extra:
+                parts.append((txt + ("\n" if txt else "")) + (extra + "\n" if extra else ""))
         elif tag == "tbl":
             md = _docx_table_to_text(_DocxTable(child, d))
             if md:
@@ -324,6 +509,7 @@ def parse_pdf(pdf_bytes: bytes, pdf_name: str) -> dict:
     max_images = getattr(config, "MAX_IMAGES_PER_PDF", 200)
 
     reordered_pages = 0  # 触发双栏重排的页数 (观测用)
+    tables_found = 0  # 结构化出来的表格数 (观测用)
 
     try:
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -337,11 +523,21 @@ def parse_pdf(pdf_bytes: bytes, pdf_name: str) -> dict:
             try:
                 text = page.get_text().strip()
                 # 双栏串栏修正: 命中才重排 (只换顺序, 已做内容守恒校验), 未命中完全不改
+                _blocks = None
                 if config.TWO_COLUMN_REORDER_ENABLED:
-                    _reordered = page_text_two_column(page)
-                    if _reordered:
-                        text = _reordered.strip()
+                    _blocks = two_column_blocks(page)
+                    if _blocks:
+                        text = "\n".join((b[4] or "").strip() for b in _blocks)
                         reordered_pages += 1
+                # 表格结构化: 命中才替换表格区域 (内容守恒, 只重新组织), 未命中不改
+                if config.TABLE_EXTRACT_ENABLED:
+                    _src = _blocks or [
+                        b for b in page.get_text("blocks") if (b[4] or "").strip()
+                    ]
+                    _tbl, _nstruct = _render_blocks_with_tables(page, _src)
+                    if _tbl:
+                        text = _tbl.strip()
+                        tables_found += _nstruct  # 只统计真正被结构化的
             except Exception as e:
                 logger.warning(f"Page {page_num} text extraction failed: {e}")
                 text = ""
@@ -399,6 +595,7 @@ def parse_pdf(pdf_bytes: bytes, pdf_name: str) -> dict:
         doc.close()
 
     result["reordered_pages"] = reordered_pages
+    result["tables_found"] = tables_found
     if reordered_pages:
         logger.debug(f"{pdf_name}: 双栏重排 {reordered_pages} 页")
     return result

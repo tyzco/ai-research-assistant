@@ -176,6 +176,10 @@ EXPERIMENT_DESIGN = Skill(
 # (DeepSeek 审查 #2: 动态激活时不能丢掉检索/KB 发现/问答核心能力)
 CORE_TOOLS = {"search_papers", "search_knowledge_bases", "agent_ask"}
 
+# 路由强证据阈值: 命中 >= 此数量的关键词才认为路由可信;
+# 只命中 1 个属于弱证据 (任务里恰好出现一个"写"/"对比" 就可能误判), 触发工具集不收窄兜底
+ROUTE_STRONG_HITS = 2
+
 # 任务 → 技能 意图关键词 (auto 模式按任务动态激活)
 SKILL_INTENT_KEYWORDS = {
     "literature_review": [
@@ -225,6 +229,9 @@ class SkillRegistry:
         }
         # 获取当前会话的活跃技能 (默认全部启用)
         self.active: set[str] = set(self._skills.keys())
+        # 最近一次技能路由的置信度 (rules_strong/rules_weak/semantic/default),
+        # 供 tools_for_task 决定是否收窄工具集
+        self.last_route_confidence: str = ""
         self._validate_tools()
 
     def _validate_tools(self) -> None:
@@ -273,6 +280,12 @@ class SkillRegistry:
                 scored.append((s, name))
         scored.sort(key=lambda x: -x[0])
         if scored:
+            # 置信度: 只命中 1 个关键词属于弱证据 (如任务里恰好出现一个"写"字)。
+            # 路由错会**丢工具** (判成 deep_qa 就没了 download_and_index/export_report),
+            # 所以弱证据时记下来, 由 tools_for_task 决定不收窄工具集。
+            self.last_route_confidence = (
+                "rules_strong" if scored[0][0] >= ROUTE_STRONG_HITS else "rules_weak"
+            )
             return [n for _, n in scored[:max_skills]]
         # 第 2 层: 规则未命中 → 嵌入语义技能路由 (三层漏斗中间层, 仅限已激活技能)
         try:
@@ -280,12 +293,38 @@ class SkillRegistry:
 
             sem = classify_skill(task, active=tuple(self.active))
             if sem:
+                self.last_route_confidence = "semantic"
                 return [sem[0]]
         except Exception:
             pass  # 语义层不可用 → 静默降级为默认技能
+        self.last_route_confidence = "default"
         if "literature_review" in self.active:
             return ["literature_review"]
         return sorted(self.active)[:1]
+
+    def tools_for_task(self, task: str, skill_names: list[str]) -> list[str]:
+        """按**路由置信度**决定工具集 (兜底机制)。
+
+        路由置信度低时**不收窄**工具集: 路由错的代价是能力缺口 (漏掉建库/导出/查重),
+        而多给几个工具的代价只是 prompt 里 schema 变长。两害相权, 不确定时给全量。
+        这是对"路由错误是核心风险"的工程兜底 —— 不代表路由可以不准, 而是让不准时
+        不至于把任务做废。
+        """
+        base = self.tools_for_skills(skill_names)
+        if getattr(self, "last_route_confidence", "") in ("rules_weak", "default"):
+            try:
+                from agent.tool_registry import get_tools_schema
+
+                all_names = {s["function"]["name"] for s in get_tools_schema()}
+                if all_names:
+                    logger.info(
+                        f"路由置信度低({self.last_route_confidence}) → 工具集不收窄 "
+                        f"({len(base)} → {len(all_names)})"
+                    )
+                    return sorted(all_names)
+            except Exception:
+                pass
+        return base
 
     def tools_for_skills(self, skill_names: list[str]) -> list[str]:
         """激活技能工具并集 + 核心地板; 并集为空 → 全量注册工具兜底。"""

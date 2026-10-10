@@ -182,7 +182,8 @@ class PiAgent:
         else:
             selected = skill_reg.select_for_task(task)
         skill_prompt = skill_reg.prompt_for_skills(selected)
-        tool_names = skill_reg.tools_for_skills(selected)
+        # 兜底: 路由证据弱时不收窄工具集 (路由错会丢建库/导出等能力, 见 skills.tools_for_task)
+        tool_names = skill_reg.tools_for_task(task, selected)
         self._tools_schema = schemas_for_tools(tool_names)
 
         self._trace = TraceState(goal=self.goal or task[:80], start_time=time.time())

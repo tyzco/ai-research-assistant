@@ -14,6 +14,7 @@ v5.2 修复 (DeepSeek 对话审查):
 """
 
 import logging
+import threading
 import time
 
 logger = logging.getLogger(__name__)
@@ -96,6 +97,12 @@ class ConversationMemory:
         # 待压缩缓冲区: 从 recent 移出但尚未被 LLM 提炼的消息
         self._pending_compress: list[str] = []
         self._last_access = time.time()
+        # 并发写保护 (**防御性**, 非已知 bug 修复):
+        # add_finding/add_turn/update_core 都是"读-改-写 + 整块落盘"的非原子序列。
+        # 进程内确实存在真多线程 (asyncio.to_thread 跑解析/分块/重排), 且 get_memory
+        # 返回共享实例, 因此这里按常规做法加锁, 而不是依赖 GIL 的偶然性。
+        # 用 RLock: 同线程内 save()/嵌套调用不自我死锁。
+        self._lock = threading.RLock()
         self._load()
 
     def _load(self):
@@ -112,13 +119,19 @@ class ConversationMemory:
         from database import get_db
 
         db = get_db()
-        db.save_memory(self.topic_id, self.recent, self.summary, self.core)
+        with self._lock:
+            db.save_memory(self.topic_id, self.recent, self.summary, self.core)
 
     def touch(self):
         """更新最后访问时间 (供 TTL 清理判断)。"""
         self._last_access = time.time()
 
     def update_core(self, **kwargs):
+        with self._lock:
+            self._update_core_locked(**kwargs)
+        self.save()
+
+    def _update_core_locked(self, **kwargs):
         for k, v in kwargs.items():
             if k in self.core:
                 if isinstance(self.core[k], list):
@@ -126,7 +139,6 @@ class ConversationMemory:
                         self.core[k].append(v)
                 else:
                     self.core[k] = v
-        self.save()
 
     def add_finding(self, content: str, source: str = ""):
         """结构化添加关键发现 (去重按 content)。由 agent 完成时调用, 持久化跨会话记忆。
@@ -136,6 +148,10 @@ class ConversationMemory:
         """
         if not content:
             return
+        with self._lock:
+            self._add_finding_locked(content, source)
+
+    def _add_finding_locked(self, content: str, source: str = ""):
         existing = {
             f.get("content", "")
             for f in self.core["key_findings"]
@@ -158,21 +174,23 @@ class ConversationMemory:
             self.save()
 
     def add_turn(self, question: str, answer: str):
-        self.recent.append({"role": "user", "content": question})
-        self.recent.append({"role": "assistant", "content": answer})
-        self._smart_truncate()
-        self.save()
+        with self._lock:
+            self.recent.append({"role": "user", "content": question})
+            self.recent.append({"role": "assistant", "content": answer})
+            self._smart_truncate()
+            self.save()
 
     def add_tool_call(self, tool_name: str, result: str):
         """记录工具调用 (结果截断) 到会话记忆。由 agent 工具执行时调用。"""
         truncated = str(result)[:500]
-        self.recent.append(
-            {"role": "tool_result", "content": f"[{tool_name}] {truncated}"}
-        )
-        if tool_name not in self.core["tools_used"]:
-            self.core["tools_used"].append(tool_name)
-        self._smart_truncate()
-        self.save()
+        with self._lock:
+            self.recent.append(
+                {"role": "tool_result", "content": f"[{tool_name}] {truncated}"}
+            )
+            if tool_name not in self.core["tools_used"]:
+                self.core["tools_used"].append(tool_name)
+            self._smart_truncate()
+            self.save()
 
     def _smart_truncate(self):
         """智能截断: 超过 max_recent*2 条时, 按优先级移除最低价值消息。
@@ -259,28 +277,46 @@ class ConversationMemory:
 # ===== 记忆缓存 (TTL 惰性清理, 防内存泄漏) =====
 
 memories: dict[str, ConversationMemory] = {}
+_registry_lock = threading.RLock()  # 保护 memories 字典 (实例创建/清理/替换)
 
 
 def get_memory(topic_id: str) -> ConversationMemory:
-    """获取记忆实例。带 TTL 惰性清理: 访问时清理过期条目。"""
-    now = time.time()
-    # 惰性清理: 仅在缓存较大时扫描 (避免每次 O(n))
-    if len(memories) > 20:
-        expired = [
-            tid
-            for tid, mem in memories.items()
-            if now - mem._last_access > MEMORY_TTL_SECONDS
-        ]
-        for tid in expired:
-            # 已持久化到 SQLite, 可安全释放内存
-            memories.pop(tid, None)
+    """获取记忆实例。带 TTL 惰性清理: 访问时清理过期条目。
 
-    if topic_id not in memories:
-        memories[topic_id] = ConversationMemory(topic_id)
-    memories[topic_id].touch()
-    return memories[topic_id]
+    "查/建/清理" 放在同一把锁里 (**防御性**, 非已知 bug 修复): 否则两个线程可能同时
+    判定 topic_id 不存在而各建一个实例 → 同一课题出现两份互不可见的记忆。
+    本函数是该模块唯一的实例入口, 锁在这里代价最小、覆盖最全。
+    """
+    global memories
+    now = time.time()
+    with _registry_lock:
+        # 惰性清理: 仅在缓存较大时扫描 (避免每次 O(n))
+        if len(memories) > 20:
+            expired = [
+                tid
+                for tid, mem in memories.items()
+                if now - mem._last_access > MEMORY_TTL_SECONDS
+            ]
+            for tid in expired:
+                # 已持久化到 SQLite, 可安全释放内存
+                memories.pop(tid, None)
+
+        mem = memories.get(topic_id)
+        if mem is None:
+            mem = ConversationMemory(topic_id)
+            memories[topic_id] = mem
+        mem.touch()
+        return mem
 
 
 def close_memory(topic_id: str):
     """显式关闭课题记忆, 释放内存 (持久化已完成, 从缓存移除)。"""
-    memories.pop(topic_id, None)
+    with _registry_lock:
+        memories.pop(topic_id, None)
+
+
+def refresh_memory(topic_id: str) -> ConversationMemory:
+    """丢弃内存缓存并从 SQLite 重载 (供外部改库后强制同步)。"""
+    with _registry_lock:
+        memories.pop(topic_id, None)
+    return get_memory(topic_id)

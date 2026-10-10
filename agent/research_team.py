@@ -19,6 +19,7 @@
 import asyncio
 import json
 import logging
+import re
 import threading
 import uuid
 from dataclasses import dataclass, field
@@ -377,6 +378,8 @@ class ResearchTeam:
         self.pending_approval: Optional[ApprovalRequest] = None
         self.current_stage: str = "idle"
         self.history: list[dict] = []  # 执行日志
+        # 规划器产出的本次执行清单 (与 PIPELINE 同构); 未规划时为 None → 回退完整管线
+        self.active_pipeline: Optional[list] = None
         self._lock = asyncio.Lock()  # 并发防护: 同一 run 禁止并发执行/审批
 
     def get_agents_by_layer(self, layer: str) -> list[str]:
@@ -455,9 +458,10 @@ class ResearchTeam:
         速度优化 (保速度提质量): 无审批门的上游 agent 互相独立 (同层不注入前输出),
         聚成一批 asyncio.gather 并行执行 — 上游阶段 ~2-3× 提速, 不影响正确性。
         带审批门的 agent (topic_evaluator) 仍串行, 保持"先确认方向再花检索成本"的闸门语义。"""
+        pipeline = getattr(self, "active_pipeline", None) or self.PIPELINE
         i = start_idx
-        while i < len(self.PIPELINE):
-            agent_key, description, required = self.PIPELINE[i]
+        while i < len(pipeline):
+            agent_key, description, required = pipeline[i]
             # 修复: 原条件 `not required and not _should_run(...)` 短路 — required=True 的 agent
             # (如 quality_screener) 永远不查 _should_run → "有KB则跳过上游检索/筛选"对 screener 失效。
             # _should_run 默认返回 True, 故对非跳过场景无行为变化。
@@ -476,7 +480,7 @@ class ResearchTeam:
                 batch = []
                 j = i
                 while j < len(self.PIPELINE):
-                    _k, _d, _r = self.PIPELINE[j]
+                    _k, _d, _r = pipeline[j]
                     _ad = AGENT_DEFINITIONS[_k]
                     if (
                         _ad["layer"] != agent_def["layer"]
@@ -484,7 +488,7 @@ class ResearchTeam:
                     ):
                         break
                     if _r or self._should_run(_k):
-                        batch.append(self.PIPELINE[j])
+                        batch.append(pipeline[j])
                     j += 1
                 if len(batch) > 1:
                     logger.info(f"Layer parallel: {[k for k, _, _ in batch]}")
@@ -556,6 +560,13 @@ class ResearchTeam:
             "result": final or self._build_summary(),
             "history": self.history,
             "completed_stages": [h["agent"] for h in self.history],
+            # 规划器本次的取舍 (供前端/监控查看"为什么少跑了几个 agent")
+            "planned_agents": [p[0] for p in (self.active_pipeline or self.PIPELINE)],
+            "skipped_agents": [
+                p[0]
+                for p in self.PIPELINE
+                if not p[2] and p[0] not in {x[0] for x in (self.active_pipeline or self.PIPELINE)}
+            ],
         }
 
     def _persist_to_memory(self) -> None:
@@ -590,6 +601,69 @@ class ResearchTeam:
         except Exception as e:
             logger.warning(f"团队记忆沉淀失败: {e}")
 
+    async def plan_task(self, task: str) -> list[tuple]:
+        """**规划器**: 根据任务决定本次要跑哪些 agent, 返回与 PIPELINE 同构的列表。
+
+        为什么需要: 此前 PIPELINE 是类级写死的, 不管任务是"写综述"还是"批判一篇论文",
+        都跑完同一套 14 个 agent —— 写个引言也要跑 figure_generator/ethics_reviewer/
+        bib_manager 全套, 既慢又烧 token。规划与执行由此分离:
+        本方法只**决定跑什么**(规划), _run_pipeline 负责**怎么跑**(执行)。
+
+        安全边界 (规划器**无法**突破):
+          - required=True 的 4 个 agent (含全部 3 个人工审批闸门) 必跑, 不在候选内
+          - 输出顺序强制按 PIPELINE 原序, 规划器只能"取舍"不能"重排"
+          - 任何异常/空结果 → 回退到完整 PIPELINE (兜底优先于省成本)
+        """
+        from config import TEAM_PLANNER_ENABLED
+
+        if not TEAM_PLANNER_ENABLED:
+            return list(self.PIPELINE)
+
+        optional = [p for p in self.PIPELINE if not p[2]]
+        if not optional:
+            return list(self.PIPELINE)
+
+        menu = "\n".join(
+            f"- {k}: {AGENT_DEFINITIONS[k]['role']}" for k, _, _ in optional
+        )
+        prompt = (
+            "你是科研团队的任务规划器。根据研究任务，从下列 agent 中选出**真正需要执行**的，"
+            "去掉与任务无关的。只输出 JSON 数组 (agent 键名)，不要解释。\n\n"
+            f"【任务】{task[:600]}\n\n【可选 agent】\n{menu}\n\n"
+            "输出示例: [\"chapter_writer_intro\", \"bib_manager\"]"
+        )
+        try:
+            import json as _json
+
+            resp = await chat_with_retry(
+                model=DEEPSEEK_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0,
+                max_tokens=300,
+                extra_body={"thinking": {"type": "disabled"}},
+                retries=1,
+            )
+            raw = (resp.choices[0].message.content or "").strip()
+            m = re.search(r"\[[^\]]*\]", raw, re.S)
+            chosen = set(_json.loads(m.group(0))) if m else set()
+        except Exception as e:
+            logger.warning(f"Team planner failed, fallback to full pipeline: {e}")
+            chosen = set()
+
+        valid = {k for k, _, _ in optional}
+        chosen &= valid
+        if not chosen:
+            # 规划器没给出有效结果 → 不敢少跑, 用完整管线 (兜底优先)
+            logger.info("Team planner returned empty → using full pipeline")
+            return list(self.PIPELINE)
+
+        kept = [p for p in self.PIPELINE if p[2] or p[0] in chosen]
+        logger.info(
+            f"Team plan: {len(kept)}/{len(self.PIPELINE)} agents "
+            f"(裁掉 {[p[0] for p in self.PIPELINE if not p[2] and p[0] not in chosen]})"
+        )
+        return kept
+
     async def execute(self, task: str, topic_id: str = "") -> dict:
         """执行完整研究流程。返回 {status, result|request, run_id}"""
         async with self._lock:
@@ -597,6 +671,7 @@ class ResearchTeam:
                 self.topic_id = topic_id
             self.state = {"task": task}
             self.history = []
+            self.active_pipeline = await self.plan_task(task)
             return await self._run_pipeline(0)
 
     async def approve_and_continue(self, feedback: str = "") -> dict:

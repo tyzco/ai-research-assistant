@@ -156,6 +156,11 @@ AGENT_REPEAT_CALL_LIMIT = _env("AGENT_REPEAT_CALL_LIMIT", 3, int)
 # 继续烧步数只会把错误累积进上下文, 最终交出建立在失败之上的答案。达到此次数即止损。
 AGENT_MAX_CONSECUTIVE_FAILURES = _env("AGENT_MAX_CONSECUTIVE_FAILURES", 4, int)
 
+# 科研团队规划器 (规划与执行分离): 按任务裁剪本次要跑的 agent。
+# 兜底: 规划失败/空结果/关闭 → 回退完整管线; required=True 的 agent (含全部 3 个审批闸门)
+# 永远必跑, 规划器碰不到。
+TEAM_PLANNER_ENABLED = _env_bool("TEAM_PLANNER_ENABLED", True)
+
 # ===================================================================
 # Retrieval Limits
 # ===================================================================

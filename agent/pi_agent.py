@@ -122,6 +122,9 @@ class PiAgent:
         self._pending_confirm: Optional[
             dict
         ] = None  # {tool_name, tool_args, tool_call_id}
+        # 同一轮里多个工具都要人工确认时, 除当前这个外的其余排队 (含仍未处理的兄弟 tool_call)。
+        # 逐个向客户端抛出, 而不是一次只认第一个、其余静默丢弃。
+        self._pending_queue: list[dict] = []
 
     @property
     def hooks(self):
@@ -225,6 +228,7 @@ class PiAgent:
                         "max_steps": self.max_steps,
                         "steps": 0,
                     }
+                    self._persist_pending()
                     self._fire_hook(
                         "trace_end", {"result": "paused_for_plan", "task": task}
                     )
@@ -542,8 +546,15 @@ class PiAgent:
                             "tool_args": tool_args,
                             "tool_call_id": tc.id,
                         }
+                        # 收集本轮剩余待确认工具: 同一 assistant 消息里当前 tc 之后的兄弟
+                        # tool_call, 以及后续消息里需要确认的 (此处只有兄弟, 因为本轮回传
+                        # 了全部 tool_calls 的响应才会继续)。逐个排队依次抛给客户端。
+                        self._pending_queue = self._collect_remaining_confirms(
+                            msg, tc.id
+                        )
                         self._messages = messages
                         self._state = state
+                        self._persist_pending()
                         self._fire_hook(
                             "trace_end",
                             {"result": "paused_for_confirm", "turns": len(trace.turns)},
@@ -842,6 +853,115 @@ class PiAgent:
             "steps": state["steps"],
         }
 
+    def _collect_remaining_confirms(self, msg, current_tc_id: str) -> list[dict]:
+        """收集中间态: 当前 tc 之后**尚未应答**的兄弟 tool_call。
+
+        为什么必须收: OpenAI 工具协议要求一条 assistant 消息里的每个 tool_call 都得有对应
+        的 tool 响应, 否则下一次请求直接 400。此前遇到第一个待确认工具就 return, 其余兄弟
+        既没执行也没应答 —— 恢复后消息列表是残缺的。
+        """
+        import json as _json
+
+        out: list[dict] = []
+        seen_current = False
+        try:
+            tool_calls = list(getattr(msg, "tool_calls", None) or [])
+        except Exception:
+            return out
+        for tc in tool_calls:
+            if not seen_current:
+                if tc.id == current_tc_id:
+                    seen_current = True
+                continue
+            name = tc.function.name
+            try:
+                args = _json.loads(tc.function.arguments or "{}")
+            except Exception:
+                args = {}
+            out.append(
+                {
+                    "tool_name": name,
+                    "tool_args": args,
+                    "tool_call_id": tc.id,
+                }
+            )
+        return out
+
+    def _persist_pending(self) -> None:
+        """把中断快照落盘 —— 进程重启后仍能恢复 (否则用户点了确认却被告知无待确认)。"""
+        try:
+            from database import get_db
+
+            pending = []
+            if self._pending_confirm:
+                pending.append(self._pending_confirm)
+            pending.extend(self._pending_queue)
+            get_db().save_pending_run(
+                run_id=self.run_id,
+                user_id=getattr(self, "owner", "") or "",
+                goal=self.goal or "",
+                messages=self._messages,
+                state=self._state,
+                pending=pending,
+                meta={
+                    "max_steps": self.max_steps,
+                    "skills": getattr(self, "_active_skills", []) or [],
+                },
+            )
+        except Exception as e:
+            logger.warning(f"persist pending run failed: {e}")
+
+    def _clear_pending(self) -> None:
+        try:
+            from database import get_db
+
+            get_db().clear_pending_run(self.run_id)
+        except Exception as e:
+            logger.warning(f"clear pending run failed: {e}")
+
+    async def _drain_pending_queue(self) -> Optional[dict]:
+        """顺序处理排队中的兄弟 tool_call。
+
+        返回: 下一个待确认项 (需要再次暂停) 或 None (队列已清空, 可以继续 _loop)。
+        不需确认的直接执行并补上 tool 响应, 保证消息列表始终完整。
+        """
+        from agent.tool_registry import get_tool
+
+        while self._pending_queue:
+            nxt = self._pending_queue.pop(0)
+            tool_def = get_tool(nxt["tool_name"])
+            if tool_def is not None and tool_def.need_confirm:
+                self._pending_confirm = nxt
+                self._persist_pending()
+                return {
+                    "success": True,
+                    "paused": True,
+                    "run_id": self.run_id,
+                    "need_confirm": self._pending_confirm,
+                    "queued": len(self._pending_queue),
+                    "result": f"需要人工确认执行工具: {nxt['tool_name']}",
+                }
+            # 无需确认 → 直接执行, 补上响应
+            try:
+                if tool_def is None:
+                    content = f"工具 {nxt['tool_name']} 不存在"
+                else:
+                    content = str(await tool_def.execute(**nxt["tool_args"]))[:3000]
+            except Exception as e:
+                content = self.tool_mgr.format_error_for_llm(
+                    nxt["tool_name"], str(e), nxt["tool_args"]
+                )
+            self._messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": nxt["tool_call_id"],
+                    "content": content,
+                }
+            )
+        self._pending_confirm = None
+        self._clear_pending()
+        return None
+
     async def resume(self, confirm: bool = True) -> dict:
         """人工确认后恢复执行 (合并自 langgraph resume_langgraph_agent)。
 
@@ -857,6 +977,7 @@ class PiAgent:
         # === Plan 模式: 计划确认 (与工具确认共用本入口, 用 type 区分) ===
         if pc.get("type") == "plan":
             self._pending_confirm = None
+            self._clear_pending()
             if not confirm:
                 self._fire_hook("trace_end", {"result": "plan_rejected"})
                 return {
@@ -923,6 +1044,10 @@ class PiAgent:
             }
         )
         self._pending_confirm = None
+        # 还有排队的兄弟 tool_call → 依次处理; 若其中有待确认的则再次暂停
+        paused = await self._drain_pending_queue()
+        if paused:
+            return paused
         return await self._loop()
 
     def _build_system_prompt(self, skill_prompt: str = "", task: str = "") -> str:
@@ -985,18 +1110,58 @@ _pi_agents: dict[str, PiAgent] = {}
 _pi_agents_lock = threading.Lock()
 
 
+def _restore_agent(run_id: str) -> Optional["PiAgent"]:
+    """从 SQLite 中断快照重建被暂停的 agent (进程重启后 resume 仍可用)。
+
+    只重建恢复所需的最小状态 (messages / state / 待确认队列), 不重跑任何 LLM 调用 ——
+    用户先前烧掉的 token 不会白费。
+    """
+    try:
+        from database import get_db
+
+        snap = get_db().get_pending_run(run_id)
+    except Exception as e:
+        logger.warning(f"load pending snapshot failed: {e}")
+        return None
+    if not snap:
+        return None
+
+    meta = snap.get("meta") or {}
+    agent = PiAgent(
+        goal=snap.get("goal") or "",
+        max_steps=int(meta.get("max_steps") or 15),
+    )
+    agent.run_id = run_id  # 沿用原 run_id, 前端持有的那个才有意义
+    agent.owner = snap.get("user_id") or ""
+    agent._messages = snap.get("messages") or []
+    agent._state = snap.get("state") or {}
+    pending = snap.get("pending") or []
+    agent._pending_confirm = pending[0] if pending else None
+    agent._pending_queue = pending[1:]
+    if agent._pending_confirm is None:
+        return None  # 快照里没有待确认项 → 不是可恢复的中断态
+    return agent
+
+
 def get_agent(run_id: str = "", **kwargs) -> PiAgent:
     """按 run_id 获取/注册 PiAgent。
 
     - run_id 为空: 创建全新实例 (每个 /agent/pi 独立 run)。
     - run_id 在内存: 直接返回 (resume 续跑)。
-    - run_id 未知: 抛 KeyError (由 api 层转 404)。
+    - run_id 不在内存但库里有中断快照: **从快照重建** (进程重启后仍可续跑)。
+    - 都没有: 抛 KeyError (由 api 层转 404)。
     """
     if run_id:
         with _pi_agents_lock:
             agent = _pi_agents.get(run_id)
             if agent is not None:
                 return agent
+        restored = _restore_agent(run_id)
+        if restored is not None:
+            with _pi_agents_lock:
+                _pi_agents[run_id] = restored
+            logger.info(f"Restored paused agent from snapshot: {run_id}")
+            return restored
         raise KeyError(f"run_id 不存在: {run_id}")
 
     agent = PiAgent(**kwargs)

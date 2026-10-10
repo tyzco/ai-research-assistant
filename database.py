@@ -156,6 +156,21 @@ class Database:
                 updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
+            -- Agent 中断快照: 暂停等待人工确认时落盘, 进程重启后仍可恢复。
+            -- 此前该状态只存在 PiAgent 实例上 (_pi_agents 字典), 重启即丢 —— 用户点了
+            -- 确认却发现"没有待确认的工具调用", 只能重跑整个任务 (已烧掉的 token 白费)。
+            CREATE TABLE IF NOT EXISTS agent_pending_runs (
+                run_id      TEXT PRIMARY KEY,
+                user_id     TEXT DEFAULT '',
+                goal        TEXT DEFAULT '',
+                messages    TEXT DEFAULT '[]',
+                state       TEXT DEFAULT '{}',
+                pending     TEXT DEFAULT '[]',
+                meta        TEXT DEFAULT '{}',
+                created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
             CREATE TABLE IF NOT EXISTS topic_state_log (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 topic_id     TEXT NOT NULL,
@@ -385,6 +400,71 @@ class Database:
             (topic_id,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    # ==================== Agent 中断快照 ====================
+
+    def save_pending_run(
+        self,
+        run_id: str,
+        user_id: str,
+        goal: str,
+        messages: list,
+        state: dict,
+        pending: list,
+        meta: dict,
+    ) -> None:
+        """落盘中断快照 (暂停等待人工确认时调用)。同一 run_id 覆盖更新。"""
+        self._ensure_tables()
+        c = self._conn()
+        c.execute(
+            """INSERT INTO agent_pending_runs
+               (run_id, user_id, goal, messages, state, pending, meta, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+               ON CONFLICT(run_id) DO UPDATE SET
+                 user_id=excluded.user_id, goal=excluded.goal,
+                 messages=excluded.messages, state=excluded.state,
+                 pending=excluded.pending, meta=excluded.meta,
+                 updated_at=datetime('now')""",
+            (
+                run_id,
+                user_id or "",
+                goal or "",
+                json.dumps(messages, ensure_ascii=False),
+                json.dumps(state, ensure_ascii=False),
+                json.dumps(pending, ensure_ascii=False),
+                json.dumps(meta, ensure_ascii=False),
+            ),
+        )
+        c.commit()
+
+    def get_pending_run(self, run_id: str) -> Optional[dict]:
+        """读回中断快照; 不存在返回 None。"""
+        self._ensure_tables()
+        c = self._conn()
+        row = c.execute(
+            "SELECT * FROM agent_pending_runs WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        for k, default in (
+            ("messages", []),
+            ("state", {}),
+            ("pending", []),
+            ("meta", {}),
+        ):
+            try:
+                d[k] = json.loads(d.get(k) or "")
+            except (TypeError, ValueError):
+                d[k] = default
+        return d
+
+    def clear_pending_run(self, run_id: str) -> None:
+        """恢复/放弃后清除快照, 避免陈旧数据被误恢复。"""
+        self._ensure_tables()
+        c = self._conn()
+        c.execute("DELETE FROM agent_pending_runs WHERE run_id = ?", (run_id,))
+        c.commit()
 
     # ==================== Memory ====================
 

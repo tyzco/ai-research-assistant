@@ -281,7 +281,10 @@ QA_PROMPT = """你是学术文献精读助手。基于用户上传的论文全�
 1. 优先使用【全文深度资料】回答，详细有据。
 2. 每次引用必须标注：`[论文: 标题, 年份, 定位]`。**定位必须照抄资料里给出的那一个**（形如 `p3` 或 `§2.1 对齐损失`）——原文给什么就写什么，不得改写、不得推算、不得编造页码或章节号。资料标注 `位置未知` 时，就写 `位置未知`。
 3. 如果命中了图片描述，在答案中说明"详见附图"，并引用图片。
-4. 如果问题无法完全回答，明确指出不足。
+4. **召回不足时不强行作答**：如果上面的资料**覆盖不到问题所问的主题**（不是"答得不全"，而是"根本没这内容"），
+   答案**第一行**必须原样输出 `【库内无相关内容】`，然后说明库内实际是什么主题、缺什么。
+   此情况下**不要**用你自己的通用知识把问题答出来冒充库内结论 —— 可以补充说明，但必须紧跟 `（库外通用知识）` 标注，
+   且不得给出带具体数字/指标的"结论式"表述。
 5. 末尾如有【🔎 补充线索】，列出标题 + 年份 + DOI。
 6. **溯源格式**（每个关键论断都要能溯源）：来自【全文深度资料】的论断，紧跟标注 `[论文: 标题, 年份, 定位]`；来自模型通用知识/库外的论断，紧跟标注 `（库外通用知识）`。答案保持完整有据，不要因溯源而删减内容、不要省略已有库内引用。
 
@@ -310,11 +313,18 @@ async def ask_question(
     memory_key: str = "",
     extra_context: list[dict] | None = None,
     return_ctx: bool = False,
+    on_token=None,
 ):
     """RAG 问答：指代消解 → 查询改写 → 粗召回 → Rerank 精排 → 生成。
 
     memory_key: ConversationMemory 的 key。传入 topic_id 使前端 /ask 和 Agent
-    工具共享同一份对话记忆。为空时回退到 table_name（Agent 工具场景）。"""
+    工具共享同一份对话记忆。为空时回退到 table_name（Agent 工具场景）。
+
+    on_token: 传入 async 回调则改用**流式**生成, 每个 token 调用一次。
+    这样 /ask 与 /ask/stream 共用**同一条**链路 —— 此前 /ask/stream 自己重写了一遍
+    简化管线 (一句话 prompt + 3块x2000 + 无定位/无记忆/无消解), 导致提示词规则、
+    页码/章节定位、召回不足标记**在用户实际使用的那条路上全部失效。
+    """
     from knowledge_base import retrieve_with_images
 
     client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
@@ -471,22 +481,46 @@ async def ask_question(
         if mem_ctx:
             prompt_content = f"【对话历史】\n{mem_ctx}\n\n{prompt_content}"
 
-        resp = await safe_call(
-            client.chat.completions.create,
-            model=model or DEEPSEEK_MODEL,
-            messages=[{"role": "user", "content": prompt_content}],
-            temperature=LLM_GEN_TEMPERATURE,
-            max_tokens=LLM_GEN_MAX_TOKENS,
-            # deepseek-v4-pro 推理模型: 禁用推理, 防止复杂 RAG prompt 下推理耗尽 max_tokens 输出空串
-            extra_body={"thinking": {"type": "disabled"}},
-            max_retries=2,
-            timeout=LLM_GEN_TIMEOUT,
-            source="llm",
-        )
-        if resp is None:
-            answer = "生成失败：LLM服务暂时不可用，请稍后重试。"
+        if on_token is not None:
+            # 流式分支: 与自己那套 prompt/上下文完全一致, 只是 token 边生成边回调
+            stream = await client.chat.completions.create(
+                model=model or DEEPSEEK_MODEL,
+                messages=[{"role": "user", "content": prompt_content}],
+                temperature=LLM_GEN_TEMPERATURE,
+                max_tokens=LLM_GEN_MAX_TOKENS,
+                extra_body={"thinking": {"type": "disabled"}},
+                timeout=LLM_GEN_TIMEOUT,
+                stream=True,
+            )
+            _parts: list[str] = []
+            async for _ch in stream:
+                try:
+                    _t = _ch.choices[0].delta.content
+                except (IndexError, AttributeError):
+                    _t = None
+                if _t:
+                    _parts.append(_t)
+                    await on_token(_t)
+            answer = "".join(_parts).strip()
+            if not answer:
+                answer = "生成失败：LLM服务暂时不可用，请稍后重试。"
         else:
-            answer = resp.choices[0].message.content.strip()
+            resp = await safe_call(
+                client.chat.completions.create,
+                model=model or DEEPSEEK_MODEL,
+                messages=[{"role": "user", "content": prompt_content}],
+                temperature=LLM_GEN_TEMPERATURE,
+                max_tokens=LLM_GEN_MAX_TOKENS,
+                # deepseek-v4-pro 推理模型: 禁用推理, 防止复杂 RAG prompt 下推理耗尽 max_tokens 输出空串
+                extra_body={"thinking": {"type": "disabled"}},
+                max_retries=2,
+                timeout=LLM_GEN_TIMEOUT,
+                source="llm",
+            )
+            if resp is None:
+                answer = "生成失败：LLM服务暂时不可用，请稍后重试。"
+            else:
+                answer = resp.choices[0].message.content.strip()
     except Exception as e:
         logger.error(f"DeepSeek error: {e}")
         answer = f"生成失败：{e}"
@@ -545,14 +579,114 @@ async def ask_question(
     image_paths = [
         r.get("image_path", "") for r in (img_res or []) if r.get("image_path")
     ]
+
+    # 程序化数字校验 (零 LLM 调用): 答案里的指标值/年份能否在检索证据中找到。
+    # 只在有未核对数字时追加一句**口径明确**的提示 —— 不写成"可能是编的",
+    # 因为真实含义是"我们给模型的证据里没有这个数"(也可能是召回没覆盖)。
+    _ctx_texts = [
+        (c.get("text") or "")[:900]
+        for c in list(text_res or []) + list(abs_res or [])
+    ]
+    # 召回不足的结构化标记: 模型被要求在覆盖不到主题时首行输出此标记。
+    # 用固定标记而非再调一次 LLM 判断 —— 后者每题 +1 次调用, 与"保速度"冲突;
+    # 而检索分数实测无法区分域内/域外 (域外问题 top1 相似度甚至高于域内), 也不能用。
+    _insufficient = answer.lstrip().startswith("【库内无相关内容】")
+    numeric = {} if _insufficient else (
+        verify_numeric_claims(answer, _ctx_texts) if _ctx_texts else {}
+    )
+    if numeric.get("unverified"):
+        _vals = "、".join(u["value"] for u in numeric["unverified"][:5])
+        answer = (
+            f"{answer}\n\n---\n**数字核对**：{_vals} 未出现在本次检索到的证据片段中。"
+            "可能是原文未召回，也可能是表述有误 —— 引用前请回到原文核对。"
+        )
+        _rec_degraded("numeric_unverified")
+    if _insufficient:
+        _rec_degraded("insufficient_recall")
+
     _resp = AskResponse(
-        answer=answer, references=references, supplement=supplement, images=image_paths
+        answer=answer,
+        references=references,
+        supplement=supplement,
+        images=image_paths,
+        numeric_check=numeric,
+        insufficient=_insufficient,
     )
     # 评估用: 返回本次答案**实际使用**的上下文 (含父子扩展块), 供 faithfulness 判官对齐 —
     # 避免判官用另一条检索路径的 chunk 判"不被支撑"而低估 faithfulness。
     if return_ctx:
         return _resp, [c.get("text", "")[:900] for c in (text_res or [])]
     return _resp
+
+
+# 高敏感数字: 指标值/百分比/小数/年份/带量级单位 —— 这些编错了最误导, 也最容易被照抄
+_NUM_PATTERNS = [
+    ("percent", re.compile(r"\d+(?:\.\d+)?\s*%")),
+    ("decimal", re.compile(r"\b\d+\.\d+\b")),
+    ("year", re.compile(r"\b(?:19|20)\d{2}\b")),
+    ("scaled", re.compile(r"\b\d+(?:\.\d+)?\s*(?:倍|万|亿|[kKmMbB])\b")),
+]
+
+
+def _norm_num(s: str) -> str:
+    """归一化数字串用于比对: 去空格, 统一大小写。"""
+    return re.sub(r"\s+", "", s or "").lower()
+
+
+def verify_numeric_claims(answer: str, contexts: list[str]) -> dict:
+    """**程序化**校验: 答案里的高敏感数字是否能在检索证据中找到。零 LLM 调用。
+
+    对应"对数字、时间等敏感字段添加程序化校验"。为什么值得做:
+      - 数字是幻觉里代价最高的一类 (指标/年份写错, 读者无从察觉)
+      - 又是唯一能**确定性**校验的一类 (字符串比对, 不依赖另一个 LLM 的判断)
+      - 成本近似 0, 可与生成同步完成
+
+    判定口径 (诚实): 标为 unverified 的含义是「**我们给模型的证据里没有这个数**」,
+    不等于「模型编造」—— 也可能是召回没覆盖到原文那一段。所以文案必须区分,
+    不能对用户说"这是编的"。这正是它比 LLM 自查更可靠的地方: 不猜, 只陈述事实。
+    """
+    if not answer:
+        return {"checked": 0, "unverified": [], "unverified_ratio": 0.0}
+    hay = _norm_num(" ".join(contexts or []))
+    # DOI / URL 里的数字是**引用标识符**, 不是需要核对真伪的指标值; 且 fulltext 上下文
+    # 本来就不带 DOI 字段 (只有摘要层带), 不排除会造成大量误报。先抹掉再扫。
+    answer = re.sub(r"10\.\d{4,9}/[^\s，。；)]+", " ", answer or "")
+    answer = re.sub(r"https?://\S+", " ", answer)
+    found: list[str] = []
+    unverified: list[dict] = []
+    seen: set[str] = set()
+
+    for kind, pat in _NUM_PATTERNS:
+        for m in pat.finditer(answer):
+            raw = m.group(0)
+            # 去重键取"数值核心"(如 98.35), 否则 98.35% 与 98.35 会被 percent/decimal
+            # 两个模式各报一次, 同一个数在报告里出现两遍
+            core = re.search(r"\d+(?:\.\d+)?", raw)
+            key = _norm_num(core.group(0)) if core else _norm_num(raw)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            if key in hay:
+                found.append(raw)
+                continue
+            # 年份单独放宽: 上下文里常以 (2023) / 2023. 等形式出现, 纯数字比对已覆盖;
+            # 这里只保留"证据里确实没有"的
+            start = max(0, m.start() - 40)
+            unverified.append(
+                {
+                    "value": raw,
+                    "kind": kind,
+                    "context": answer[start : m.end() + 40].replace("\n", " "),
+                }
+            )
+
+    checked = len(found) + len(unverified)
+    return {
+        "checked": checked,
+        "verified": len(found),
+        "unverified": unverified[:10],
+        "unverified_ratio": (len(unverified) / checked) if checked else 0.0,
+    }
 
 
 async def ask_with_context(table_name: str, question: str) -> tuple[str, list[str]]:

@@ -1750,66 +1750,47 @@ async def api_ask_stream(request: Request):
     table = _resolve_kb_table(topic_id)
 
     async def generate():
+        import asyncio as _aio
         import json
 
-        from openai import AsyncOpenAI
+        from qa_engine import ask_question
 
-        from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
-        from qa_engine import _expand_query
+        # 走**同一条** QA 链路 (此前这里自己重写了一套简化管线: 一句话 prompt +
+        # 3块x2000 + 无页码/章节定位 + 无记忆 + 无指代消解), 导致提示词规则与
+        # 引用定位在这条路上全部失效 —— 而这正是前端唯一使用的路径。
+        q: _aio.Queue = _aio.Queue()
 
-        client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+        async def _on_token(t: str):
+            await q.put(t)
 
-        # 复用 qa_engine 的完整检索链路
-        try:
-            from hybrid_retriever import AdaptiveHybridRetriever
-
-            # 查询改写
-            expanded = (
-                await _expand_query(question) if len(question) >= 15 else question
+        task = _aio.create_task(
+            ask_question(
+                table,
+                question,
+                memory_key=topic_id,
+                on_token=_on_token,
             )
-            hr = AdaptiveHybridRetriever(table)
-            # 修复: 漏 await → 必抛异常 → 该端点**总是**走下面的降级路径(查询改写+混合检索从未生效)
-            text_res, _ = await hr.search(
-                expanded, top_k=5, filter_expr="is_fulltext = true AND is_image = false"
-            )
-        except Exception:
-            from knowledge_base import retrieve_with_images
-
-            text_res, _, _ = retrieve_with_images(table, question, top_k=5)
-
-        ctx = "\n".join(
-            f"[{i+1}] {r.get('title', 'N/A')}\n{r.get('text', '')[:2000]}"
-            for i, r in enumerate((text_res or [])[:3])
         )
-        prompt = f"基于上下文回答（100-300字）。信息不足请说明。\n上下文：{ctx}\n问题：{question}\n回答："
-
         try:
-            stream = await client.chat.completions.create(
-                model=DEEPSEEK_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=LLM_GEN_TEMPERATURE,
-                max_tokens=LLM_GEN_MAX_TOKENS,
-                stream=True,
-                extra_body={"thinking": {"type": "disabled"}},
-            )
-            full_answer: list[str] = []
-            async for chunk in stream:
-                if chunk.choices[0].delta.content:
-                    token = chunk.choices[0].delta.content
-                    full_answer.append(token)
-                    yield f"data: {json.dumps({'token': token})}\n\n"
-            yield f"data: {json.dumps({'done': True})}\n\n"
+            while True:
+                getter = _aio.create_task(q.get())
+                done, _pending = await _aio.wait(
+                    {getter, task}, return_when=_aio.FIRST_COMPLETED
+                )
+                if getter in done:
+                    yield f"data: {json.dumps({'token': getter.result()})}\n\n"
+                else:
+                    getter.cancel()
+                if task.done() and q.empty():
+                    break
+            result = task.result()
+            # 结构化字段随 done 事件下发: 召回不足标记 + 数字核对结果
+            yield f"data: {json.dumps({'done': True, 'insufficient': bool(getattr(result, 'insufficient', False)), 'numeric_check': getattr(result, 'numeric_check', {}) or {}}, ensure_ascii=False)}\n\n"
         except Exception as e:
             logger.exception("ask stream failed: %s", e)
+            if not task.done():
+                task.cancel()
             yield f"data: {json.dumps({'error': '生成失败，请稍后重试'})}\n\n"
-
-        # DeepSeek 审查 #3: 保存完整答案, 原代码 add_turn(question, "") 污染记忆
-        try:
-            from conversation_memory import get_memory
-
-            get_memory(topic_id).add_turn(question, "".join(full_answer))
-        except Exception:
-            pass
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 

@@ -206,3 +206,9 @@ class AskResponse(BaseModel):
     references: list[dict[str, Any]] = Field(default_factory=list)
     supplement: list[dict[str, Any]] = Field(default_factory=list)
     images: list[str] = Field(default_factory=list)
+    # 程序化校验结果 (固定结构, 非自由文本): 数字/年份是否能在检索证据中找到。
+    # 语义是"证据里有没有这个数", 不是"模型编没编" —— 见 qa_engine.verify_numeric_claims
+    numeric_check: dict[str, Any] = Field(default_factory=dict)
+    # 召回不足标记: 模型判定库内资料覆盖不到问题主题 (不强行作答)。固定结构而非自由文本,
+    # 供前端/监控直接消费
+    insufficient: bool = False

@@ -245,6 +245,12 @@ class PiAgent:
             "messages": self._messages,
             "max_steps": self.max_steps,
             "steps": 0,
+            # === 统一 state: 意图 + 实体 (此前只存 messages/steps, 意图与实体散落在各处) ===
+            # intent: 技能路由结果 + 规则/语义意图 (三层漏斗的输出)
+            # entities: 从任务文本抽取的结构化槽位 (零额外 LLM 调用, 纯规则)
+            "intent": _describe_intent(task, selected),
+            "entities": _extract_entities(task),
+            "skills": selected,
         }
         result = await self._loop()
         # P3 持久技能记忆: 成功任务记录做法 (跨会话复用成功经验)
@@ -840,6 +846,10 @@ class PiAgent:
         return {
             "success": bool(final_result) and "超时" not in final_result,
             "result": final_result or "Agent 未能在限制步数内完成任务",
+            # 统一 state 的消费点: 意图与实体随结果一起返回, 供前端展示/监控统计,
+            # 而不是只写进 _state 就没人用
+            "intent": self._state.get("intent") or {},
+            "entities": self._state.get("entities") or {},
             "trace": {
                 "goal": trace.goal,
                 "turns": len(trace.turns),
@@ -1122,6 +1132,52 @@ class PiAgent:
 # ============================================================
 _pi_agents: dict[str, PiAgent] = {}
 _pi_agents_lock = threading.Lock()
+
+
+def _describe_intent(task: str, selected_skills: list[str]) -> dict:
+    """统一 state 的意图槽: 技能路由结果 + 规则/语义意图分类。
+
+    复用已有的三层漏斗 (规则 → 嵌入语义 → 默认), 不额外调 LLM。
+    """
+    intent: dict = {"skills": selected_skills, "label": "", "source": ""}
+    try:
+        from qa_engine import _classify_intent
+
+        intent["label"] = _classify_intent(task)
+        intent["source"] = "rules+semantic"
+    except Exception:
+        pass
+    return intent
+
+
+def _extract_entities(task: str) -> dict:
+    """从任务文本抽取结构化实体 (纯规则, 零 LLM 调用)。
+
+    学术场景真正有用的槽位: arXiv id / DOI / 年份 / 引号里的术语 / 显式列出的关键词。
+    抽不到就留空, 不猜 —— 猜出来的实体比没有更糟 (下游会当成事实用)。
+    """
+    import re as _re
+
+    t = task or ""
+    ents: dict = {}
+    dois = _re.findall(r"\b(10\.\d{4,9}/[-._;()/:A-Za-z0-9]+)\b", t)
+    if dois:
+        ents["dois"] = dois
+    # arXiv id 与 DOI 的形态会撞车 (DOI `10.1109/CVPR.2019.00677` 里的 `2019.00677`
+    # 也匹配 YYMM.NNNNN)。先剔除 DOI 片段再匹配, 否则会凭空造出一个假的 arXiv id。
+    _t_no_doi = t
+    for d in dois:
+        _t_no_doi = _t_no_doi.replace(d, " ")
+    arxiv = _re.findall(r"(?<![\d.])(\d{4}\.\d{4,5})(v\d+)?(?![\d.])", _t_no_doi)
+    if arxiv:
+        ents["arxiv_ids"] = [a[0] for a in arxiv]
+    years = sorted({int(y) for y in _re.findall(r"\b((?:19|20)\d{2})\b", t)})
+    if years:
+        ents["years"] = years
+    quoted = _re.findall(r"[「『\"“]([^」』\"”]{2,40})[」』\"”]", t)
+    if quoted:
+        ents["quoted_terms"] = quoted[:8]
+    return ents
 
 
 def _restore_agent(run_id: str) -> Optional["PiAgent"]:

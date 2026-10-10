@@ -299,6 +299,13 @@ async def api_metrics():
     except Exception:
         pass
     try:
+        # 嵌入缓存命中率 (成本控制之缓存复用): 命中率长期偏低说明缓存没起到作用
+        from embedder import embed_cache_stats
+
+        d["embed_cache"] = embed_cache_stats()
+    except Exception:
+        pass
+    try:
         # 接入/索引环节指标: 解析成功率 + 分块质量 (补齐全流程最后一处无量化的环节)
         d["ingest"] = metrics.ingest_stats()
     except Exception:

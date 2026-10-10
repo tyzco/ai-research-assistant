@@ -66,6 +66,9 @@ LOCAL_EMBEDDING_MODEL = _env("LOCAL_EMBEDDING_MODEL", "BAAI/bge-small-zh")
 LOCAL_EMBEDDING_DIM = _env("LOCAL_EMBEDDING_DIM", 512, int)
 # 嵌入后端: "sentence_transformers" | "flag_embedding" | "" (留空按模型名自动检测)
 EMBEDDING_BACKEND = _env("EMBEDDING_BACKEND", "")
+# 嵌入缓存条数 (LRU, 0 = 关闭)。同一文本+同一模型 → 向量恒定, 缓存绝对安全;
+# 而嵌入是最重的本地算力: 重复上传同一篇论文/重建库会整篇重算, 缓存后直接复用。
+EMBEDDING_CACHE_SIZE = _env("EMBEDDING_CACHE_SIZE", 20000, int)
 
 # ===================================================================
 # Rerank 模型 (延迟加载)
@@ -143,6 +146,11 @@ TWO_COLUMN_REORDER_ENABLED = _env_bool("TWO_COLUMN_REORDER_ENABLED", True)
 # 参数类错误 (缺少必填/invalid/404) 判为永久故障, 不重试 —— 重试只是把 3s 失败拖成 9s
 TOOL_RETRY_MAX = _env("TOOL_RETRY_MAX", 2, int)
 TOOL_RETRY_BASE_DELAY = _env("TOOL_RETRY_BASE_DELAY", 0.8, float)
+
+# 死循环第二道防线 (第一道=轮次限制 max_steps, 第三道=超时 max_time):
+# 同一工具用**相同参数**连续调用达到此次数 → 判定原地打转, 把观察结果换成警示让模型换路。
+# 阈值 3 = 允许"重试一次仍失败"的正常情形, 第 3 次才判定为转圈。
+AGENT_REPEAT_CALL_LIMIT = _env("AGENT_REPEAT_CALL_LIMIT", 3, int)
 
 # ===================================================================
 # Retrieval Limits

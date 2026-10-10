@@ -23,6 +23,7 @@ from typing import Optional
 from config import (
     AGENT_MAX_TOKENS,
     AGENT_MAX_STEPS,
+    AGENT_REPEAT_CALL_LIMIT,
     AGENT_PLAN_ENABLED,
     AGENT_PLAN_MIN_CHARS,
     AGENT_REFLEXION_ENABLED,
@@ -56,6 +57,10 @@ class TraceState:
     key_findings: list[str] = field(default_factory=list)
     start_time: float = 0.0
     total_tokens: int = 0
+    # 重复动作检测: 最近若干次 (工具名, 参数) 指纹。ReAct 最典型的失败模式是
+    # 模型反复用同样参数调同一个工具却不推进 —— 只靠 max_steps 要烧满 15 轮才发现。
+    call_fingerprints: list[str] = field(default_factory=list)
+    repeat_hits: int = 0
 
 
 class PiAgent:
@@ -609,6 +614,35 @@ class PiAgent:
                             if not safe:
                                 tool_result = f"安全检查未通过: {reason}"
                                 turn.tool_success = False
+
+                    # === 重复动作检测 (死循环第三道防线) ===
+                    # 轮次限制(max_steps) 与超时兜底(max_time) 都是"烧到上限才停";
+                    # 这里在**动作层面**提前发现原地打转: 同工具+同参反复调用 → 直接把
+                    # 观察结果换成警示, 让模型换路, 而不是等它把步数耗光。
+                    if tool_result is None:
+                        _fp = f"{tool_name}:{json.dumps(tool_args, sort_keys=True, ensure_ascii=False)[:200]}"
+                        _recent = trace.call_fingerprints[-6:]
+                        _repeats = _recent.count(_fp)
+                        trace.call_fingerprints.append(_fp)
+                        if _repeats >= AGENT_REPEAT_CALL_LIMIT - 1:
+                            trace.repeat_hits += 1
+                            logger.warning(
+                                f"repeat action detected: {tool_name} ×{_repeats + 1} "
+                                f"(goal={trace.goal[:40]})"
+                            )
+                            try:
+                                from monitor import metrics as _mx
+
+                                _mx.record_degradation("agent_repeat_action")
+                            except Exception:
+                                pass
+                            tool_result = (
+                                f"⚠️ 检测到重复动作：你已连续 {_repeats + 1} 次用**相同参数**调用 "
+                                f"{tool_name}，结果不会变化。请改用不同参数/其他工具，"
+                                f"或直接基于已有信息给出最终答复。"
+                            )
+                            turn.tool_success = False
+                            turn.tool_name = tool_name
 
                     # === 执行工具 ===
                     if tool_result is None and tool_def is not None:

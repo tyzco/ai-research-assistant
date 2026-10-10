@@ -19,6 +19,7 @@ import asyncio
 import logging
 import os
 import threading
+from collections import OrderedDict
 
 import numpy as np
 
@@ -104,14 +105,70 @@ def _normalize(vecs: np.ndarray) -> np.ndarray:
     return vecs / np.maximum(norms, 1e-12)
 
 
+# ---- 嵌入缓存 (成本控制之"缓存复用") ----
+# 为什么这里可以放心缓存: 同一段文本 + 同一模型 → 向量**恒定**, 没有随机性;
+# 而嵌入是本系统最重的一笔本地算力 (一篇论文几十块, 重新上传/重建库会整篇重算)。
+# 缓存键带上模型名, 换模型后自动失效, 不会串味。
+_EMB_CACHE: "OrderedDict[str, list[float]]" = OrderedDict()
+_EMB_CACHE_LOCK = threading.Lock()
+_EMB_CACHE_STATS = {"hit": 0, "miss": 0}
+
+
+def _emb_cache_key(model_name: str, text: str) -> str:
+    import hashlib
+
+    return hashlib.md5(f"{model_name}\x00{text}".encode("utf-8")).hexdigest()
+
+
+def embed_cache_stats() -> dict:
+    with _EMB_CACHE_LOCK:
+        h, m = _EMB_CACHE_STATS["hit"], _EMB_CACHE_STATS["miss"]
+        return {
+            "hit": h,
+            "miss": m,
+            "size": len(_EMB_CACHE),
+            "hit_rate": (h / (h + m)) if (h + m) else 0.0,
+        }
+
+
+def clear_embed_cache() -> None:
+    with _EMB_CACHE_LOCK:
+        _EMB_CACHE.clear()
+        _EMB_CACHE_STATS["hit"] = _EMB_CACHE_STATS["miss"] = 0
+
+
 def embed_texts(texts: list[str]) -> list[list[float]]:
-    """批量编码文本为向量。自动选择正确后端。统一 L2 归一化。"""
+    """批量编码文本为向量。自动选择正确后端。统一 L2 归一化。
+
+    带 LRU 缓存 (EMBEDDING_CACHE_SIZE 条, 0 = 关闭): 命中直接返回, 不再进模型。
+    """
     if not texts:
         return []
-    from config import LOCAL_EMBEDDING_DIM, LOCAL_EMBEDDING_MODEL
+    from config import (
+        EMBEDDING_CACHE_SIZE,
+        LOCAL_EMBEDDING_DIM,
+        LOCAL_EMBEDDING_MODEL,
+    )
+
+    cache_on = EMBEDDING_CACHE_SIZE > 0
+    if cache_on:
+        keys = [_emb_cache_key(LOCAL_EMBEDDING_MODEL, t) for t in texts]
+        with _EMB_CACHE_LOCK:
+            hits = [_EMB_CACHE.get(k) for k in keys]
+            for k, v in zip(keys, hits):
+                if v is not None:
+                    _EMB_CACHE.move_to_end(k)
+            _EMB_CACHE_STATS["hit"] += sum(1 for v in hits if v is not None)
+            _EMB_CACHE_STATS["miss"] += sum(1 for v in hits if v is None)
+        if all(v is not None for v in hits):
+            return [list(v) for v in hits]
+        miss_idx = [i for i, v in enumerate(hits) if v is None]
+    else:
+        keys, hits, miss_idx = [], [], list(range(len(texts)))
 
     model = _load_model(LOCAL_EMBEDDING_MODEL, LOCAL_EMBEDDING_DIM)
-    output = model.encode(texts, batch_size=min(32, len(texts)))
+    sub_texts = [texts[i] for i in miss_idx]
+    output = model.encode(sub_texts, batch_size=min(32, len(sub_texts)))
 
     # FlagEmbedding 返回 dict {'dense_vecs': np.array, 'lexical_weights': ...}
     if isinstance(output, dict):
@@ -120,7 +177,25 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
         vecs = output
 
     # 统一归一化 (修复: 原 ST 分支未归一化 → 与 FlagEmbedding 向量不可比)
-    return _normalize(np.asarray(vecs, dtype=np.float64)).tolist()
+    new_vecs = _normalize(np.asarray(vecs, dtype=np.float64)).tolist()
+
+    if not cache_on:
+        return new_vecs
+
+    out: list[list[float]] = [None] * len(texts)  # type: ignore[list-item]
+    for i, v in zip(miss_idx, new_vecs):
+        out[i] = v
+    with _EMB_CACHE_LOCK:
+        for i, v in zip(miss_idx, new_vecs):
+            k = keys[i]
+            _EMB_CACHE[k] = v
+            _EMB_CACHE.move_to_end(k)
+        while len(_EMB_CACHE) > EMBEDDING_CACHE_SIZE:
+            _EMB_CACHE.popitem(last=False)
+        for i, v in enumerate(hits):
+            if v is not None:
+                out[i] = list(v)
+    return out
 
 
 async def aembed_texts(texts: list[str]) -> list[list[float]]:

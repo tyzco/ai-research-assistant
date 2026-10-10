@@ -152,6 +152,10 @@ TOOL_RETRY_BASE_DELAY = _env("TOOL_RETRY_BASE_DELAY", 0.8, float)
 # 阈值 3 = 允许"重试一次仍失败"的正常情形, 第 3 次才判定为转圈。
 AGENT_REPEAT_CALL_LIMIT = _env("AGENT_REPEAT_CALL_LIMIT", 3, int)
 
+# ReAct 第三类故障: **错误累积**。单次失败让模型自行纠错是对的; 连续失败说明路线错了,
+# 继续烧步数只会把错误累积进上下文, 最终交出建立在失败之上的答案。达到此次数即止损。
+AGENT_MAX_CONSECUTIVE_FAILURES = _env("AGENT_MAX_CONSECUTIVE_FAILURES", 4, int)
+
 # ===================================================================
 # Retrieval Limits
 # ===================================================================

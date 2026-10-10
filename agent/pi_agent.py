@@ -23,6 +23,7 @@ from typing import Optional
 from config import (
     AGENT_MAX_TOKENS,
     AGENT_MAX_STEPS,
+    AGENT_MAX_CONSECUTIVE_FAILURES,
     AGENT_REPEAT_CALL_LIMIT,
     AGENT_PLAN_ENABLED,
     AGENT_PLAN_MIN_CHARS,
@@ -61,6 +62,8 @@ class TraceState:
     # 模型反复用同样参数调同一个工具却不推进 —— 只靠 max_steps 要烧满 15 轮才发现。
     call_fingerprints: list[str] = field(default_factory=list)
     repeat_hits: int = 0
+    # 错误累积: 连续失败计数 (成功即清零)。用于在错误路径上及时止损。
+    consecutive_failures: int = 0
 
 
 class PiAgent:
@@ -691,6 +694,33 @@ class PiAgent:
                         tool_result = f"未知工具: {tool_name}"
                         turn.tool_success = False
                     turn.tool_result = str(tool_result)[:200]  # 存预览供 key_findings
+
+                    # === 错误累积熔断 (ReAct 第三类故障模式) ===
+                    # 单次失败由模型自行纠错是对的; 但**连续**失败说明它不是"再试一下就能过",
+                    # 而是路线本身错了 —— 此时继续烧步数只会把错误一路累积进上下文,
+                    # 最后交出一份建立在失败之上的答案。这里及时止损, 如实报告。
+                    if turn.tool_success:
+                        trace.consecutive_failures = 0
+                    else:
+                        trace.consecutive_failures += 1
+                        if trace.consecutive_failures >= AGENT_MAX_CONSECUTIVE_FAILURES:
+                            logger.warning(
+                                f"错误累积熔断: 连续 {trace.consecutive_failures} 次工具失败 "
+                                f"(goal={trace.goal[:40]})"
+                            )
+                            try:
+                                from monitor import metrics as _mx
+
+                                _mx.record_degradation("agent_error_accumulation")
+                            except Exception:
+                                pass
+                            final_result = (
+                                f"已连续 {trace.consecutive_failures} 次工具调用失败，"
+                                f"为避免在错误路径上继续消耗，已提前终止。\n\n"
+                                f"最后一次失败: {str(tool_result)[:300]}\n\n"
+                                f"建议：换一个更具体的任务描述，或先确认知识库/网络状态后重试。"
+                            )
+                            break
 
                     # === HOOK: after_tool ===
                     self._fire_hook(

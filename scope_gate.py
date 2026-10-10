@@ -316,6 +316,23 @@ _ACADEMIC_PROTOTYPES = [
     "reinforcement learning and policy optimization",
     "transformer与注意力机制",
     "transformer and attention mechanism",
+    # === 跨学科原型 (修复: 原集合几乎全是 AI/ML + 论文写作, 闸门实际被偏置到项目自己的
+    # demo 领域 —— "量子纠错的表面码阈值是多少" 与 "忆阻器的阻变机制是什么" 这类
+    # 合法学术问题因为无处可匹配而被拒 (学术分甚至略低于非学术分)。===
+    "量子物理与凝聚态物理概念",
+    "quantum physics and condensed matter physics",
+    "数学定理证明与推导",
+    "mathematical theorem proof and derivation",
+    "化学反应与材料科学原理",
+    "chemistry and materials science",
+    "生物学机制与分子生物学",
+    "biology and molecular mechanisms",
+    "医学研究与临床试验",
+    "medicine and clinical research",
+    "工程与信号处理原理",
+    "engineering and signal processing theory",
+    "统计推断与显著性检验",
+    "statistical inference and hypothesis testing",
 ]
 
 _NON_ACADEMIC_PROTOTYPES = [

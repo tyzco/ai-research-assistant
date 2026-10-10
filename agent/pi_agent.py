@@ -613,15 +613,22 @@ class PiAgent:
                                 tool_result = "任务超时, 跳过工具执行"
                                 turn.tool_success = False
                             else:
-                                raw_result = await asyncio.wait_for(
-                                    tool_def.execute(**tool_args),
+                                # 瞬时故障 (超时/连接/限流/5xx) 自动退避重试; 参数类错误不重试
+                                _ok, _res = await self.tool_mgr.execute_with_retry(
+                                    tool_name,
+                                    tool_def,
+                                    tool_args,
                                     timeout=min(remaining, 60),
                                 )
-                                turn.tool_success = True
-                                trace.tools_used.append(tool_name)
-                        except asyncio.TimeoutError:
-                            tool_result = f"工具 {tool_name} 执行超时"
-                            turn.tool_success = False
+                                if _ok:
+                                    raw_result = _res
+                                    turn.tool_success = True
+                                    trace.tools_used.append(tool_name)
+                                else:
+                                    raw_result = self.tool_mgr.format_error_for_llm(
+                                        tool_name, str(_res), tool_args
+                                    )
+                                    turn.tool_success = False
                         except Exception as e:
                             raw_result = self.tool_mgr.format_error_for_llm(
                                 tool_name, str(e), tool_args
@@ -942,14 +949,18 @@ class PiAgent:
                     "result": f"需要人工确认执行工具: {nxt['tool_name']}",
                 }
             # 无需确认 → 直接执行, 补上响应
-            try:
-                if tool_def is None:
-                    content = f"工具 {nxt['tool_name']} 不存在"
-                else:
-                    content = str(await tool_def.execute(**nxt["tool_args"]))[:3000]
-            except Exception as e:
-                content = self.tool_mgr.format_error_for_llm(
-                    nxt["tool_name"], str(e), nxt["tool_args"]
+            if tool_def is None:
+                content = f"工具 {nxt['tool_name']} 不存在"
+            else:
+                _ok, _res = await self.tool_mgr.execute_with_retry(
+                    nxt["tool_name"], tool_def, nxt["tool_args"]
+                )
+                content = (
+                    str(_res)[:3000]
+                    if _ok
+                    else self.tool_mgr.format_error_for_llm(
+                        nxt["tool_name"], str(_res), nxt["tool_args"]
+                    )
                 )
             self._messages.append(
                 {
@@ -1024,13 +1035,16 @@ class PiAgent:
 
         tool_def = get_tool(pc["tool_name"])
         if confirm and tool_def is not None:
-            try:
-                result = await tool_def.execute(**pc["tool_args"])
-            except Exception as e:
-                result = self.tool_mgr.format_error_for_llm(
-                    pc["tool_name"], str(e), pc["tool_args"]
+            _ok, _res = await self.tool_mgr.execute_with_retry(
+                pc["tool_name"], tool_def, pc["tool_args"]
+            )
+            content = (
+                str(_res)[:3000]
+                if _ok
+                else self.tool_mgr.format_error_for_llm(
+                    pc["tool_name"], str(_res), pc["tool_args"]
                 )
-            content = str(result)[:3000]
+            )
         elif confirm:
             content = f"工具 {pc['tool_name']} 不存在, 无法执行"
         else:

@@ -130,6 +130,13 @@ TWO_COLUMN_SWITCH_RATIO = _env("TWO_COLUMN_SWITCH_RATIO", 0.30, float)
 TWO_COLUMN_REORDER_ENABLED = _env_bool("TWO_COLUMN_REORDER_ENABLED", True)
 
 # ===================================================================
+# 工具调用重试 (仅对瞬时故障: 超时/连接/限流/5xx)
+# ===================================================================
+# 参数类错误 (缺少必填/invalid/404) 判为永久故障, 不重试 —— 重试只是把 3s 失败拖成 9s
+TOOL_RETRY_MAX = _env("TOOL_RETRY_MAX", 2, int)
+TOOL_RETRY_BASE_DELAY = _env("TOOL_RETRY_BASE_DELAY", 0.8, float)
+
+# ===================================================================
 # Retrieval Limits
 # ===================================================================
 # 分块大小 (字符): 论文长, 2048 太小 → 检索到的段落覆盖不全 (答案跨块会丢)。

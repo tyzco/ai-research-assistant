@@ -50,6 +50,40 @@ def _is_safe_domain(url: str) -> bool:
     return any(host == d or host.endswith("." + d) for d in SAFE_DOMAINS)
 
 
+# 瞬时故障 (值得重试): 网络抖动/超时/限流/5xx —— 重试通常能过
+_TRANSIENT_MARKERS = (
+    "timeout", "timed out", "connection", "connect", "temporarily",
+    "rate limit", "too many requests", "502", "503", "504", "429",
+    "server error", "reset by peer", "unavailable",
+)
+# 永久故障 (不该重试): 参数错/找不到/权限 —— 重试只是白等
+_PERMANENT_MARKERS = (
+    "缺少必填", "invalid", "not found", "不存在", "permission", "forbidden",
+    "unauthorized", "schema", "jsondecode", "值的类型", "400", "401", "403", "404",
+)
+
+
+def classify_tool_error(exc: BaseException | str) -> str:
+    """把工具异常分类为 transient / permanent。分类决定是否重试。
+
+    宁可判成 permanent 也不要滥重试: 参数错误重试 3 次只是把 3 秒的失败拖成 9 秒,
+    对用户没有任何收益 (且与"保速度"原则冲突)。
+    """
+    name = type(exc).__name__ if isinstance(exc, BaseException) else ""
+    msg = (str(exc) or "").lower()
+    blob = f"{name.lower()} {msg}"
+
+    if any(m in blob for m in _PERMANENT_MARKERS):
+        return "permanent"
+    if name in ("TimeoutError", "ConnectError", "ReadTimeout", "ConnectTimeout",
+                "APITimeoutError", "APIConnectionError", "ReadError", "RemoteProtocolError",
+                "RateLimitError", "InternalServerError", "ServiceUnavailableError"):
+        return "transient"
+    if any(m in blob for m in _TRANSIENT_MARKERS):
+        return "transient"
+    return "permanent"
+
+
 class ToolManager:
     """工具调用管理器: 校验 + 安全 + 恢复。"""
 
@@ -175,6 +209,51 @@ class ToolManager:
             },
             ensure_ascii=False,
         )
+
+    async def execute_with_retry(
+        self, tool_name: str, tool_def, args: dict, timeout: float | None = None
+    ):
+        """执行工具, 仅对**瞬时故障**做指数退避重试。返回 (ok, result_or_error)。
+
+        timeout: **每次尝试**的超时 (不是总预算), 由调用方按剩余时间预算传入。
+
+        为什么要分级: 网络抖动重试有意义, 参数写错重试纯属浪费时间。分类见
+        classify_tool_error; 重试次数/退避见 config.TOOL_RETRY_*。
+        """
+        import asyncio
+
+        from config import TOOL_RETRY_BASE_DELAY, TOOL_RETRY_MAX
+
+        last_err: BaseException | None = None
+        for attempt in range(TOOL_RETRY_MAX + 1):
+            try:
+                _call = tool_def.execute(**args)
+                result = (
+                    await asyncio.wait_for(_call, timeout=timeout)
+                    if timeout
+                    else await _call
+                )
+                if attempt:
+                    logger.info(
+                        f"tool {tool_name} succeeded on retry #{attempt} (前 {attempt} 次瞬时失败)"
+                    )
+                return True, result
+            except Exception as e:
+                last_err = e
+                kind = classify_tool_error(e)
+                if kind == "permanent" or attempt >= TOOL_RETRY_MAX:
+                    logger.warning(
+                        f"tool {tool_name} failed ({kind}, attempt {attempt + 1}/"
+                        f"{TOOL_RETRY_MAX + 1}): {e}"
+                    )
+                    break
+                delay = TOOL_RETRY_BASE_DELAY * (2**attempt)
+                logger.warning(
+                    f"tool {tool_name} transient failure (attempt {attempt + 1}/"
+                    f"{TOOL_RETRY_MAX + 1}), retry in {delay:.1f}s: {e}"
+                )
+                await asyncio.sleep(delay)
+        return False, str(last_err)
 
     def record_call(self, tool_name: str, params: dict, result: str, success: bool):
         with self._lock:

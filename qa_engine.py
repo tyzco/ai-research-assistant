@@ -75,6 +75,15 @@ def _rerank(question: str, chunks: list[dict], top_k: int = 5) -> list[dict]:
         pairs = [[question, c.get("text", "")[:512]] for c in chunks]
         scores = reranker.predict(pairs, convert_to_numpy=True)
         ranked = sorted(zip(scores, chunks), key=lambda x: x[0], reverse=True)
+        # 低置信度过滤: 与 hybrid_retriever 用同一套语义 (默认阈值 0 = 不过滤)。
+        # 此前本路径完全忽略 RERANK_MIN_SCORE, 两条重排路径行为不一致。
+        from config import RERANK_KEEP_BEST_IF_NONE, RERANK_MIN_SCORE
+
+        if RERANK_MIN_SCORE > 0:
+            kept = [c for s, c in ranked if s >= RERANK_MIN_SCORE]
+            if kept:
+                return kept[:top_k]
+            return [ranked[0][1]] if RERANK_KEEP_BEST_IF_NONE and ranked else []
         return [c for _, c in ranked[:top_k]]
     except Exception as e:
         logger.warning(f"Rerank failed: {e}, using top-{top_k} by vector score")

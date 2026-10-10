@@ -184,12 +184,19 @@ class AdaptiveHybridRetriever:
             reranker = self._get_stage2()
             pairs = [[query, c.get("text", "")[:512]] for c in stage1_chunks]
             scores2 = reranker.predict(pairs, convert_to_numpy=True)
-            from config import RERANK_MIN_SCORE
+            from config import RERANK_MIN_SCORE, RERANK_KEEP_BEST_IF_NONE
+
             if RERANK_MIN_SCORE > 0:
                 valid = [(i, sc) for i, sc in enumerate(scores2) if sc >= RERANK_MIN_SCORE]
-                if valid:
-                    valid.sort(key=lambda x: x[1], reverse=True)
-                    return [stage1_chunks[i] for i, _ in valid[:top_k]]
+                # 修复: 原实现 `if valid:` 后直接落到下面的未过滤分支 —— 于是**全部低于阈值时
+                # 反而一个都不滤**, 恰好在最该生效的低置信度场景下静默失效。
+                # 现改为显式策略: 全都不达标 → 要么回退保留 top-1 (RERANK_KEEP_BEST_IF_NONE,
+                # 保证有上下文可用), 要么返回空 (让上层如实告知"库内无相关内容")。
+                if not valid and RERANK_KEEP_BEST_IF_NONE:
+                    _best = int(np.argmax(scores2))
+                    return [stage1_chunks[_best]]
+                valid.sort(key=lambda x: x[1], reverse=True)
+                return [stage1_chunks[i] for i, _ in valid[:top_k]]
             stage2_indices = sorted(
                 range(len(scores2)), key=lambda i: scores2[i], reverse=True
             )[:top_k]

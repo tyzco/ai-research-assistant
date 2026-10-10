@@ -71,7 +71,15 @@ EMBEDDING_BACKEND = _env("EMBEDDING_BACKEND", "")
 # Rerank 模型 (延迟加载)
 # ===================================================================
 RERANK_MODEL = _env("RERANK_MODEL", "BAAI/bge-reranker-base")
+# 重排精度阈值: bge-reranker 得分低于此值视为低置信度, 过滤掉。0 = 不过滤 (默认)。
+# **实测标定** (43 篇真实论文 KB, 8 题 eval): bge-reranker-base 原始分数落在
+# 0.0001–0.24, 中位 0.0003 —— 尺度被压缩 3 个数量级且随查询漂移, **不存在可用的
+# 绝对阈值**。设 0.3 会滤掉 100% 的块, 设 0.05 会滤掉 90%, 而 R@5/MRR 几乎不变
+# (说明分数与相关性没有干净的分界)。因此默认关闭; 若要开启, 必须针对**当前
+# reranker 模型**重新标定, 不能照搬别处的经验值。
 RERANK_MIN_SCORE = _env("RERANK_MIN_SCORE", 0.0, float)
+# 全部候选都低于阈值时: True=保留最高分那条(保证有上下文) / False=返回空(如实说没找到)
+RERANK_KEEP_BEST_IF_NONE = _env_bool("RERANK_KEEP_BEST_IF_NONE", True)
 
 # HyDE (Hypothetical Document Embeddings) 查询改写 — 默认关 (每次检索+1 LLM调用, 与速度优先原则冲突)
 # 开启后: 为什么是/如何/为什么类解释性问题生成假设答案段落作检索变体, 提升弱召回场景命中

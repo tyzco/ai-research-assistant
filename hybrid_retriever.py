@@ -16,9 +16,7 @@ import re
 import threading
 
 import numpy as np
-from sentence_transformers import CrossEncoder, SentenceTransformer
 
-from config import RERANK_MODEL, RERANK_STAGE1_MODEL
 from knowledge_base import _cosine_search, _embed_texts_sync
 
 logger = logging.getLogger(__name__)
@@ -42,23 +40,19 @@ class AdaptiveHybridRetriever:
         self.table_name = table_name
 
     def _get_stage1(self):
-        # 双检锁: 线程安全加载 (DeepSeek 审查 #1)
-        if AdaptiveHybridRetriever._stage1_model is None:
-            with AdaptiveHybridRetriever._model_lock:
-                if AdaptiveHybridRetriever._stage1_model is None:
-                    AdaptiveHybridRetriever._stage1_model = SentenceTransformer(
-                        RERANK_STAGE1_MODEL, local_files_only=True
-                    )
-        return AdaptiveHybridRetriever._stage1_model
+        """Stage1 预筛模型 —— 委托进程级单例 (reranker.py)。
+
+        此前本类自己缓存一份, 与其它模块各建各的: 同一个模型可能被加载多份。
+        """
+        from reranker import get_stage1
+
+        return get_stage1()
 
     def _get_stage2(self):
-        if AdaptiveHybridRetriever._stage2_model is None:
-            with AdaptiveHybridRetriever._model_lock:
-                if AdaptiveHybridRetriever._stage2_model is None:
-                    AdaptiveHybridRetriever._stage2_model = CrossEncoder(
-                        RERANK_MODEL, max_length=512, local_files_only=True
-                    )
-        return AdaptiveHybridRetriever._stage2_model
+        """Stage2 精排模型 —— 同上, 委托进程级单例。"""
+        from reranker import get_stage2
+
+        return get_stage2()
 
     # ---- 自适应权重推理 ----
     def _compute_adaptive_weight(self, query: str) -> float:
@@ -307,7 +301,9 @@ class AdaptiveHybridRetriever:
                 DEEPSEEK_MODEL,
             )
 
-            client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+            from llm_client import get_client
+
+            client = get_client()
             resp = await asyncio.wait_for(
                 client.chat.completions.create(
                     model=DEEPSEEK_MODEL,

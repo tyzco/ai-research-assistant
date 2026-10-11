@@ -7,6 +7,7 @@ import asyncio
 import inspect
 import json
 import logging
+import re
 from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
@@ -89,6 +90,13 @@ class Tool:
                     continue
             if "enum" in spec and val not in spec["enum"]:
                 errors.append(f"参数 `{key}` 取值必须是 {spec['enum']} 之一, 收到 {val!r}")
+            if "pattern" in spec and isinstance(val, str):
+                # 声明了 pattern 就必须执行 —— 写在 schema 里但不校验, 比不写更糟:
+                # 模型以为有约束, 实际没有, 而错误会在下游以无关的形式出现。
+                if not re.fullmatch(spec["pattern"], val):
+                    errors.append(
+                        f"参数 `{key}` 格式不对: 需要匹配 {spec['pattern']}, 收到 {val!r}"
+                    )
             if isinstance(val, (int, float)) and not isinstance(val, bool):
                 if "minimum" in spec and val < spec["minimum"]:
                     errors.append(f"参数 `{key}` 最小为 {spec['minimum']}, 收到 {val}")
@@ -349,7 +357,12 @@ TOOLS: list[Tool] = [
                     "maxItems": 5,
                     "description": "PDF 下载链接列表。**单次最多 5 条**，超出部分会被直接丢弃（不报错）——需要更多请分多次调用",
                 },
-                "topic_id": {"type": "string", "description": "课题ID"},
+                "topic_id": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{12}$",
+                    "description": "课题ID：12 位小写十六进制，例如 e9d9e4e4a9fa"
+                    "（由 create_topic 生成，不是自拟名称）。",
+                },
             },
             "required": ["urls", "topic_id"],
         },
@@ -362,7 +375,12 @@ TOOLS: list[Tool] = [
         {
             "type": "object",
             "properties": {
-                "table_name": {"type": "string", "description": "LanceDB表名"},
+                "table_name": {
+                    "type": "string",
+                    "description": "知识库名。两种写法都接受："
+                    "① 直接传 12 位 topic_id（如 e9d9e4e4a9fa，会自动解析成对应表）；"
+                    "② 传完整表名 papers_<topic_id>（如 papers_e9d9e4e4a9fa）。",
+                },
                 "question": {"type": "string", "description": "学术问题"},
             },
             "required": ["table_name", "question"],
@@ -376,7 +394,12 @@ TOOLS: list[Tool] = [
         {
             "type": "object",
             "properties": {
-                "topic_id": {"type": "string", "description": "课题ID"},
+                "topic_id": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{12}$",
+                    "description": "课题ID：12 位小写十六进制，例如 e9d9e4e4a9fa"
+                    "（由 create_topic 生成，不是自拟名称）。",
+                },
             },
             "required": ["topic_id"],
         },
@@ -388,7 +411,12 @@ TOOLS: list[Tool] = [
         {
             "type": "object",
             "properties": {
-                "topic_id": {"type": "string", "description": "课题ID"},
+                "topic_id": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{12}$",
+                    "description": "课题ID：12 位小写十六进制，例如 e9d9e4e4a9fa"
+                    "（由 create_topic 生成，不是自拟名称）。",
+                },
             },
             "required": ["topic_id"],
         },
@@ -442,12 +470,19 @@ TOOLS: list[Tool] = [
         {
             "type": "object",
             "properties": {
-                "paper_id": {"type": "string", "description": "论文 ID"},
+                "paper_id": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{16}$",
+                    "description": "论文 ID：16 位十六进制，例如 3f2a9c1b8d4e5f60。"
+                    "必须取自 search_papers / ask_knowledge_base 的返回，不要自拟。",
+                },
+                # 这个 dict 里 `enum` 曾写了两遍 —— Python 静默取后一个, 前者形同虚设。
+                # 这次两组取值恰好相同所以没出事, 但重复键是"改了上面那行依然不生效"
+                # 这类问题的标准来源, 而且不会有任何报错。
                 "direction": {
                     "type": "string",
-                    "enum": ["citations", "references", "both"],
-                    "description": "citations=谁引用了这篇, references=这篇引用了谁, both=两者都查。必须是这三个值之一，否则返回空结果",
                     "enum": ["both", "citations", "references"],
+                    "description": "citations=谁引用了这篇, references=这篇引用了谁, both=两者都查。必须是这三个值之一，否则返回空结果",
                 },
             },
             "required": ["paper_id"],
@@ -590,7 +625,12 @@ if not any(t.name == "agent_ask" for t in TOOLS):
             {
                 "type": "object",
                 "properties": {
-                    "table_name": {"type": "string", "description": "知识库表名"},
+                    "table_name": {
+                    "type": "string",
+                    "description": "知识库名。两种写法都接受："
+                    "① 直接传 12 位 topic_id（如 e9d9e4e4a9fa，会自动解析成对应表）；"
+                    "② 传完整表名 papers_<topic_id>（如 papers_e9d9e4e4a9fa）。",
+                },
                     "question": {"type": "string", "description": "学术问题"},
                 },
                 "required": ["table_name", "question"],

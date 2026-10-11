@@ -168,7 +168,9 @@ async def _generate_strategy_uncached(query: str) -> dict:
         LLM_STRATEGY_TIMEOUT,
     )
 
-    client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+    from llm_client import get_client
+
+    client = get_client()
 
     def _fallback() -> dict:
         """JSON 解析失败时的降级默认值。
@@ -355,11 +357,9 @@ async def _translate_cn_query(query: str) -> str:
         pass
 
     try:
-        from openai import AsyncOpenAI
+        from llm_client import get_client
 
-        from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL
-
-        client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+        client = get_client()
         resp = await client.chat.completions.create(
             model=DEEPSEEK_MODEL,
             temperature=LLM_TRANSLATE_TEMPERATURE,

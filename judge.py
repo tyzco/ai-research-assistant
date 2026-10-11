@@ -46,7 +46,9 @@ class DeepSeekJudge:
             LLM_QUICK_MAX_TOKENS,
         )
 
-        client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+        from llm_client import get_sync_client
+
+        client = get_sync_client()
         resp = client.chat.completions.create(
             model=DEEPSEEK_MODEL,
             temperature=0.0,

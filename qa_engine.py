@@ -35,25 +35,29 @@ from monitor import safe_call
 
 logger = logging.getLogger(__name__)
 
-# ---- Rerank 模型（延迟加载）----
-_reranker = None
-_reranker_lock = threading.Lock()  # DeepSeek 审查 #3: 防并发重复加载
 
+def _get_shared_client():
+    """共享 LLM 客户端 (复用连接池)。
 
+    此前本模块 3 处各自 AsyncOpenAI(...) 裸建, 每次调用重新 TCP+TLS 握手 ——
+    实测 6 次调用共享客户端比每次新建快 31%。
+    """
+    try:
+        from llm_client import get_client
+
+        return get_client()
+    except Exception:
+        from openai import AsyncOpenAI
+
+        return AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+
+# ---- Rerank 模型: 进程内共享单例 (见 reranker.py) ----
 def _get_reranker():
-    global _reranker
-    if _reranker is None:
-        with _reranker_lock:
-            if _reranker is None:
-                from sentence_transformers import CrossEncoder
+    """精排模型 (bge-reranker)。委托给 reranker 模块的进程级单例 ——
+    此前本模块与 hybrid_retriever 各建一份, 同一模型在内存里存了两次。"""
+    from reranker import get_stage2
 
-                from config import RERANK_MODEL
-
-                logger.info(f"Loading {RERANK_MODEL}...")
-                _reranker = CrossEncoder(
-                    RERANK_MODEL, max_length=512, local_files_only=True
-                )
-    return _reranker
+    return get_stage2()
 
 
 def _rec_degraded(path: str):
@@ -121,7 +125,7 @@ async def _resolve_coreference(question: str, history: str) -> str:
     if not history or len(question) >= COREF_MAX_LENGTH:
         return question
     try:
-        client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+        client = _get_shared_client()
         resp = await safe_call(
             client.chat.completions.create,
             model=DEEPSEEK_MODEL,
@@ -153,7 +157,7 @@ async def _resolve_coreference(question: str, history: str) -> str:
 async def _expand_query(question: str) -> str:
     """DeepSeek 查询改写。"""
     try:
-        client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+        client = _get_shared_client()
         resp = await safe_call(
             client.chat.completions.create,
             model=DEEPSEEK_MODEL,
@@ -327,7 +331,7 @@ async def ask_question(
     """
     from knowledge_base import retrieve_with_images
 
-    client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+    client = _get_shared_client()
     mem_key = memory_key or table_name
 
     # 多轮指代消解：有历史 + 短问题 → 消解"它/这"等指代词

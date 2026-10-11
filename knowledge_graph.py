@@ -11,6 +11,20 @@ import re
 
 logger = logging.getLogger(__name__)
 
+def _get_shared_client():
+    """共享 LLM 客户端 (复用连接池)。此前每次调用裸建，重新 TCP+TLS 握手。"""
+    try:
+        from llm_client import get_client
+
+        return get_client()
+    except Exception:
+        from openai import AsyncOpenAI
+
+        from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL
+
+        return AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+
+
 # ===== 实体抽取 Prompt =====
 EXTRACT_PROMPT = """从以下论文摘要中抽取关键实体和关系。输出 JSON，不要解释。
 
@@ -49,7 +63,7 @@ async def extract_entities_from_abstracts(abstracts: list[dict[str, str]]) -> di
     if not abstracts:
         return {"entities": [], "relations": []}
 
-    client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+    client = _get_shared_client()
     text = "\n\n".join(
         f"[{a.get('paper_id','?')}] {a.get('title','')}: {a.get('abstract','')[:500]}"
         for a in abstracts[:20]

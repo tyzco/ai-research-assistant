@@ -100,12 +100,13 @@ async def startup_preload():
         except Exception as e:
             logger.warning(f"Embed preload failed: {e}")
         try:
-            from sentence_transformers import CrossEncoder
+            # 修复: 原实现 `CrossEncoder(RERANK_MODEL, ...)` 创建后**直接丢弃**
+            # (没赋值给任何变量) —— 既没让后续请求复用上, 又白占一次加载。
+            # 现改为预热真正的进程级单例, 且 stage1/stage2 都预热。
+            from reranker import preload
 
-            from config import RERANK_MODEL
-
-            CrossEncoder(RERANK_MODEL, max_length=512, local_files_only=True)
-            logger.info("Reranker model preloaded")
+            _r = preload()
+            logger.info(f"Reranker models preloaded: {_r}")
         except Exception as e:
             logger.warning(f"Reranker preload failed: {e}")
 
@@ -1984,7 +1985,9 @@ async def api_ask_trace(request: Request):
 
         from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
 
-        client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+        from llm_client import get_client
+
+        client = get_client()
         ctx = "\n".join(
             [
                 f"[{i+1}] {r.get('title','N/A')}\n{r.get('text','')[:300]}"

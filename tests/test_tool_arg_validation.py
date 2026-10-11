@@ -103,4 +103,31 @@ class TestRealToolsHaveUsableSchemas:
         t = get_tool("download_and_index")
         assert t is not None
         assert "缺少必填参数" in t.validate({"urls": ["http://x"]})
-        assert t.validate({"urls": ["http://x"], "topic_id": "t1"}) == ""
+        # topic_id 现在是 12 位十六进制 (见 TestDeclaredConstraintsAreEnforced)
+        assert t.validate({"urls": ["http://x"], "topic_id": "e9d9e4e4a9fa"}) == ""
+        assert "格式不对" in t.validate({"urls": ["http://x"], "topic_id": "t1"})
+
+
+class TestDeclaredConstraintsAreEnforced:
+    """写在 schema 里却不校验的约束, 比不写更糟 —— 模型以为有, 实际没有,
+    而错误会在下游以无关的形式出现。`pattern` 就是这样被漏掉的一项。"""
+
+    def test_pattern_is_enforced(self):
+        t = get_tool("get_topic_state")
+        assert "pattern" in t.parameters["properties"]["topic_id"]
+        assert t.validate({"topic_id": "e9d9e4e4a9fa"}) == ""      # 12 位十六进制
+        assert "格式不对" in t.validate({"topic_id": "我的课题"})
+        assert "格式不对" in t.validate({"topic_id": "TOO-SHORT"})
+
+    def test_an_unconstrained_string_still_passes(self):
+        """pattern 只对声明了它的参数生效, 不能误伤自由文本。"""
+        t = get_tool("search_papers")
+        assert t.validate({"query": "任意中文查询 fully free text"}) == ""
+
+    def test_knowledge_base_name_explains_both_accepted_forms(self):
+        """`table_name` 既接受 12 位 topic_id (自动解析) 也接受完整表名 ——
+        这是模型无论如何猜不到的行为, 必须写在描述里。"""
+        t = get_tool("agent_ask")
+        desc = t.parameters["properties"]["table_name"]["description"]
+        assert "topic_id" in desc
+        assert "papers_" in desc

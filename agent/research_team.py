@@ -787,15 +787,41 @@ class ResearchTeam:
                 # 回填 assistant 消息(含 tool_calls)保持对话连续性
                 messages.append(msg.model_dump(exclude_none=True))
                 for tc in tool_calls:
+                    # 参数 JSON 解析失败时**必须告诉模型**, 不能静默当空参数。
+                    # 原实现 `except JSONDecodeError: args = {}` ——工具拿着空参数去跑,
+                    # 要么报一个和真实原因无关的错, 要么把默认值当成了模型的意思。
+                    # 模型自始至终不知道自己写坏了, 因此也没有机会重写一次。
+                    # 这正是"格式校验组件"该做的事: 把格式错误**回灌给生成方**。
+                    args, arg_error = None, ""
                     try:
                         args = json.loads(tc.function.arguments or "{}")
-                    except json.JSONDecodeError:
-                        args = {}
-                    tool = get_tool(tc.function.name)
-                    if tool is None:
-                        result = f"❌ 未知工具: {tc.function.name}"
+                        if not isinstance(args, dict):
+                            arg_error = f"参数必须是 JSON 对象, 收到 {type(args).__name__}"
+                    except json.JSONDecodeError as e:
+                        arg_error = f"参数不是合法 JSON: {e}"
+
+                    if arg_error:
+                        tool = get_tool(tc.function.name)
+                        want = (
+                            json.dumps(tool.parameters, ensure_ascii=False)
+                            if tool is not None
+                            else "{}"
+                        )
+                        result = (
+                            f"❌ {arg_error}\n"
+                            f"你发来的参数: {str(tc.function.arguments)[:300]}\n"
+                            f"该工具要求的参数结构: {want[:600]}\n"
+                            f"请重新生成一次合法 JSON 调用。"
+                        )
+                        logger.warning(
+                            f"tool_args_invalid tool={tc.function.name} err={arg_error[:120]}"
+                        )
                     else:
-                        result = await tool.execute(**args)
+                        tool = get_tool(tc.function.name)
+                        if tool is None:
+                            result = f"❌ 未知工具: {tc.function.name}"
+                        else:
+                            result = await tool.execute(**args)
                     messages.append(
                         {"role": "tool", "tool_call_id": tc.id, "content": result}
                     )

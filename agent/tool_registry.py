@@ -48,16 +48,74 @@ class Tool:
             },
         }
 
+    def validate(self, kwargs: dict) -> str:
+        """按 JSON Schema 校验模型给出的参数, 返回错误说明 (空串 = 通过)。
+
+        此前只查 `required`, 类型/区间/枚举一概不看。所以 `max_results: 99999`
+        和 `direction: "随便"` 都会被原样接受, 工具或下游 API 再去报一个跟真实
+        原因无关的错。**校验的目的不只是拦住, 更是把"哪里错了、应该是什么"
+        回灌给模型**, 让它有机会重写一次——只返回 False 是浪费了这次机会。
+        """
+        props = self.parameters.get("properties", {}) or {}
+        errors: list[str] = []
+
+        for r in self.parameters.get("required", []) or []:
+            if r not in kwargs or kwargs[r] is None:
+                errors.append(f"缺少必填参数 `{r}`")
+            elif isinstance(kwargs.get(r), str) and not kwargs[r].strip():
+                errors.append(f"必填参数 `{r}` 不能为空字符串")
+
+        type_map = {
+            "string": str, "integer": int, "number": (int, float),
+            "boolean": bool, "array": list, "object": dict,
+        }
+        for key, val in kwargs.items():
+            spec = props.get(key)
+            if not isinstance(spec, dict) or val is None:
+                continue
+            want = spec.get("type")
+            if want in type_map:
+                bad = not isinstance(val, type_map[want])
+                # bool 是 int 的子类 —— `isinstance(True, int)` 为 True, 所以
+                # `limit=True` 会当成合法整数放行。这个特例必须在 isinstance
+                # 判定之外单独挡住 (写成 `if not isinstance: if isinstance(val,bool)`
+                # 是永远进不去的死分支)。
+                if isinstance(val, bool) and want in ("integer", "number"):
+                    bad = True
+                if bad:
+                    errors.append(
+                        f"参数 `{key}` 类型不对: 需要 {want}, 收到 {type(val).__name__}"
+                    )
+                    continue
+            if "enum" in spec and val not in spec["enum"]:
+                errors.append(f"参数 `{key}` 取值必须是 {spec['enum']} 之一, 收到 {val!r}")
+            if isinstance(val, (int, float)) and not isinstance(val, bool):
+                if "minimum" in spec and val < spec["minimum"]:
+                    errors.append(f"参数 `{key}` 最小为 {spec['minimum']}, 收到 {val}")
+                if "maximum" in spec and val > spec["maximum"]:
+                    errors.append(f"参数 `{key}` 最大为 {spec['maximum']}, 收到 {val}")
+            if isinstance(val, list) and "maxItems" in spec and len(val) > spec["maxItems"]:
+                errors.append(
+                    f"参数 `{key}` 最多 {spec['maxItems']} 项, 收到 {len(val)} 项"
+                )
+
+        if not errors:
+            return ""
+        return (
+            "❌ 参数校验未通过:\n- "
+            + "\n- ".join(errors)
+            + f"\n该工具的参数结构: {json.dumps(self.parameters, ensure_ascii=False)[:600]}"
+            + "\n请修正后重新调用。"
+        )
+
     async def execute(self, **kwargs) -> str:
-        """执行工具：类型校验 → 幂等控制 → 自动重试。
+        """执行工具：Schema 校验 → 重试。
         准备2 §工具调用优化：Schema校验 + 参数补全 + 自动重试修复。
         DeepSeek 审查 #1: 退避改用 await asyncio.sleep, 不阻塞事件循环。
         #6: need_confirm 工具执行时记录审计日志 (真实人工闸门需审批 UI)。"""
-        # 类型校验：验证必填参数
-        required = self.parameters.get("required", [])
-        for r in required:
-            if r not in kwargs or kwargs[r] is None:
-                return f"❌ 缺少必填参数: {r}"
+        invalid = self.validate(kwargs)
+        if invalid:
+            return invalid
 
         # 自动重试 (max 2)
         last_error = None
@@ -265,12 +323,14 @@ TOOLS: list[Tool] = [
                 "keywords_en": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "英文关键词",
+                    "maxItems": 5,
+                    "description": "英文关键词（最多 5 个，超出按前 5 个处理）",
                 },
                 "keywords_cn": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "中文关键词",
+                    "maxItems": 5,
+                    "description": "中文关键词（最多 5 个，超出按前 5 个处理）",
                 },
             },
             "required": ["query"],
@@ -279,14 +339,15 @@ TOOLS: list[Tool] = [
     ),
     Tool(
         "download_and_index",
-        "下载OA论文并构建LanceDB知识库（最多5篇）",
+        "下载 OA 论文并构建 LanceDB 知识库（单次最多 5 篇）。示例: {\"urls\":[\"https://arxiv.org/pdf/1706.03762.pdf\"], \"topic_id\":\"abc123\"}",
         {
             "type": "object",
             "properties": {
                 "urls": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "PDF下载链接列表",
+                    "maxItems": 5,
+                    "description": "PDF 下载链接列表。**单次最多 5 条**，超出部分会被直接丢弃（不报错）——需要更多请分多次调用",
                 },
                 "topic_id": {"type": "string", "description": "课题ID"},
             },
@@ -297,7 +358,7 @@ TOOLS: list[Tool] = [
     ),
     Tool(
         "ask_knowledge_base",
-        "基于已构建的知识库进行深度学术问答，返回带引用的答案",
+        "基于已构建的知识库进行深度学术问答，返回带引用的答案。示例: {\"table_name\":\"papers_abc123\", \"question\":\"该方法的损失函数是什么？\"} （table_name 见系统提示的【当前课题知识库作用域】）",
         {
             "type": "object",
             "properties": {
@@ -377,14 +438,15 @@ TOOLS: list[Tool] = [
     ),
     Tool(
         "citation_chain",
-        "引用链追踪: 输入论文ID, 返回其引用/被引关系网络, 理清研究脉络与关键节点",
+        "引用链追踪: 输入论文 ID, 返回其引用/被引关系网络, 理清研究脉络与关键节点。示例: {\"paper_id\":\"W2963403868\", \"direction\":\"citations\"} （paper_id 用 Semantic Scholar 的 ID，不是论文标题）",
         {
             "type": "object",
             "properties": {
                 "paper_id": {"type": "string", "description": "论文 ID"},
                 "direction": {
                     "type": "string",
-                    "description": "citations=查引用了哪些, references=查被谁引用, both=两者",
+                    "enum": ["citations", "references", "both"],
+                    "description": "citations=谁引用了这篇, references=这篇引用了谁, both=两者都查。必须是这三个值之一，否则返回空结果",
                     "enum": ["both", "citations", "references"],
                 },
             },
@@ -524,7 +586,7 @@ if not any(t.name == "agent_ask" for t in TOOLS):
     TOOLS.append(
         Tool(
             "agent_ask",
-            "基于知识库进行深度学术问答（需要先通过 search_knowledge_bases 获取可用知识库名称）",
+            "基于知识库进行深度学术问答（需要先通过 search_knowledge_bases 获取可用知识库名称）。示例: {\"table_name\":\"papers_abc123\", \"question\":\"实验用了哪些数据集？\"}",
             {
                 "type": "object",
                 "properties": {

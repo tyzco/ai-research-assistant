@@ -147,6 +147,61 @@ class ToolManager:
                 logger.debug(f"Type coercion failed for {tool_name}.{key}: {e}")
                 # 不阻断，保留原值让工具自己处理
 
+        # === 约束校验 (前置参数校验钩子) ===
+        # 原实现只查"必填 + 类型", 越界值会一路传到实现里**静默出错**:
+        #   - enum: citation_chain.direction 传 "forward" → 实现两个分支都不进 → 返回空结果,
+        #     模型误以为"这篇没有引用关系"
+        #   - maxItems: download_and_index.urls 传 20 条 → 实现 urls[:5] 静默截断,
+        #     模型以为 20 篇都入库了
+        # 这里在**调用前**拦下并给出可执行的报错, 让模型重新生成参数, 而不是让它猜为什么结果不对。
+        for key, prop in properties.items():
+            if key not in corrected:
+                continue
+            value = corrected[key]
+
+            enum_vals = prop.get("enum")
+            if enum_vals and value not in enum_vals:
+                return (
+                    False,
+                    corrected,
+                    f"参数 {key}={value!r} 不在允许取值内，只能取 {enum_vals} 之一",
+                )
+
+            if isinstance(value, (list, str)):
+                n = len(value)
+                mx, mn = prop.get("maxItems"), prop.get("minItems")
+                if mx is not None and n > mx:
+                    return (
+                        False,
+                        corrected,
+                        f"参数 {key} 有 {n} 项，超过上限 {mx}（超出部分不会被处理）。"
+                        f"请缩减到 {mx} 项以内，或分多次调用",
+                    )
+                if mn is not None and n < mn:
+                    return False, corrected, f"参数 {key} 至少需要 {mn} 项，当前 {n} 项"
+                # 字符串长度
+                if isinstance(value, str):
+                    smx, smn = prop.get("maxLength"), prop.get("minLength")
+                    if smx is not None and n > smx:
+                        return (
+                            False,
+                            corrected,
+                            f"参数 {key} 长度 {n} 超过上限 {smx}，请精简后重试",
+                        )
+                    if smn is not None and n < smn:
+                        return (
+                            False,
+                            corrected,
+                            f"参数 {key} 长度 {n} 少于下限 {smn}，请补充内容后重试",
+                        )
+
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                lo, hi = prop.get("minimum"), prop.get("maximum")
+                if lo is not None and value < lo:
+                    return False, corrected, f"参数 {key}={value} 小于最小值 {lo}"
+                if hi is not None and value > hi:
+                    return False, corrected, f"参数 {key}={value} 大于最大值 {hi}"
+
         return True, corrected, ""
 
     def security_check(self, tool_name: str, params: dict) -> tuple[bool, str]:

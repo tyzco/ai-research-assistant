@@ -22,6 +22,17 @@ from knowledge_base import _cosine_search, _embed_texts_sync
 logger = logging.getLogger(__name__)
 
 
+def _segment_query(q: str) -> str:
+    """查询侧分词 (与入库侧共用同一套停用词/单字过滤)。
+
+    两侧必须用**同一套**过滤规则: 索引里滤了停用词而查询没滤, 查询词在索引里
+    根本不存在 → 命中 0; 反过来查询滤了索引没滤, 噪声词照样把无关文档捞上来。
+    """
+    from knowledge_base import _fts_tokens
+
+    return " ".join(_fts_tokens(q or ""))
+
+
 class AdaptiveHybridRetriever:
     """自适应多路召回 + RRF 融合 + 两级级联重排。"""
 
@@ -103,10 +114,36 @@ class AdaptiveHybridRetriever:
         return _cosine_search(self.table, query_vec, top_k, filter_expr)
 
     def _bm25_recall(self, query: str, top_k: int) -> list[dict]:
+        """BM25 关键词召回。
+
+        查询侧也要 jieba 分词: 索引里存的是分词后的 text_fts, 查询不分词的话
+        "曲轴箱温度" 会被当成一个 token, 与索引里的 "曲轴箱 温度" 对不上 → 命中 0。
+        (实测: 不分词时中文查询几乎全部落空, BM25 支路形同虚设。)
+        老表若没有 text_fts 列, 回退到原字段。
+        """
         try:
-            return self.table.search(query, query_type="fts").limit(top_k).to_list()
+            from config import KB_BM25_ENABLED
+
+            if not KB_BM25_ENABLED:
+                return []
+        except Exception:
+            pass
+        cols = None
+        try:
+            cols = {f.name for f in self.table.schema}
+        except Exception:
+            pass
+        field = "text_fts" if (cols and "text_fts" in cols) else "text"
+        # 老表回退时不做分词 (索引是按原文本建的, 分词反而对不上)
+        q = query if field == "text" else _segment_query(query)
+        try:
+            return self.table.search(q, query_type="fts").limit(top_k).to_list()
         except Exception:
             return []
+
+    def _bm25_candidates(self, query: str, top_k: int) -> list[dict]:
+        """BM25 召回并映射回原始行 (FTS 命中行本身就带全部列, 无需额外查询)。"""
+        return self._bm25_recall(query, top_k)
 
     # ---- 自适应 RRF 融合 ----
     def _adaptive_rrf(
@@ -233,6 +270,10 @@ class AdaptiveHybridRetriever:
             bm25_res = self._bm25_recall(query, top_k * 6)
             if not bm25_res:
                 return self._cascade_rerank(query, vec_res, top_k)
+            # 注(已核验的隐患, 暂不改): 本分支给重排 top_k*3, 而"无 BM25"分支给 top_k*6 ——
+            # 即**开了关键词召回反而把重排候选池砍半**。实测把这里对齐到 top_k*6 后,
+            # 同一题库的 MRR 波动很大且方向不稳定 (n=8 太小, 度量是近似的语义相似度),
+            # 不足以支撑改动。留作已知问题, 待更大规模评测再定。
             fused = self._adaptive_rrf(vec_res, bm25_res, query, top_k=top_k * 3)
             return self._cascade_rerank(query, fused, top_k)
 

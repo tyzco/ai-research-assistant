@@ -28,6 +28,7 @@ from config import (
     LLM_GEN_TEMPERATURE,
     LLM_GEN_TIMEOUT,
 )
+from config import KB_ACTIVE_FILTER
 from models import AskResponse
 from monitor import safe_call
 
@@ -365,7 +366,7 @@ async def ask_question(
 
         hr = AdaptiveHybridRetriever(table_name)
         text_res, _ = await hr.search(
-            expanded, top_k=5, filter_expr="is_fulltext = true AND is_image = false"
+            expanded, top_k=5, filter_expr=KB_ACTIVE_FILTER
         )
         img_res, _ = await hr.search(
             expanded, top_k=3, filter_expr="is_image = true"

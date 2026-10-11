@@ -279,8 +279,15 @@ class ToolManager:
 
         from config import TOOL_RETRY_BASE_DELAY, TOOL_RETRY_MAX
 
+        max_attempts = TOOL_RETRY_MAX + 1
+        if tool_def is not None and getattr(tool_def, "retryable", True) is False:
+            # 非重放安全的工具: 禁止自动重试。
+            # 超时不代表没生效 —— 可能已经写完只是响应没回来, 重试会重复执行。
+            max_attempts = 1
+            logger.info(f"tool {tool_name} is not retryable → auto-retry disabled")
+
         last_err: BaseException | None = None
-        for attempt in range(TOOL_RETRY_MAX + 1):
+        for attempt in range(max_attempts):
             try:
                 _call = tool_def.execute(**args)
                 result = (
@@ -296,16 +303,16 @@ class ToolManager:
             except Exception as e:
                 last_err = e
                 kind = classify_tool_error(e)
-                if kind == "permanent" or attempt >= TOOL_RETRY_MAX:
+                if kind == "permanent" or attempt >= max_attempts - 1:
                     logger.warning(
                         f"tool {tool_name} failed ({kind}, attempt {attempt + 1}/"
-                        f"{TOOL_RETRY_MAX + 1}): {e}"
+                        f"{max_attempts}): {e}"
                     )
                     break
                 delay = TOOL_RETRY_BASE_DELAY * (2**attempt)
                 logger.warning(
                     f"tool {tool_name} transient failure (attempt {attempt + 1}/"
-                    f"{TOOL_RETRY_MAX + 1}), retry in {delay:.1f}s: {e}"
+                    f"{max_attempts}), retry in {delay:.1f}s: {e}"
                 )
                 await asyncio.sleep(delay)
         return False, str(last_err)

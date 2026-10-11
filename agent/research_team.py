@@ -745,7 +745,21 @@ class ResearchTeam:
                 s for s in get_tools_schema() if s["function"]["name"] in declared
             ] or None
 
-            # 工具调用循环: 上限 8 轮, 防止模型死循环
+            # 三级兜底 —— 每一级拦的是不同性质的失败, 混在一起处理会让"能自愈的"
+            # 和"必须停下的"走同一条路:
+            #
+            #   一级 轻度失败 (参数写错): 把错误连同正确的参数结构回灌给模型, 让它
+            #        自己修正。**每个工具只给一次机会** —— 参数错误是确定性的, 模型
+            #        第二次写不对, 第三次也不会对, 继续循环只是烧 token。
+            #   二级 接口超时 / 网络波动: 交给 `Tool.execute` —— 可重放的工具有限重试,
+            #        不可重放的立刻停下并提示"超时不代表未生效, 先查状态"。
+            #   三级 累计多次失败: 说明环境或任务本身有问题, **终止任务**, 不再让模型
+            #        继续下发调用 —— 否则它会拿着一次次的错误结果硬凑一个答案出来。
+            #
+            # 上限 8 轮是循环的总闸, 三级兜底是任务级的闸, 两者不是一回事。
+            validation_failures: dict[str, int] = {}
+            total_failures = 0
+
             for _ in range(8):
                 resp = await chat_with_retry(
                     model=DEEPSEEK_MODEL,
@@ -822,8 +836,35 @@ class ResearchTeam:
                             result = f"❌ 未知工具: {tc.function.name}"
                         else:
                             result = await tool.execute(**args)
+
+                    # ── 一级: 参数错误只给一次修正机会 ──
+                    if result.startswith("❌ 参数校验未通过"):
+                        n = validation_failures.get(tc.function.name, 0) + 1
+                        validation_failures[tc.function.name] = n
+                        if n > 1:
+                            result = (
+                                f"❌ 工具 `{tc.function.name}` 的参数已连续 {n} 次校验失败。"
+                                f"停止重试该工具 —— 请改用其它方式回答, 或直接说明无法完成。"
+                            )
+                            logger.warning(
+                                f"tool_arg_retry_exhausted tool={tc.function.name} attempts={n}"
+                            )
+                    elif result.startswith("❌"):
+                        # ── 三级: 累计失败到阈值就终止任务 ──
+                        total_failures += 1
+
                     messages.append(
                         {"role": "tool", "tool_call_id": tc.id, "content": result}
+                    )
+
+                if total_failures >= 3:
+                    logger.error(
+                        f"agent_task_terminated agent={agent_key} "
+                        f"failures={total_failures}"
+                    )
+                    return (
+                        f"[{agent_def['name']} 已终止: 连续 {total_failures} 次工具调用失败。"
+                        f"环境可能不可用, 未产出结果 —— 请勿据此继续判断。]"
                     )
 
             return "（工具调用轮次超限，已停止）"

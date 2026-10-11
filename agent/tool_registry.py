@@ -28,12 +28,28 @@ class Tool:
         func: ToolFunc,
         need_confirm: bool = False,
         kind: str = "deterministic",
+        retryable: bool = True,
     ):
         self.name = name
         self.description = description
         self.parameters = parameters  # JSON Schema
         self.func = func
         self.need_confirm = need_confirm  # 是否需要人工确认
+        # 重试的前提是**重放安全**: 同一入参执行两次, 结果与副作用等价于执行一次。
+        #
+        # 有一类操作不能自动重试 —— 下发指令、扣款、改状态。它们失败后的正确动作是
+        # **先查询当前状态再决定**, 而不是赌第二次: 超时并不代表没生效 (可能已经
+        # 执行完了, 只是响应没回来), 盲目重试等于把一次操作变成两次。
+        #
+        # 当前 20 个工具全部是 True, 而且这个判断核实过: 除 download_and_index 外
+        # **没有任何一个写文件**(export_* 只是返回 dict), 而 download_and_index 走
+        # doc_key 版本管理 —— 重放产生的新记录会把旧的标记为 superseded 并被检索
+        # 过滤, 对使用者等价于幂等。
+        #
+        # 也就是说**这个守卫今天不会被触发**。它的价值在于: 下一个工具 (真正下发
+        # 操作的那个) 不会因为"默认值是 True"而悄悄获得自动重试。安全领域里这类
+        # 默认值反了的设计, 出事时没有任何征兆。
+        self.retryable = retryable
         # deterministic = 确定性能力 (查库/计算/导出/查询: 同输入同输出, 可缓存可审计)
         # llm           = 内部含 LLM 判断/生成 (结果有随机性, 成本高, 需谨慎包装)
         # 设计原则: 工具优先确定性能力; LLM 类须显式标注, 避免"把模糊推理包成工具"而不自知。
@@ -125,9 +141,10 @@ class Tool:
         if invalid:
             return invalid
 
-        # 自动重试 (max 2)
+        # 只读工具重试; 有副作用的工具失败即停。
+        MAX_ATTEMPTS = 3 if self.retryable else 1
         last_error = None
-        for attempt in range(3):
+        for attempt in range(MAX_ATTEMPTS):
             try:
                 result = (
                     await self.func(**kwargs)
@@ -146,10 +163,20 @@ class Tool:
                 return result_str
             except Exception as e:
                 last_error = e
-                if attempt < 2:
+                if attempt < MAX_ATTEMPTS - 1:
                     await asyncio.sleep(0.5 * (attempt + 1))  # 退避
                     continue
-        return f"❌ 工具执行失败（重试3次后）: {last_error}"
+
+        if not self.retryable:
+            # 「没重试」和「重试后成功」在结果上完全一样, 对模型必须说清楚区别,
+            # 否则它会当成一次普通的失败再调一遍 —— 那就等于绕过了这里的保护。
+            return (
+                f"❌ 工具 `{self.name}` 执行失败, 且该操作**不自动重试**（有副作用）。\n"
+                f"错误: {last_error}\n"
+                f"注意: 超时不代表未生效 —— 它可能已经部分完成。"
+                f"请先查询当前状态确认, 再决定是否重新执行。"
+            )
+        return f"❌ 工具执行失败（重试{MAX_ATTEMPTS}次后）: {last_error}"
 
 
 # ---- 工具实现 ----

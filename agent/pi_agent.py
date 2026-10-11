@@ -64,6 +64,10 @@ class TraceState:
     repeat_hits: int = 0
     # 错误累积: 连续失败计数 (成功即清零)。用于在错误路径上及时止损。
     consecutive_failures: int = 0
+    # 一级兜底: 每个工具的参数错误次数。参数错是**确定性**的 —— 模型改不对说明它
+    # 没理解工具契约, 再试只是烧步数 (与"失败兜底"分级的思路一致:
+    # 一级给一次修正机会, 二级靠重试层处理瞬时故障, 三级才整体熔断)。
+    param_failures: dict = field(default_factory=dict)
 
 
 class PiAgent:
@@ -545,9 +549,33 @@ class PiAgent:
                         if is_valid:
                             tool_args = corrected
                         else:
-                            tool_result = self.tool_mgr.format_error_for_llm(
-                                tool_name, err, tool_args
-                            )
+                            _n = trace.param_failures.get(tool_name, 0) + 1
+                            trace.param_failures[tool_name] = _n
+                            from config import AGENT_PARAM_CORRECTION_BUDGET
+
+                            if _n > AGENT_PARAM_CORRECTION_BUDGET:
+                                # 一级兜底用尽: 参数错误改不对通常不是"再试一次就好",
+                                # 而是模型没理解工具契约 —— 明确禁止再调, 让它换路。
+                                logger.warning(
+                                    f"param correction budget exhausted for {tool_name} "
+                                    f"({_n} 次参数错误)"
+                                )
+                                try:
+                                    from monitor import metrics as _mx
+
+                                    _mx.record_degradation("param_budget_exhausted")
+                                except Exception:
+                                    pass
+                                tool_result = (
+                                    f"⛔ 已停止调用 {tool_name}: 连续 {_n} 次参数错误。"
+                                    f"说明该工具的调用方式没被正确理解 —— "
+                                    f"请改用其他方法完成任务，不要再调用这个工具。\n"
+                                    f"最后一次错误: {err}"
+                                )
+                            else:
+                                tool_result = self.tool_mgr.format_error_for_llm(
+                                    tool_name, err, tool_args
+                                )
                             turn.tool_success = False
 
                     # === 人工确认门 (合并自 langgraph) ===

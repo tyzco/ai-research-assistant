@@ -162,6 +162,12 @@ AGENT_REPEAT_CALL_LIMIT = _env("AGENT_REPEAT_CALL_LIMIT", 3, int)
 # 继续烧步数只会把错误累积进上下文, 最终交出建立在失败之上的答案。达到此次数即止损。
 AGENT_MAX_CONSECUTIVE_FAILURES = _env("AGENT_MAX_CONSECUTIVE_FAILURES", 4, int)
 
+# 三级兜底的分级参数:
+# 一级 (参数错): 给模型几次**修正参数**的机会, 用完就禁止再调这个工具
+#   —— 参数错是确定性的, 改不对说明模型没理解工具契约, 再试只是烧步数
+# 三级 (多次失败): AGENT_MAX_CONSECUTIVE_FAILURES 触发后终止整个任务
+AGENT_PARAM_CORRECTION_BUDGET = _env("AGENT_PARAM_CORRECTION_BUDGET", 1, int)
+
 # 科研团队规划器 (规划与执行分离): 按任务裁剪本次要跑的 agent。
 # 兜底: 规划失败/空结果/关闭 → 回退完整管线; required=True 的 agent (含全部 3 个审批闸门)
 # 永远必跑, 规划器碰不到。

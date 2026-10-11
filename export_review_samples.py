@@ -139,7 +139,14 @@ def main():
     ap.add_argument("--kb", default="papers_big_eval")
     ap.add_argument("--n", type=int, default=10)
     ap.add_argument("--metrics", action="store_true", help="算人工验证指标")
+    ap.add_argument(
+        "--labeled",
+        action="store_true",
+        help="导出**人工标注过的** bad case 作为回归集 (用户反馈 → 知识库迭代的回流出口)",
+    )
     args = ap.parse_args()
+    if args.labeled:
+        return export_labeled_regression()
 
     if args.metrics:
         _compute_metrics()
@@ -149,6 +156,58 @@ def main():
     samples = asyncio.run(_collect_samples(qa, args.kb, args.n))
     if samples:
         _save(samples)
+
+
+def export_labeled_regression(out_path: str = "data/labeled_regression.json") -> int:
+    """把**人工标注过的** bad case 导出成回归集 —— 用户反馈闭环的出口。
+
+    为什么需要: 在此之前, 标注只到 `/review/stats` 的分布统计为止, **没有任何东西消费它**
+    —— 反馈回来的一手失败样本既没进评测集, 也没影响切片/检索策略, 闭环是断的。
+    导出后可用它跑回归: 同一批真实失败问题在改动前后各跑一次, 看是否真的修好了。
+
+    导出内容包括当时检索到的上下文 (review_queue.contexts), 便于对比改动前后的召回差异。
+    只导出标注过的 (status='labeled'), pending 的不算 —— 未经人看的样本不能当基准。
+    """
+    from database import get_db
+
+    items = get_db().list_review_queue(status="labeled", limit=500)
+    if not items:
+        print("暂无已标注样本 (先在 /review/queue 标注后再导出)")
+        return 0
+
+    rows = []
+    for it in items:
+        rows.append(
+            {
+                "question": it.get("question", ""),
+                "label": it.get("label", ""),
+                "note": it.get("label_note", ""),
+                "source": it.get("source", ""),
+                "reason": it.get("reason", ""),
+                # 标注当时的检索上下文 —— 供改动后对比召回是否变化
+                "contexts_at_label_time": it.get("contexts", []),
+                "labeled_at": it.get("labeled_at", ""),
+            }
+        )
+    import json as _json
+    from collections import Counter as _C
+
+    from pathlib import Path as _P
+
+    _P(out_path).parent.mkdir(parents=True, exist_ok=True)
+    _P(out_path).write_text(
+        _json.dumps({"n": len(rows), "items": rows}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    dist = _C(r["label"] for r in rows)
+    print(f"已导出 {len(rows)} 条人工标注样本 → {out_path}")
+    print("标签分布: " + ", ".join(f"{k}={v}" for k, v in dist.most_common()))
+    if dist.get("retrieval_miss"):
+        print(
+            f"  注: {dist['retrieval_miss']} 条 retrieval_miss (库里有但没召回) —— "
+            "这类是切片/检索策略最直接的改进信号"
+        )
+    return len(rows)
 
 
 if __name__ == "__main__":

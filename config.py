@@ -142,6 +142,9 @@ TWO_COLUMN_REORDER_ENABLED = _env_bool("TWO_COLUMN_REORDER_ENABLED", True)
 # PDF 表格结构化: get_text 把表格读成"竖着一列一列的数字流" (列名与数值糊在一起),
 # 用 find_tables 检出后把该区域替换成 Markdown 管道表。只重新组织同一批单元格文本, 不增删。
 TABLE_EXTRACT_ENABLED = _env_bool("TABLE_EXTRACT_ENABLED", True)
+# PDF 章节识别: 按字号启发式(>正文字号 1.12 倍)检出标题并绑定到 chunk。
+# PDF 没有 DOCX 那样的显式层级, 这是排版线索推断 —— 命中才用, 不命中留空, 不影响切分。
+PDF_SECTION_ENABLED = _env_bool("PDF_SECTION_ENABLED", True)
 
 # ===================================================================
 # 工具调用重试 (仅对瞬时故障: 超时/连接/限流/5xx)
@@ -170,6 +173,11 @@ TEAM_PLANNER_ENABLED = _env_bool("TEAM_PLANNER_ENABLED", True)
 # 分块大小 (字符): 论文长, 2048 太小 → 检索到的段落覆盖不全 (答案跨块会丢)。
 # 4096 让每个检索单元覆盖更全; 配合 1M 上下文窗口, prompt 可容纳整块。
 CHUNK_SIZE = _env("CHUNK_SIZE", 4096, int)
+# 分块重叠比例。docstring 一直写着 15%, 但实现是 min(200, ...) —— 在 4096 的块大小下
+# 上限 200 先触发, **真实重叠只有 4.88%**, 与声称值和通行建议(15%-20%)都不符。
+# 现改为比例驱动, 上限只做安全兜底 (不绑定)。
+CHUNK_OVERLAP_RATIO = _env("CHUNK_OVERLAP_RATIO", 0.15, float)
+CHUNK_OVERLAP_MAX = _env("CHUNK_OVERLAP_MAX", 1024, int)
 RETRIEVAL_TOP_K = _env("RETRIEVAL_TOP_K", 5, int)
 
 # ===================================================================

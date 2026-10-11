@@ -47,6 +47,7 @@ from config import (
     MAX_UPLOAD_BYTES,
     PROJECT_ROOT,
     RATE_LIMIT_REQUESTS_PER_SEC,
+    CHUNK_SIZE,
 )
 from downloader import (
     assess_text_quality,
@@ -66,6 +67,19 @@ from topic_manager import active_topics, create_topic, save_topic_state
 _translation_lock = threading.Lock()  # DeepSeek 审查 #7: 翻译缓存并发写保护
 
 app = FastAPI(title="AI Research Assistant", version="0.3.0")
+
+
+def _content_paper_id(data: bytes) -> str:
+    """按**内容**生成论文 ID (sha1 前 16 位)。
+
+    为什么不用 uuid4: 同一份 PDF 重复上传会拿到不同的 paper_id → 被当成两篇论文
+    分别入库 → 库里出现重复块 (实测同一篇传两次: 21 块 → 42 块), 检索时 top-k 被
+    重复内容占满, 实际召回被稀释。内容哈希让"同一份文件"天然是同一个 ID,
+    配合 build_knowledge_base 的先删后插, 重复上传变成幂等替换。
+    """
+    import hashlib
+
+    return "c" + hashlib.sha1(data).hexdigest()[:15]
 
 
 @app.on_event("startup")
@@ -1142,7 +1156,10 @@ async def api_download_bulk(request: Request, user_id: str = Depends(get_current
                     logger.warning(f"Ingest rejected (quality): {fname} — {_q['reason']}")
                     rejected.append({"file": fname, "reason": _q["reason"]})
                     continue
-                paper_id = uuid.uuid4().hex[:16]
+                # 内容哈希做 paper_id (而非随机 uuid): 同一文件重复上传应**替换**而不是
+                # 追加。原实现每次 uuid4() → 同一篇 PDF 上传两次入库两遍, 检索时
+                # top-k 被重复内容占满, 实际召回被稀释 (实测 21 块 → 42 块)。
+                paper_id = _content_paper_id(content)
                 papers.append(
                     PaperMeta(
                         paper_id=paper_id, title=fname.replace(".pdf", ""), is_oa=True
@@ -1266,7 +1283,12 @@ async def api_upload_pdf(
                 continue
             result = await asyncio.to_thread(parse_pdf, raw_bytes, file.filename)
             chunks = await asyncio.to_thread(
-                chunk_text_paged, result["full_text"], result.get("page_offsets") or []
+                chunk_text_paged,
+                result["full_text"],
+                result.get("page_offsets") or [],
+                CHUNK_SIZE,
+                None,
+                result.get("sections") or [],
             )
 
         # 解析质量闸门: 扫描件/字体未嵌入/空文档读出来是垃圾, 入库只会污染检索
@@ -1277,7 +1299,8 @@ async def api_upload_pdf(
             rejected.append({"file": file.filename, "reason": reason})
             continue
 
-        paper_id = uuid.uuid4().hex[:16]
+        # 同上: 用内容哈希, 重复上传同一份文件 → 替换而非追加
+        paper_id = _content_paper_id(raw_bytes)
         papers.append(
             PaperMeta(
                 paper_id=paper_id,

@@ -5,8 +5,6 @@ import re
 import threading
 from typing import Any
 
-from openai import AsyncOpenAI
-
 from config import (
     COMPLEX_INTENT_TYPES,
     COREF_MAX_LENGTH,
@@ -49,7 +47,7 @@ def _get_shared_client():
     except Exception:
         from openai import AsyncOpenAI
 
-        return AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+        return AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)  # noqa: F811
 
 # ---- Rerank 模型: 进程内共享单例 (见 reranker.py) ----
 def _get_reranker():
@@ -444,11 +442,18 @@ async def ask_question(
         text_res = (text_res or []) + extra_context
     if text_res:
         def _locator(r: dict) -> str:
-            """定位串: 有章节用章节 (DOCX), 否则用真实页码 (PDF)。两者都没有 → 标注未知。"""
+            """定位串: 章节 + 页码都尽量给出。
+
+            DOCX 有显式标题层级但无页码; PDF 两者可以都有 (页码来自 page_offsets,
+            章节来自字号启发式)。此前是"有章节就只用章节", 对 PDF 会丢掉页码 ——
+            而页码恰恰是读者翻原文最快的定位方式。现改为两者并存: `§3.2 方法 (p7)`。
+            """
             sec = (r.get("section") or "").strip()
+            pg = r.get("page_number") or 0
+            if sec and pg:
+                return f"§{sec} (p{pg})"
             if sec:
                 return f"§{sec}"
-            pg = r.get("page_number") or 0
             return f"p{pg}" if pg else "位置未知"
 
         ft = "\n\n".join(
@@ -606,6 +611,18 @@ async def ask_question(
     numeric = {} if _insufficient else (
         verify_numeric_claims(answer, _ctx_texts) if _ctx_texts else {}
     )
+    # 引用定位校验: 只认我们**本次真的给过**的定位串 (§章节 (pN) / pN / 位置未知)。
+    # 实测 prompt 明写"不得推算不得编造章节号"仍拦不住 —— 模型把不存在的
+    # §2.1 ARCHITECTURE 写进了引用。可程序化核验的就不该只靠模型自律。
+    _valid_locators = {_locator(r) for r in (text_res or [])}
+    cite = {} if _insufficient else verify_citation_locators(answer, _valid_locators)
+    if cite.get("fabricated"):
+        _bad = "、".join(cite["fabricated"][:5])
+        answer = (
+            f"{answer}\n\n---\n**引用定位核对**：{_bad} 不是本次检索资料给出的定位"
+            "（资料里定位形如 `§CONVNET CONFIGURATIONS (p2)`）。请以资料给出的定位为准。"
+        )
+        _rec_degraded("citation_fabricated")
     if numeric.get("unverified"):
         _vals = "、".join(u["value"] for u in numeric["unverified"][:5])
         answer = (
@@ -623,6 +640,7 @@ async def ask_question(
         images=image_paths,
         numeric_check=numeric,
         insufficient=_insufficient,
+        citation_check=cite,
     )
     # 评估用: 返回本次答案**实际使用**的上下文 (含父子扩展块), 供 faithfulness 判官对齐 —
     # 避免判官用另一条检索路径的 chunk 判"不被支撑"而低估 faithfulness。
@@ -746,6 +764,54 @@ def pick_evidence_snippet(answer: str, chunk_text: str, max_len: int = 220) -> s
     if not best:
         return ""
     return best[:max_len] + ("…" if len(best) > max_len else "")
+
+
+_CITE_RE = re.compile(r"[\[［]\s*论文\s*[:：]\s*([^\]］]+)[\]］]")
+
+
+def verify_citation_locators(answer: str, valid_locators: set[str]) -> dict:
+    """**程序化**校验: 答案里每条引用标注的"定位"是否真的来自我们给的资料。
+
+    为什么必须做成代码而非 prompt 约束: 实测 prompt 里写明"定位必须照抄资料里给出的
+    那一个, 不得推算、不得编造章节号", 模型**仍然**编了 —— 它把 VGG 论文的
+    "§2.1 ARCHITECTURE"/"§4.3 MULTI-CROP EVALUATION" 写进引用, 而我们检出的 12 个
+    章节标题里根本没有这两个 (它自己补了章节号和名字)。
+    这与最初的"页码编造"是同一类问题: **凡是可以程序化核验的, 就不该只靠模型自律**。
+
+    口径 (诚实): 标为 unverified 的含义是「这个定位不是我们提供的」, 可能是编造,
+    也可能是把两个真实定位拼在了一起。所以文案说明"非本次检索给出的定位", 不说"造假"。
+    """
+    valid = {v.strip() for v in (valid_locators or set()) if v and v.strip()}
+    # 允许"§章节 (pN)"形式的整体匹配, 也允许单独 §章节 / pN 命中
+    valid_sections = {v for v in valid}
+    checked = verified = 0
+    bad: list[str] = []
+    for m in _CITE_RE.finditer(answer or ""):
+        body = m.group(1)
+        parts = [x.strip() for x in re.split(r"[,，]", body) if x.strip()]
+        if not parts:
+            continue
+        loc = parts[-1]
+        # 最后一段不是定位 (没有 § 也没有 p+数字) → 该引用没写定位, 跳过
+        if not (loc.startswith("§") or re.match(r"^(位置未知|p\d+)$", loc)):
+            continue
+        checked += 1
+        if loc in valid_sections or loc == "位置未知":
+            verified += 1
+        elif loc.startswith("§"):
+            # 章节名做了截断/加编号都不算命中; 只认我们给过的原文
+            if any(loc[1:].strip() == v[1:].strip() for v in valid_sections if v.startswith("§")):
+                verified += 1
+            else:
+                bad.append(loc)
+        else:
+            bad.append(loc)
+    return {
+        "checked": checked,
+        "verified": verified,
+        "fabricated": bad[:10],
+        "fabricated_ratio": (len(bad) / checked) if checked else 0.0,
+    }
 
 
 async def ask_with_context(table_name: str, question: str) -> tuple[str, list[str]]:

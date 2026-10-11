@@ -3,6 +3,7 @@
 """
 
 import logging
+import re
 
 import lancedb
 import pyarrow as pa
@@ -83,6 +84,23 @@ async def build_knowledge_base(
     db = lancedb.connect(str(LANCEDB_DIR))
     table = _get_table(db, table_name)
     n = len(papers)
+
+    # --- 幂等: 先清掉这批论文的旧行 ---
+    # 重复上传同一份文件时, 若只做 add 会得到**重复块** (实测 21 → 42),
+    # 检索时 top-k 被重复内容占满, 实际召回被稀释。先删后插 → 重复上传变成替换。
+    _cleared = 0
+    for p in papers:
+        pid = p.paper_id or ""
+        # paper_id 由我们生成 (内容哈希/uuid hex), 但仍做白名单校验防止拼进 where 注入
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", pid):
+            continue
+        try:
+            table.delete(f"paper_id = '{pid}'")
+            _cleared += 1
+        except Exception as e:
+            logger.warning(f"clear old rows for {pid} failed: {e}")
+    if _cleared:
+        logger.info(f"Cleared existing rows for {_cleared} paper(s) before re-index")
 
     # --- 摘要广度层 ---
     if progress_callback:

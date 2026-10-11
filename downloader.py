@@ -1,6 +1,7 @@
 """论文处理模块：PDF 文本提取 + 图片提取 + 分块。"""
 
 import logging
+import re
 from pathlib import Path
 
 import fitz  # PyMuPDF
@@ -109,6 +110,51 @@ def _rows_to_markdown(rows: list[list[str]]) -> str:
         "| " + " | ".join(_flat(c) for c in r) + " |" for r in norm[1:] if any(r)
     ]
     return "\n".join([head, sep] + body)
+
+
+def _page_headings(page) -> list[str]:
+    """按字号启发式检出本页标题 (**只读, 不改文本**)。
+
+    PDF 没有 DOCX 那样的显式标题层级, 只能靠排版线索。实测同一篇 arXiv 论文里
+    正文 9.96pt、标题 11.96/17.2/20pt, 分离得很干净; 检出结果正是
+    CONVNET CONFIGURATIONS / CLASSIFICATION FRAMEWORK / CONCLUSION / REFERENCES。
+
+    判据: 字号 > 正文最高频字号 × 1.12 且 行文本 2-80 字且 不是纯数字/页码。
+    返回按阅读顺序的标题文本 (供按偏移绑定到 chunk)。
+    """
+    try:
+        d = page.get_text("dict")
+    except Exception:
+        return []
+    lines: list[tuple[float, str]] = []
+    for b in d.get("blocks", []):
+        for ln in b.get("lines", []):
+            txt = "".join(sp.get("text", "") for sp in ln.get("spans", [])).strip()
+            if not txt:
+                continue
+            sz = max((sp.get("size", 0) for sp in ln.get("spans", [])), default=0)
+            lines.append((round(sz, 1), txt))
+    if len(lines) < 6:
+        return []
+    from collections import Counter as _C
+
+    body = _C(sz for sz, _ in lines).most_common(1)[0][0]
+    out = []
+    for sz, t in lines:
+        if sz <= body * 1.12 or not (2 <= len(t) <= 80):
+            continue
+        if re.fullmatch(r"[\d\s.\-]+", t):
+            continue
+        # 页眉/页脚误判: arXiv 预印本戳、纯日期、"Published as a conference paper" 之类
+        # 也是大字号, 但它们不是章节 —— 实测第一条章节曾被判成
+        # "arXiv:1409.1556v6 [cs.CV] 10 Apr 2015"。
+        low = t.lower()
+        if low.startswith("arxiv:") or "conference paper at" in low:
+            continue
+        if re.search(r"\b\d{1,2}\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b", low):
+            continue
+        out.append(t)
+    return out
 
 
 def _table_regions(page) -> list[dict]:
@@ -501,7 +547,9 @@ def parse_pdf(pdf_bytes: bytes, pdf_name: str) -> dict:
         ]
     }
     """
-    result = {"full_text": "", "pages": [], "page_offsets": [], "images": []}
+    result = {"full_text": "", "pages": [], "page_offsets": [], "sections": [], "images": []}
+    # (绝对偏移, 标题文本) —— 逐页记录, 最后拼成 sections
+    _heading_marks: list[tuple[int, str]] = []
 
     safe_name = Path(pdf_name).stem.replace(" ", "_")[:40]
 
@@ -547,6 +595,15 @@ def parse_pdf(pdf_bytes: bytes, pdf_name: str) -> dict:
             result["page_offsets"].append(
                 {"start": _start, "end": _start + len(text), "page_num": page_num}
             )
+            # 标题偏移: 按阅读顺序在该页文本里逐个定位 (用运行指针, 不重定位到同名前文)
+            if config.PDF_SECTION_ENABLED and text:
+                _hp = 0
+                for _h in _page_headings(page):
+                    _idx = text.find(_h, _hp)
+                    if _idx < 0:
+                        continue
+                    _hp = _idx + 1
+                    _heading_marks.append((_start + _idx, _h))
 
             # 提取图片（快速规则预筛）
             for img_idx, img in enumerate(page.get_images(full=True)):
@@ -594,6 +651,15 @@ def parse_pdf(pdf_bytes: bytes, pdf_name: str) -> dict:
     finally:
         doc.close()
 
+    # === 标题 → 章节区间 (PDF 没有显式层级, 只能靠字号线索; 命中才给, 不命中为空) ===
+    if _heading_marks:
+        _full = result["full_text"]
+        for i, (pos, h) in enumerate(_heading_marks):
+            end = _heading_marks[i + 1][0] if i + 1 < len(_heading_marks) else len(_full)
+            result["sections"].append(
+                {"heading": h, "level": 2, "start": pos, "end": end}
+            )
+
     result["reordered_pages"] = reordered_pages
     result["tables_found"] = tables_found
     if reordered_pages:
@@ -639,11 +705,16 @@ def _get_splitter(chunk_size: int | None = None, chunk_overlap: int | None = Non
     from langchain_text_splitters import RecursiveCharacterTextSplitter
 
     cs = chunk_size or CHUNK_SIZE
-    co = (
-        chunk_overlap
-        if chunk_overlap is not None
-        else min(200, max(50, int(cs * 0.15)))
-    )  # 15% overlap, capped
+    if chunk_overlap is not None:
+        co = chunk_overlap
+    else:
+        # 比例驱动 (config.CHUNK_OVERLAP_RATIO, 默认 15%)。
+        # 修复: 原实现 min(200, max(50, cs*0.15)) 的上限 200 在 cs=4096 时先触发,
+        # 真实重叠被压到 4.88% —— 与 docstring 声称的 15% 和通行建议(15-20%)都不符。
+        # 上限保留但抬高到 CHUNK_OVERLAP_MAX, 只做安全兜底, 不绑定正常取值。
+        from config import CHUNK_OVERLAP_MAX, CHUNK_OVERLAP_RATIO
+
+        co = max(50, min(int(cs * CHUNK_OVERLAP_RATIO), CHUNK_OVERLAP_MAX, cs // 2))
     return RecursiveCharacterTextSplitter(
         separators=[
             "\n\n",
@@ -680,6 +751,7 @@ def chunk_text_paged(
     page_offsets: list[dict],
     chunk_size: int = CHUNK_SIZE,
     chunk_overlap: int | None = None,
+    sections: list[dict] | None = None,
 ) -> list[dict]:
     """同 chunk_text 的切分结果, 但每块附带**真实页码**: [{"text": str, "page_num": int}]。
 
@@ -691,7 +763,10 @@ def chunk_text_paged(
     """
     chunks = chunk_text(text, chunk_size, chunk_overlap)
     if not chunks or not page_offsets:
-        return [{"text": c, "page_num": 0} for c in chunks]
+        return [
+            {"text": c, "page_num": 0, "section": _section_at(text, c, sections)}
+            for c in chunks
+        ]
 
     def _page_at(pos: int) -> int:
         for o in page_offsets:
@@ -713,10 +788,46 @@ def chunk_text_paged(
         if idx == -1:  # 兜底: 从全文重新定位 (splitter 极少改字, 但避免丢页码)
             idx = text.find(c)
         if idx == -1:
-            out.append({"text": c, "page_num": 0})
+            out.append({"text": c, "page_num": 0, "section": ""})
             continue
         pos = idx + 1
-        out.append({"text": c, "page_num": _page_at(idx)})
+        out.append(
+            {
+                "text": c,
+                "page_num": _page_at(idx),
+                "section": _heading_at(sections, idx),
+            }
+        )
     return out
+
+
+def _heading_at(sections: list[dict] | None, pos: int) -> str:
+    """按字符偏移取所属章节标题 (无 sections 或未命中 → 空)。
+
+    边界: 位置**早于第一个标题**时, 此前返回空 —— 结果论文第一块 (标题/摘要区)
+    没有章节标签。现归到第一个标题下 (那正是它所属的开篇部分)。
+    """
+    if not sections:
+        return ""
+    if pos < sections[0]["start"]:
+        return sections[0]["heading"]
+    for s in sections:
+        if s["start"] <= pos <= s["end"]:
+            return s["heading"]
+    prev = ""
+    for s in sections:
+        if s["start"] <= pos:
+            prev = s["heading"]
+        else:
+            break
+    return prev
+
+
+def _section_at(text: str, chunk: str, sections: list[dict] | None) -> str:
+    """无 page_offsets 时的兜底: 现算块位置再取章节。"""
+    if not sections:
+        return ""
+    idx = text.find(chunk)
+    return _heading_at(sections, idx) if idx >= 0 else ""
 
 

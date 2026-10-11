@@ -212,3 +212,5 @@ class AskResponse(BaseModel):
     # 召回不足标记: 模型判定库内资料覆盖不到问题主题 (不强行作答)。固定结构而非自由文本,
     # 供前端/监控直接消费
     insufficient: bool = False
+    # 引用定位校验: 答案里的"定位"是否真出自本次检索资料 (程序化核验, 零 LLM 调用)
+    citation_check: dict[str, Any] = Field(default_factory=dict)

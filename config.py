@@ -176,6 +176,13 @@ TOOL_DISABLED = _env_list("TOOL_DISABLED", [])
 # 重复动作检测只抓**同参数**的原地打转, 换参数连调 N 次它看不到)。
 TOOL_CALL_LIMIT_PER_RUN = _env("TOOL_CALL_LIMIT_PER_RUN", 8, int)
 
+# 工具结果缓存 (只对 Tool.cacheable=True 的只读工具生效)
+TOOL_CACHE_ENABLED = _env_bool("TOOL_CACHE_ENABLED", True)
+# TTL 必须存在: 缓存的语义是"短时间内答案不变", 不是"永远不变" ——
+# 知识库更新后不能被旧结果挡住。
+TOOL_CACHE_TTL = _env("TOOL_CACHE_TTL", 180, int)
+TOOL_CACHE_MAX = _env("TOOL_CACHE_MAX", 512, int)
+
 # 单个 agent 的 wall-clock 上限 (科研团队每个 agent 独立计时)。
 # 此前只有轮次上限: 单次 LLM 调用各自有 timeout, 但 agent 可以一直"下一轮再说"。
 AGENT_AGENT_TIMEOUT = _env("AGENT_AGENT_TIMEOUT", 180, int)

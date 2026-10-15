@@ -321,6 +321,13 @@ async def api_metrics():
     except Exception:
         pass
     try:
+        # 工具结果缓存: 命中率长期为 0 说明没有重复调用, 或 cacheable 标错了
+        import tool_cache
+
+        d["tool_cache"] = tool_cache.stats()
+    except Exception:
+        pass
+    try:
         # 接入/索引环节指标: 解析成功率 + 分块质量 (补齐全流程最后一处无量化的环节)
         d["ingest"] = metrics.ingest_stats()
     except Exception:

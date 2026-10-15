@@ -163,5 +163,6 @@ TOOLS = [
             "required": ["url"],
         },
         _fetch_url,
+        cacheable=True,
     ),
 ]

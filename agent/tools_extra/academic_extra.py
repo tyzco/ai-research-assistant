@@ -239,6 +239,7 @@ TOOLS = [
             "required": ["text"],
         },
         _check_plagiarism,
+        cacheable=True,
     ),
     Tool(
         "lookup_venue_rank",
@@ -251,5 +252,6 @@ TOOLS = [
             "required": ["venue"],
         },
         _lookup_venue_rank,
+        cacheable=True,
     ),
 ]

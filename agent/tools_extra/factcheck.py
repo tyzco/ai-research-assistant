@@ -132,6 +132,7 @@ TOOLS = [
             "required": ["claim"],
         },
         _check_factual_support,
+        cacheable=True,
         kind="llm"
     ),
 ]

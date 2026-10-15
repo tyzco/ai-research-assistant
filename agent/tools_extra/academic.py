@@ -71,6 +71,7 @@ TOOLS = [
             "required": ["doi"],
         },
         _doi_lookup,
+        cacheable=True,
     ),
     Tool(
         "arxiv_lookup",
@@ -83,5 +84,6 @@ TOOLS = [
             "required": ["arxiv_id"],
         },
         _arxiv_lookup,
+        cacheable=True,
     ),
 ]

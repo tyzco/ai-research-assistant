@@ -31,6 +31,7 @@ class Tool:
         retryable: bool = True,
         requires_precheck: str = "",
         precheck_max_age: int = 300,
+        cacheable: bool = False,
     ):
         self.name = name
         self.description = description
@@ -52,6 +53,11 @@ class Tool:
         # 操作的那个) 不会因为"默认值是 True"而悄悄获得自动重试。安全领域里这类
         # 默认值反了的设计, 出事时没有任何征兆。
         self.retryable = retryable
+        # 结果是否可缓存 (只读且同参同果)。
+        # 必须**显式声明**而不能从 kind/retryable 推断: 实测 download_and_index 与
+        # export_report 都是 "deterministic + retryable", 但它们会写知识库/写文件 ——
+        # 按推断规则缓存会造成副作用被吞 (第二次调用命中缓存, 根本没执行)。
+        self.cacheable = cacheable
         # 执行前必须**先查当前状态**的工具名 (空 = 无前置)。对应"下发操控指令前先查询
         # 设备状态、确认之后再执行"的通用形式:
         #
@@ -166,6 +172,18 @@ class Tool:
         if invalid:
             return invalid
 
+        # 缓存查: 只对显式声明 cacheable=True 的只读工具生效。
+        # 放在 validate 之后 —— 参数都没过校验的调用不该占用缓存条目。
+        if self.cacheable:
+            try:
+                import tool_cache
+
+                _hit = tool_cache.get(self.name, kwargs)
+                if _hit is not None:
+                    return _hit
+            except Exception:
+                pass
+
         # 只读工具重试; 有副作用的工具失败即停。
         MAX_ATTEMPTS = 3 if self.retryable else 1
         last_error = None
@@ -185,6 +203,13 @@ class Tool:
                     logger.warning(
                         f"Confirmed tool executed: {self.name} (args: {list(kwargs)})"
                     )
+                if self.cacheable:
+                    try:
+                        import tool_cache
+
+                        tool_cache.put(self.name, kwargs, result_str)
+                    except Exception:
+                        pass
                 return result_str
             except Exception as e:
                 last_error = e
@@ -396,6 +421,7 @@ TOOLS: list[Tool] = [
             "required": ["query"],
         },
         _tool_search_papers,
+        cacheable=True,
     ),
     Tool(
         "download_and_index",
@@ -442,7 +468,8 @@ TOOLS: list[Tool] = [
             "required": ["table_name", "question"],
         },
         _tool_ask_kb,
-        kind="llm"
+        kind="llm",
+        cacheable=True,
     ),
     Tool(
         "export_report",
@@ -491,6 +518,7 @@ TOOLS: list[Tool] = [
             "required": ["draft"],
         },
         _tool_check_draft,
+        cacheable=True,
         kind="llm"
     ),
     Tool(
@@ -504,6 +532,7 @@ TOOLS: list[Tool] = [
             "required": ["topic"],
         },
         _tool_analyze_gap,
+        cacheable=True,
         kind="llm"
     ),
     Tool(
@@ -518,6 +547,7 @@ TOOLS: list[Tool] = [
             "required": ["draft"],
         },
         _tool_review_draft,
+        cacheable=True,
         kind="llm"
     ),
     Tool(
@@ -544,6 +574,7 @@ TOOLS: list[Tool] = [
             "required": ["paper_id"],
         },
         _tool_citation_chain,
+        cacheable=True,
     ),
 ]
 
@@ -670,6 +701,7 @@ if not any(t.name == "search_knowledge_bases" for t in TOOLS):
                 },
             },
             _tool_search_knowledge_bases,
+            cacheable=True,  # 只读: 列知识库清单
         )
     )
 
@@ -693,5 +725,6 @@ if not any(t.name == "agent_ask" for t in TOOLS):
             },
             _tool_agent_ask,
             kind="llm",  # 内部走 RAG + LLM 生成 (非确定性): 显式标注, 避免误当确定性工具
+            cacheable=True,  # 只读: 同表同问可复用 (LLM 输出虽有随机性, 但同问同答更好也更省)
         )
     )

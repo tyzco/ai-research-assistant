@@ -82,6 +82,7 @@ PAPER_WRITING = Skill(
         "check_draft_quality",
         "review_draft",
         "check_factual_support",
+        "get_paper_content",
     ],
     system_prompt_appendix="""
 【论文写作模式】
@@ -102,7 +103,7 @@ DEEP_QA = Skill(
     name="deep_qa",
     description="学术深度问答与知识管理: 多轮指代消解 → 自适应检索 → 级联重排 → 精确回答",
     category="qa",
-    tools=["agent_ask", "ask_knowledge_base", "get_topic_state"],
+    tools=["agent_ask", "ask_knowledge_base", "get_topic_state", "get_paper_content"],
     system_prompt_appendix="""
 【深度问答模式】
 1. 理解问题的研究背景和上下文
@@ -145,7 +146,13 @@ PAPER_CRITIQUE = Skill(
     name="paper_critique",
     description="论文批判性分析: 审阅论文的核心主张/证据/方法论弱点/贡献",
     category="qa",
-    tools=["agent_ask", "search_knowledge_bases", "doi_lookup", "arxiv_lookup"],
+    tools=[
+        "agent_ask",
+        "search_knowledge_bases",
+        "doi_lookup",
+        "arxiv_lookup",
+        "get_paper_content",
+    ],
     system_prompt_appendix="""
 【论文批判模式】
 1. 定位论文 (通过知识库检索或 agent_ask)

@@ -233,17 +233,141 @@ class Tool:
 
 
 async def _tool_search_papers(
-    query: str, keywords_en: list = None, keywords_cn: list = None
+    query: str,
+    keywords_en: list = None,
+    keywords_cn: list = None,
+    min_year: int = None,
+    min_citations: int = None,
+    limit: int = 10,
 ) -> dict:
+    """多源检索 + **按年份/引用数筛选**。
+
+    为什么加筛选: 此前只能搜不能筛——"最近三年的进展"这类最常见的学术需求根本没有
+    对应的表达方式, 模型只能把结果全捞回来再自己数, 而工具又只返回前 5 篇标题,
+    等于做不了。年份与引用数在 PaperMeta 里本来就有 (12 个源里多数会给), 只是没暴露。
+
+    诚实说明: 筛选在**粗召回之后**做 (各源对年份参数的支持不一致, 统一在后端过滤更可靠)。
+    所以返回里同时给 total(召回总数) 与 matched(筛后数), 模型能看出是不是筛得太狠。
+    """
     from search import search_papers_for_topic
 
     papers = await search_papers_for_topic(query, keywords_en, keywords_cn)
+
+    def _keep(p) -> bool:
+        if min_year is not None and (p.year or 0) < min_year:
+            return False
+        if min_citations is not None and (p.citation_count or 0) < min_citations:
+            return False
+        return True
+
+    matched = [p for p in papers if _keep(p)]
+    # 按引用数降序 (高引优先是学术检索的通用默认); 缺引用数的排在后面而非丢掉
+    matched.sort(key=lambda p: (p.citation_count or 0), reverse=True)
+    top = matched[: max(1, min(int(limit or 10), 20))]
     return {
         "total": len(papers),
-        "oa_count": sum(1 for p in papers if p.is_oa and p.pdf_url),
-        "top_5": [
-            {"title": p.title, "year": p.year, "is_oa": p.is_oa and bool(p.pdf_url)}
-            for p in papers[:5]
+        "matched": len(matched),
+        "oa_count": sum(1 for p in matched if p.is_oa and p.pdf_url),
+        "filters": {"min_year": min_year, "min_citations": min_citations},
+        "papers": [
+            {
+                "title": p.title,
+                "year": p.year,
+                "citations": p.citation_count or 0,
+                "is_oa": p.is_oa and bool(p.pdf_url),
+                "doi": p.doi,
+            }
+            for p in top
+        ],
+    }
+
+
+async def _tool_paper_content(
+    table_name: str, paper: str, section: str = "", limit: int = 8
+) -> dict:
+    """读取某篇论文在知识库中的**完整正文块**（按阅读顺序）。
+
+    为什么需要它: 此前"精读某篇论文"只能靠 agent_ask —— 那是**语义检索**, 给的是
+    "与问题最相关的几段", 回答不了"这篇的第三节讲了什么"、"按顺序讲一遍它的方法"
+    这类需要**定位**的问题。语义检索与顺序阅读是两种不同的取数方式, 缺了后者,
+    "精读"就只能碰运气。
+
+    paper: paper_id (16 位十六进制) 或标题片段。给片段时按包含匹配, 命中多篇会提示。
+    section: 可选, 按章节标题片段过滤 (库里存的是检出/解析出的章节名)。
+    """
+    import lancedb
+
+    from config import LANCEDB_DIR, KB_ACTIVE_FILTER
+    from knowledge_base import _get_table
+
+    table_name = (table_name or "").strip()
+    if not table_name.startswith("papers_"):
+        table_name = f"papers_{table_name}"
+    paper = (paper or "").strip()
+    if not paper:
+        return {"error": "需要 paper 参数 (paper_id 或标题片段)"}
+
+    db = lancedb.connect(str(LANCEDB_DIR))
+    try:
+        tbl = _get_table(db, table_name)
+    except Exception as e:
+        return {"error": f"知识库 {table_name} 打不开: {e}"}
+
+    # 定位论文: 先当 paper_id, 否则按标题片段模糊匹配
+    # 注意 sanitize: 值会拼进 where 子句, 去掉引号防注入
+    safe = paper.replace("'", "").replace('"', "")[:80]
+    rows: list[dict] = []
+    try:
+        rows = tbl.search().where(f"paper_id = '{safe}'").limit(500).to_list()
+    except Exception:
+        rows = []
+    if not rows:
+        try:
+            rows = (
+                tbl.search()
+                .where(f"title LIKE '%{safe}%'")
+                .limit(500)
+                .to_list()
+            )
+        except Exception as e:
+            return {"error": f"按标题查找失败: {e}"}
+    if not rows:
+        return {"error": f"知识库中没有匹配 '{paper}' 的论文", "hint": "先用 search_knowledge_bases 确认库名，或用 agent_ask 语义检索"}
+
+    # 已失效版本不返回 (与检索口径一致)
+    rows = [r for r in rows if (r.get("status") or "active") in ("active", "")]
+
+    titles = sorted({r.get("title", "") for r in rows})
+    if len(titles) > 1 and not paper.replace("'", "")[:16].isalnum():
+        return {
+            "matched_titles": titles[:5],
+            "hint": "标题片段命中了多篇论文，请用更完整的标题或 paper_id 重试",
+        }
+
+    sec = (section or "").strip()
+    if sec:
+        rows = [r for r in rows if sec in (r.get("section") or "")]
+        if not rows:
+            return {"error": f"该论文没有匹配章节 '{section}' 的内容"}
+
+    rows.sort(key=lambda r: (r.get("chunk_index") or 0))
+    n = max(1, min(int(limit or 8), 20))
+    out_rows = [r for r in rows if int(r.get("chunk_index") or 0) > 0][:n] or rows[:n]
+    return {
+        "paper_id": rows[0].get("paper_id", ""),
+        "title": rows[0].get("title", ""),
+        "year": rows[0].get("year"),
+        "total_chunks": len(rows),
+        "returned": len(out_rows),
+        "sections": sorted({(r.get("section") or "").strip() for r in rows if (r.get("section") or "").strip()})[:12],
+        "chunks": [
+            {
+                "index": r.get("chunk_index"),
+                "page": r.get("page_number"),
+                "section": r.get("section") or "",
+                "text": (r.get("text") or "")[:2000],
+            }
+            for r in out_rows
         ],
     }
 
@@ -416,6 +540,23 @@ TOOLS: list[Tool] = [
                     "items": {"type": "string"},
                     "maxItems": 5,
                     "description": "中文关键词（最多 5 个，超出按前 5 个处理）",
+                },
+                "min_year": {
+                    "type": "integer",
+                    "minimum": 1900,
+                    "maximum": 2100,
+                    "description": "只要**不早于**该年份的论文。问'最近进展/最新方法'时用它，例如 2023",
+                },
+                "min_citations": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "只要引用数**不低于**此值的论文。想找有影响力的经典工作用它，例如 50",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 20,
+                    "description": "返回条数（默认 10，按引用数降序）",
                 },
             },
             "required": ["query"],
@@ -686,6 +827,42 @@ async def _tool_agent_ask(table_name: str, question: str) -> dict:
 
 
 # DeepSeek 审查 #4: 幂等注册, 防止模块重复导入/热重载时工具累积重复项
+if not any(t.name == "get_paper_content" for t in TOOLS):
+    TOOLS.append(
+        Tool(
+            "get_paper_content",
+            "读取某篇论文在知识库中的完整正文（按阅读顺序），可按章节过滤。"
+            "示例: {\"table_name\":\"papers_abc123\", \"paper\":\"ArcFace\", \"section\":\"方法\"}。"
+            "精读/按顺序讲解某篇论文时用它；只想知道'哪几段回答了某个问题'则用 agent_ask。",
+            {
+                "type": "object",
+                "properties": {
+                    "table_name": {
+                        "type": "string",
+                        "description": "知识库表名 (papers_<topic_id> 或直接 <topic_id>)",
+                    },
+                    "paper": {
+                        "type": "string",
+                        "description": "论文 paper_id (16 位十六进制) 或标题片段",
+                    },
+                    "section": {
+                        "type": "string",
+                        "description": "可选, 章节标题片段 (如 '方法'、'实验'), 只返回该章节内容",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 20,
+                        "description": "最多返回多少个正文块 (默认 8)",
+                    },
+                },
+                "required": ["table_name", "paper"],
+            },
+            _tool_paper_content,
+            cacheable=True,  # 只读
+        )
+    )
+
 if not any(t.name == "search_knowledge_bases" for t in TOOLS):
     TOOLS.append(
         Tool(

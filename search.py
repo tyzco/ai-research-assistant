@@ -1137,6 +1137,10 @@ async def _search_crossref(keywords: list[str]) -> list[PaperMeta]:
                     papers.append(
                         PaperMeta(
                             paper_id=pid,
+                            # 引用数: Crossref 有 is-referenced-by-count, 此前完全没解析 ——
+                            # 导致多数结果 citation_count=0, 按引用排序失效、按引用筛选
+                            # 会把所有结果筛空 (实测 min_citations=100 命中 0)。
+                            citation_count=int(item.get("is-referenced-by-count") or 0),
                             title=(item.get("title") or ["Unknown"])[0],
                             authors=", ".join(
                                 (a.get("family", "") or "") for a in authors
@@ -1326,6 +1330,7 @@ async def _search_epmc(keywords: list[str]) -> list[PaperMeta]:
                     papers.append(
                         PaperMeta(
                             paper_id=f"epmc:{item.get('id','')}",
+                            citation_count=int(item.get("citedByCount") or 0),
                             title=item.get("title", "Unknown"),
                             authors=item.get("authorString", ""),
                             year=int(item.get("pubYear", 0))

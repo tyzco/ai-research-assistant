@@ -168,6 +168,14 @@ AGENT_MAX_CONSECUTIVE_FAILURES = _env("AGENT_MAX_CONSECUTIVE_FAILURES", 4, int)
 # 三级 (多次失败): AGENT_MAX_CONSECUTIVE_FAILURES 触发后终止整个任务
 AGENT_PARAM_CORRECTION_BUDGET = _env("AGENT_PARAM_CORRECTION_BUDGET", 1, int)
 
+# ── 工具治理 ──
+# 静态黑名单 (逗号分隔): 运维可在不发版的情况下停用某个工具 (如上游 API 挂了、
+# 或某工具被判定有风险)。此前只有"危险工具"审计日志, **没有任何东西会真的拦**。
+TOOL_DISABLED = _env_list("TOOL_DISABLED", [])
+# 单次任务内, 同一工具最多被调用几次 (防"换着参数反复调"造成的成本失控 ——
+# 重复动作检测只抓**同参数**的原地打转, 换参数连调 N 次它看不到)。
+TOOL_CALL_LIMIT_PER_RUN = _env("TOOL_CALL_LIMIT_PER_RUN", 8, int)
+
 # 单个 agent 的 wall-clock 上限 (科研团队每个 agent 独立计时)。
 # 此前只有轮次上限: 单次 LLM 调用各自有 timeout, 但 agent 可以一直"下一轮再说"。
 AGENT_AGENT_TIMEOUT = _env("AGENT_AGENT_TIMEOUT", 180, int)

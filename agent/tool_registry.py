@@ -29,6 +29,8 @@ class Tool:
         need_confirm: bool = False,
         kind: str = "deterministic",
         retryable: bool = True,
+        requires_precheck: str = "",
+        precheck_max_age: int = 300,
     ):
         self.name = name
         self.description = description
@@ -50,6 +52,16 @@ class Tool:
         # 操作的那个) 不会因为"默认值是 True"而悄悄获得自动重试。安全领域里这类
         # 默认值反了的设计, 出事时没有任何征兆。
         self.retryable = retryable
+        # 执行前必须**先查当前状态**的工具名 (空 = 无前置)。对应"下发操控指令前先查询
+        # 设备状态、确认之后再执行"的通用形式:
+        #
+        # 提示词里写一句"请先查询状态"是**建议**, 模型可以不听; 这条是**强制**——
+        # 执行循环在调用前检查, 没查过就直接拒绝。区别在于失效模式: 前者失效时你
+        # 得到一次未经确认的操作, 后者失效时你只得到一个"先去查"的错误。
+        #
+        # `precheck_max_age` 是新鲜度上限: 十分钟前查过的状态不能拿来背书现在的操作。
+        self.requires_precheck = requires_precheck
+        self.precheck_max_age = precheck_max_age
         # deterministic = 确定性能力 (查库/计算/导出/查询: 同输入同输出, 可缓存可审计)
         # llm           = 内部含 LLM 判断/生成 (结果有随机性, 成本高, 需谨慎包装)
         # 设计原则: 工具优先确定性能力; LLM 类须显式标注, 避免"把模糊推理包成工具"而不自知。
@@ -131,6 +143,19 @@ class Tool:
             + f"\n该工具的参数结构: {json.dumps(self.parameters, ensure_ascii=False)[:600]}"
             + "\n请修正后重新调用。"
         )
+
+    def missing_precheck(self, called: dict[str, float], now: float) -> str:
+        """执行前还缺哪个前置查询? 空串 = 可以执行。
+
+        `called` 是 {工具名: 上次成功调用的时间戳}。由执行循环维护并传入 ——
+        工具自己拿不到调用历史, 也不该去猜。
+        """
+        if not self.requires_precheck:
+            return ""
+        ts = called.get(self.requires_precheck)
+        if ts is None or (now - ts) > self.precheck_max_age:
+            return self.requires_precheck
+        return ""
 
     async def execute(self, **kwargs) -> str:
         """执行工具：Schema 校验 → 重试。
@@ -395,6 +420,10 @@ TOOLS: list[Tool] = [
         },
         _tool_download_index,
         need_confirm=True,
+        # 真实的前置条件, 不是为了演示造的: `build_knowledge_base` 会按 topic_id
+        # 建 `papers_<topic_id>` 表 —— topic_id 不存在时就留下一张孤儿表, 而且
+        # 没有任何东西会引用它。先查一次课题状态, 确认存在再动手。
+        requires_precheck="get_topic_state",
     ),
     Tool(
         "ask_knowledge_base",

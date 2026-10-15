@@ -90,7 +90,45 @@ class ToolManager:
     def __init__(self):
         self.call_history: list[dict] = []
         self.error_count: dict[str, int] = {}  # tool_name → error count
+        self.call_counts: dict[str, int] = {}  # 本次任务内 tool_name → 已调用次数
         self._lock = threading.Lock()  # DeepSeek 审查 #4: 并发写保护
+
+    # ── 工具治理: 黑名单 + 单任务频次 ──
+    def check_call_budget(self, tool_name: str) -> str:
+        """调用前检查。返回错误说明 (空串 = 放行)。
+
+        为什么需要频次上限: 重复动作检测只抓**同工具同参数**的原地打转; 模型完全可以
+        换着参数把同一个贵工具连调十几次 (每次搜索/每次 LLM 问答都在烧钱),
+        而那种调用在重复检测看来"每次都不一样", 拦不住。
+        """
+        from config import TOOL_CALL_LIMIT_PER_RUN, TOOL_DISABLED
+
+        if tool_name in set(TOOL_DISABLED or []):
+            logger.warning(f"tool {tool_name} blocked by TOOL_DISABLED")
+            return f"⛔ 工具 `{tool_name}` 已被停用（运维配置），请改用其他工具。"
+
+        limit = int(TOOL_CALL_LIMIT_PER_RUN or 0)
+        if limit > 0:
+            with self._lock:
+                used = self.call_counts.get(tool_name, 0)
+            if used >= limit:
+                logger.warning(
+                    f"tool {tool_name} hit per-run call limit ({used}/{limit})"
+                )
+                return (
+                    f"⛔ 本次任务中 `{tool_name}` 已调用 {used} 次，达到上限 {limit}。"
+                    f"请基于已有结果作答，或改用其他工具。"
+                )
+        return ""
+
+    def note_call(self, tool_name: str) -> None:
+        """记录一次**实际执行**的调用 (供频次统计)。被拦下的不计入。"""
+        with self._lock:
+            self.call_counts[tool_name] = self.call_counts.get(tool_name, 0) + 1
+
+    def get_call_counts(self) -> dict:
+        with self._lock:
+            return dict(self.call_counts)
 
     def validate_params(
         self, tool_name: str, params: dict, schema: dict

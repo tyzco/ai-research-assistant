@@ -255,3 +255,104 @@ class TestThreeTierFallback:
         assert "已终止" in out
         assert "请勿据此继续判断" in out
         assert rounds < 8
+
+
+class TestPrecheckIsEnforcedNotSuggested:
+    """「执行前先查当前状态」写成提示词只是建议, 模型可以不听。
+
+    做成硬约束之后失效模式不同: 提示词失效时你得到一次**未经确认的操作**;
+    这条失效时你只得到一个"先去查"的错误。前者在生产里表现为事故, 后者表现为
+    一次多余的往返。
+    """
+
+    def _drive(self, monkeypatch, plan):
+        """按 plan 依次发出工具调用, 返回每轮拿到的工具结果。"""
+        import asyncio
+        import json as _json
+
+        from agent import research_team as rt
+
+        class _Fn:
+            def __init__(self, name, args):
+                self.name, self.arguments = name, _json.dumps(args)
+
+        class _TC:
+            def __init__(self, name, args):
+                self.id, self.function = "c1", _Fn(name, args)
+
+        class _Msg:
+            def __init__(self, call):
+                self.tool_calls = [call] if call else None
+                self.content = ""
+
+            def model_dump(self, **kw):
+                return {"role": "assistant", "content": ""}
+
+        class _Resp:
+            def __init__(self, call):
+                self.choices = [
+                    type("C", (), {"message": _Msg(call), "finish_reason": "tool_calls"})()
+                ]
+
+        rounds = {"n": 0}
+        results = []
+
+        async def fake_chat(**kw):
+            for m in kw.get("messages", []):
+                if m.get("role") == "tool":
+                    results.append(m["content"])
+            call = plan(rounds["n"])
+            rounds["n"] += 1
+            return _Resp(_TC(*call) if call else None)
+
+        monkeypatch.setattr(rt, "chat_with_retry", fake_chat)
+        team = rt.ResearchTeam(run_id="precheck-test")
+        asyncio.run(
+            team._run_agent(
+                "multi_source_searcher",
+                {"name": "检索员", "role": "x", "layer": "upstream", "prompt": "x",
+                 "tools": ["download_and_index", "get_topic_state"]},
+            )
+        )
+        return "\n".join(results)
+
+    def test_the_operation_is_refused_without_the_precheck(self, monkeypatch):
+        out = self._drive(
+            monkeypatch,
+            lambda n: ("download_and_index",
+                       {"urls": ["http://x"], "topic_id": "e9d9e4e4a9fa"}),
+        )
+        assert "必须先调用" in out
+        assert "get_topic_state" in out
+
+    def test_the_operation_runs_after_the_precheck(self, monkeypatch):
+        """先查状态再执行 —— 前置满足后不该再拦。"""
+        from agent.tool_registry import get_tool
+
+        def plan(n):
+            if n < 5:
+                return ("get_topic_state", {"topic_id": "e9d9e4e4a9fa"})
+            return ("download_and_index",
+                    {"urls": ["http://x"], "topic_id": "e9d9e4e4a9fa"})
+
+        # get_topic_state 会去查真实 topic (不存在的 id 返回"课题不存在"),
+        # 但**调用成功**这一点就够了 —— 前置检查看的是"查过没有"。
+        out = self._drive(monkeypatch, plan)
+        assert "必须先调用" not in out.split("get_topic_state")[-1]
+
+    def test_a_stale_precheck_does_not_count(self):
+        """十分钟前查过的状态不能拿来背书现在的操作。"""
+        import time
+
+        from agent.tool_registry import get_tool
+
+        t = get_tool("download_and_index")
+        old = time.time() - (t.precheck_max_age + 1)
+        assert t.missing_precheck({"get_topic_state": old}, time.time()) == "get_topic_state"
+
+    def test_a_tool_without_a_precheck_is_unaffected(self):
+        import time
+
+        from agent.tool_registry import get_tool
+
+        assert get_tool("search_papers").missing_precheck({}, time.time()) == ""

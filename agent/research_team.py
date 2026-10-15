@@ -765,9 +765,12 @@ class ResearchTeam:
             #        继续下发调用 —— 否则它会拿着一次次的错误结果硬凑一个答案出来。
             #
             # 上限 8 轮是循环的总闸, 三级兜底是任务级的闸, 两者不是一回事。
+            _tm_holder: dict = {}   # 本次 agent 运行的工具管理器 (频次计数按任务隔离)
             validation_failures: dict[str, int] = {}
             blocked_tools: set[str] = set()   # 一级耗尽后真正停用, 不只是提示
             total_failures = 0
+            # {工具名: 上次成功调用的时间} —— 强制前置查询的依据
+            called_ok: dict[str, float] = {}
             # 重复动作检测: 同工具+同参反复调用 = 原地打转 (ReAct 最典型的失败模式)。
             # pi_agent 早有这道闸, 团队这条循环一直没有 —— 而团队一次跑 14 个 agent、
             # 每个最多 8 轮, 一个 agent 打转的代价比单 agent 大得多。
@@ -891,8 +894,50 @@ class ResearchTeam:
                                     f"请改用不同参数/其他工具，或直接给出最终结论。"
                                 )
                             else:
-                                call_fingerprints.append(_fp)
-                                result = await tool.execute(**args)
+                                # 工具治理 (与 pi_agent 同一套): 黑名单 + 单任务频次上限
+                                from agent.tool_manager import ToolManager as _TM
+
+                                _tm = _tm_holder.setdefault("tm", _TM())
+                                _budget = _tm.check_call_budget(tc.function.name)
+                                if _budget:
+                                    result = _budget
+                                    total_failures += 1
+                                else:
+                                    call_fingerprints.append(_fp)
+                                    # ── 强制前置查询 ──
+                                    # "执行前先查当前状态"写在提示词里只是**建议**,
+                                    # 模型可以不听; 这里是硬约束。失效模式不同:
+                                    # 提示词失效时你得到一次未经确认的操作, 这条
+                                    # 失效时你只得到一个"先去查"的错误。
+                                    # 顺序: 先参数校验(本地/便宜/最可操作), 再前置
+                                    # 条件, 最后执行。反过来的话, 一个参数就写错的
+                                    # 调用会先被前置条件拦住, 模型拿到的是"先去查状态"
+                                    # 而不是"你的参数错了" —— 后者才是它当下要解决的。
+                                    _invalid = tool.validate(args)
+                                    _need = (
+                                        ""
+                                        if _invalid
+                                        else tool.missing_precheck(called_ok, time.time())
+                                    )
+                                    if _invalid:
+                                        result = _invalid
+                                    elif _need:
+                                        result = (
+                                            f"❌ 执行 `{tool.name}` 前必须先调用 "
+                                            f"`{_need}` 查询当前状态"
+                                            f"（或该查询已超时, 需重查）。"
+                                            f"请先调用它, 确认状态后再执行本操作。"
+                                        )
+                                        total_failures += 1
+                                        logger.warning(
+                                            f"tool_precheck_missing tool={tool.name} "
+                                            f"need={_need}"
+                                        )
+                                    else:
+                                        _tm.note_call(tc.function.name)
+                                        result = await tool.execute(**args)
+                                        if not result.startswith("❌"):
+                                            called_ok[tool.name] = time.time()
 
                     # ── 一级: 参数错误只给一次修正机会 ──
                     if result.startswith("❌ 参数校验未通过"):

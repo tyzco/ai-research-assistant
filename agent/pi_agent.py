@@ -310,8 +310,17 @@ class PiAgent:
             _tr = result.get("trace") or {}
             _tools = _tr.get("tools_used") or []
             _ctx = (self.goal or "") + str(self._state.get("task", ""))
+            # 触发词只看**写作动作**, 不看"论文/综述"这类裸名词。
+            # 实测踩过: 原触发集含 "论文", 于是"查看当前课题状态：有多少篇论文"这种
+            # 纯查询任务也被判成写作任务, 报出 "High-risk writing unverified"。
+            # 在学术助手里"论文"几乎无处不在, 用它做触发条件必然误报 ——
+            # 而误报会稀释这条硬性核验的可信度, 让人开始忽略它。
             _is_writing = any(
-                k in _ctx for k in ("写", "综述", "初稿", "论文", "大纲")
+                k in _ctx
+                for k in (
+                    "写", "撰写", "起草", "初稿", "草稿", "大纲", "润色", "改稿",
+                    "写一篇", "生成一篇", "整理成文",
+                )
             )
             if not _is_writing:
                 return
@@ -647,6 +656,13 @@ class PiAgent:
                                 tool_result = f"安全检查未通过: {reason}"
                                 turn.tool_success = False
 
+                    # === 工具治理: 黑名单 + 单任务频次上限 ===
+                    if tool_result is None and tool_def is not None:
+                        _budget_err = self.tool_mgr.check_call_budget(tool_name)
+                        if _budget_err:
+                            tool_result = _budget_err
+                            turn.tool_success = False
+
                     # === 重复动作检测 (死循环第三道防线) ===
                     # 轮次限制(max_steps) 与超时兜底(max_time) 都是"烧到上限才停";
                     # 这里在**动作层面**提前发现原地打转: 同工具+同参反复调用 → 直接把
@@ -692,6 +708,7 @@ class PiAgent:
                                     tool_args,
                                     timeout=min(remaining, 60),
                                 )
+                                self.tool_mgr.note_call(tool_name)  # 频次统计 (被拦下的不计)
                                 if _ok:
                                     raw_result = _res
                                     turn.tool_success = True

@@ -21,12 +21,20 @@ import json
 import logging
 import re
 import threading
+import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional
 
-from config import AGENT_MAX_TOKENS, AGENT_TEMPERATURE, DEEPSEEK_MODEL
+from config import (
+    AGENT_AGENT_TIMEOUT,
+    TEAM_AGENT_MAX_ROUNDS,
+    AGENT_MAX_TOKENS,
+    AGENT_REPEAT_CALL_LIMIT,
+    AGENT_TEMPERATURE,
+    DEEPSEEK_MODEL,
+)
 from llm_client import chat_with_retry
 
 logger = logging.getLogger(__name__)
@@ -760,8 +768,24 @@ class ResearchTeam:
             validation_failures: dict[str, int] = {}
             blocked_tools: set[str] = set()   # 一级耗尽后真正停用, 不只是提示
             total_failures = 0
+            # 重复动作检测: 同工具+同参反复调用 = 原地打转 (ReAct 最典型的失败模式)。
+            # pi_agent 早有这道闸, 团队这条循环一直没有 —— 而团队一次跑 14 个 agent、
+            # 每个最多 8 轮, 一个 agent 打转的代价比单 agent 大得多。
+            call_fingerprints: list[str] = []
+            _agent_t0 = time.time()
 
-            for _ in range(8):
+            for _round in range(TEAM_AGENT_MAX_ROUNDS):
+                # 超时兜底: 每个 agent 有独立 wall-clock 预算。此前完全没有 —— 单次 LLM
+                # 调用各自有 timeout, 但整个 agent 可以一直"下一轮再说"而无上限。
+                if time.time() - _agent_t0 > AGENT_AGENT_TIMEOUT:
+                    logger.warning(
+                        f"agent_timeout agent={agent_key} "
+                        f"elapsed={time.time() - _agent_t0:.0f}s"
+                    )
+                    return (
+                        f"[{agent_def['name']} 超时终止: 超过 {AGENT_AGENT_TIMEOUT}s 未完成。"
+                        f"未产出结果 —— 请勿据此继续判断。]"
+                    )
                 resp = await chat_with_retry(
                     model=DEEPSEEK_MODEL,
                     messages=messages,
@@ -845,13 +869,38 @@ class ResearchTeam:
                         if tool is None:
                             result = f"❌ 未知工具: {tc.function.name}"
                         else:
-                            result = await tool.execute(**args)
+                            # 重复动作检测放在这里而不是更早: 参数错的调用**不算**重复动作。
+                            # 参数错误的正确处置是"回灌错误让模型修正"(一级), 而重复检测
+                            # 会把它判成"原地打转"并直接跳过 —— 两者打架时, 更具体、
+                            # 更可操作的参数错误应该优先 (实测早放会吃掉一级/三级用例)。
+                            _fp = (
+                                f"{tc.function.name}:"
+                                f"{(tc.function.arguments or '')[:200]}"
+                            )
+                            if (
+                                call_fingerprints[-6:].count(_fp)
+                                >= AGENT_REPEAT_CALL_LIMIT - 1
+                            ):
+                                logger.warning(
+                                    f"repeat action: {tc.function.name} "
+                                    f"(agent={agent_key})"
+                                )
+                                result = (
+                                    f"⚠️ 检测到重复动作：你已多次用**相同参数**调用 "
+                                    f"{tc.function.name}，结果不会变化。"
+                                    f"请改用不同参数/其他工具，或直接给出最终结论。"
+                                )
+                            else:
+                                call_fingerprints.append(_fp)
+                                result = await tool.execute(**args)
 
                     # ── 一级: 参数错误只给一次修正机会 ──
                     if result.startswith("❌ 参数校验未通过"):
                         n = validation_failures.get(tc.function.name, 0) + 1
                         validation_failures[tc.function.name] = n
-                        if n > 1:
+                        from config import AGENT_PARAM_CORRECTION_BUDGET
+
+                        if n > AGENT_PARAM_CORRECTION_BUDGET:
                             # 一次修正机会用完 —— 真正停用它。参数错误是确定性的:
                             # 第二次写不对, 第三次也不会对, 继续循环只是烧 token。
                             blocked_tools.add(tc.function.name)

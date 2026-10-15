@@ -168,6 +168,15 @@ AGENT_MAX_CONSECUTIVE_FAILURES = _env("AGENT_MAX_CONSECUTIVE_FAILURES", 4, int)
 # 三级 (多次失败): AGENT_MAX_CONSECUTIVE_FAILURES 触发后终止整个任务
 AGENT_PARAM_CORRECTION_BUDGET = _env("AGENT_PARAM_CORRECTION_BUDGET", 1, int)
 
+# 单个 agent 的 wall-clock 上限 (科研团队每个 agent 独立计时)。
+# 此前只有轮次上限: 单次 LLM 调用各自有 timeout, 但 agent 可以一直"下一轮再说"。
+AGENT_AGENT_TIMEOUT = _env("AGENT_AGENT_TIMEOUT", 180, int)
+
+# 科研团队单个 agent 的**循环轮次**上限。
+# 刻意与 pi_agent 的 AGENT_MAX_STEPS 分开: 团队一次跑 14 个 agent, 轮次预算翻倍
+# 就是成本翻倍; 原来是硬编码的 8, 提为配置但**保持原值**, 不做无依据的放宽。
+TEAM_AGENT_MAX_ROUNDS = _env("TEAM_AGENT_MAX_ROUNDS", 8, int)
+
 # 科研团队规划器 (规划与执行分离): 按任务裁剪本次要跑的 agent。
 # 兜底: 规划失败/空结果/关闭 → 回退完整管线; required=True 的 agent (含全部 3 个审批闸门)
 # 永远必跑, 规划器碰不到。

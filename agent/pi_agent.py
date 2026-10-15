@@ -294,7 +294,51 @@ class PiAgent:
             except Exception:
                 pass
         self._verify_high_risk(result)
+        self._verify_insufficient_propagated(result)
         return result
+
+    def _verify_insufficient_propagated(self, result: dict) -> None:
+        """系统级核验: 库内"无相关内容"的信号不得在 agent 层被吞掉。
+
+        实测 (run_agent_eval): 问一个知识库完全覆盖不到的问题 (量子色动力学),
+        内层 agent_ask **确实**判定并返回了 "【库内无相关内容】", 但外层 agent 把这条
+        结论丢掉, 直接用自己的参数化知识写出了一篇"精确表达式"—— 看起来像有据可依,
+        实际库内一个字都没有。这正是学术/工业场景最危险的失败形态: **幻觉伪装成引用**。
+
+        与 _verify_high_risk 同理, 这条也做成系统级检查而非再写一句 prompt 提醒 ——
+        "必须如实说资料不足"属于不可错项, 靠模型自觉是不可靠的。
+        """
+        if not result.get("success"):
+            return
+        try:
+            _tr = result.get("trace") or {}
+            steps = _tr.get("steps") or []
+            _MARK = "【库内无相关内容】"
+            _hit = any(_MARK in str(s.get("result") or "") for s in steps)
+            if not _hit:
+                return
+            _ans = str(result.get("result") or "")
+            if _MARK in _ans:
+                return  # 模型已如实转述, 无需干预
+            logger.warning(
+                "insufficient signal not propagated to final answer "
+                "(内层判定库内无内容, 外层却给出了结论性回答)"
+            )
+            try:
+                from monitor import metrics as _mx
+
+                _mx.record_degradation("insufficient_not_propagated")
+            except Exception:
+                pass
+            result["result"] = (
+                f"⚠️ **资料不足提示**：本次检索链路中有工具明确返回过"
+                f"「库内无相关内容」，但下面的答复未如实转述这一点。"
+                f"请注意区分其中来自知识库的内容与来自模型通用知识的推断。\n\n"
+                f"{_ans}"
+            )
+            result["insufficient_propagated"] = False
+        except Exception as e:
+            logger.warning(f"_verify_insufficient_propagated failed: {e}")
 
     def _verify_high_risk(self, result: dict) -> None:
         """系统层硬性核验 (不由 LLM 自觉) —— 对应"高风险任务不允许出错"这一 Agent 适配前提。

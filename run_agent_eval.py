@@ -173,8 +173,18 @@ async def main() -> int:
     from knowledge_base import build_knowledge_base
     from models import PaperMeta
 
-    topic_id = f"agent_eval_{uuid.uuid4().hex[:8]}"
+    # topic_id 必须是 **12 位小写十六进制** —— get_topic_state 等工具按此 pattern 校验。
+    # 首版用了 "agent_eval_xxx" 这种带前缀的形式, 直接被参数校验拦下, 模型只能绕路,
+    # 测出来的行为全是环境导致的假象 (实测该工具被连调 4 次)。
+    topic_id = uuid.uuid4().hex[:12]
     table_name = f"papers_{topic_id}"
+    # **必须注册课题**: get_topic_state 读的是 topic_manager.active_topics (由
+    # /create_topic 填充)。工具与模型交互都依赖它 —— 不注册的话该工具只会返回
+    # "课题不存在", 模型会反复重试, 测出来的"多余无效调用"全是环境问题而非产品问题
+    # (实测首版正是如此: get_topic_state 被同一任务连调 4 次)。
+    from topic_manager import create_topic
+
+    create_topic(query="Agent 评测临时课题", topic_id=topic_id)
     pdfs = sorted(Path("paper_cache").glob("*.pdf"))
     if not pdfs:
         print("❌ paper_cache/ 下没有 PDF，无法建临时知识库")
@@ -219,6 +229,12 @@ async def main() -> int:
             print(f"已清理临时表 {table_name}")
         except Exception as e:
             print(f"清理失败(需手工删): {e}")
+        try:
+            from topic_manager import active_topics
+
+            active_topics.pop(topic_id, None)  # 别把临时课题留在内存里
+        except Exception:
+            pass
 
     summary = summarize(records)
     report = {"summary": summary, "records": records}

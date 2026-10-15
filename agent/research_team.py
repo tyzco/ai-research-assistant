@@ -758,6 +758,7 @@ class ResearchTeam:
             #
             # 上限 8 轮是循环的总闸, 三级兜底是任务级的闸, 两者不是一回事。
             validation_failures: dict[str, int] = {}
+            blocked_tools: set[str] = set()   # 一级耗尽后真正停用, 不只是提示
             total_failures = 0
 
             for _ in range(8):
@@ -814,7 +815,15 @@ class ResearchTeam:
                     except json.JSONDecodeError as e:
                         arg_error = f"参数不是合法 JSON: {e}"
 
-                    if arg_error:
+                    if tc.function.name in blocked_tools:
+                        # 一级已耗尽 —— 本轮不再执行该工具, 也不再回灌错误。只是
+                        # 反复告诉模型"你又错了"却照旧执行, 等于没有这一级。
+                        result = (
+                            f"❌ 工具 `{tc.function.name}` 本轮已停用（参数连续校验失败）。"
+                            f"请改用其它工具, 或直接说明无法完成。"
+                        )
+                        total_failures += 1
+                    elif arg_error:
                         tool = get_tool(tc.function.name)
                         want = (
                             json.dumps(tool.parameters, ensure_ascii=False)
@@ -827,6 +836,7 @@ class ResearchTeam:
                             f"该工具要求的参数结构: {want[:600]}\n"
                             f"请重新生成一次合法 JSON 调用。"
                         )
+                        total_failures += 1
                         logger.warning(
                             f"tool_args_invalid tool={tc.function.name} err={arg_error[:120]}"
                         )
@@ -842,9 +852,13 @@ class ResearchTeam:
                         n = validation_failures.get(tc.function.name, 0) + 1
                         validation_failures[tc.function.name] = n
                         if n > 1:
+                            # 一次修正机会用完 —— 真正停用它。参数错误是确定性的:
+                            # 第二次写不对, 第三次也不会对, 继续循环只是烧 token。
+                            blocked_tools.add(tc.function.name)
+                            total_failures += 1
                             result = (
-                                f"❌ 工具 `{tc.function.name}` 的参数已连续 {n} 次校验失败。"
-                                f"停止重试该工具 —— 请改用其它方式回答, 或直接说明无法完成。"
+                                f"❌ 工具 `{tc.function.name}` 的参数已连续 {n} 次校验失败, "
+                                f"本轮已停用。请改用其它工具, 或直接说明无法完成。"
                             )
                             logger.warning(
                                 f"tool_arg_retry_exhausted tool={tc.function.name} attempts={n}"

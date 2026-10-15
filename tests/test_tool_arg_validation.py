@@ -131,3 +131,127 @@ class TestDeclaredConstraintsAreEnforced:
         desc = t.parameters["properties"]["table_name"]["description"]
         assert "topic_id" in desc
         assert "papers_" in desc
+
+
+class TestThreeTierFallback:
+    """三级兜底 —— 每级拦不同性质的失败。
+
+    混在一起处理会让"能自愈的"和"必须停下的"走同一条路: 参数写错应该回灌给模型
+    让它改 (有救), 而累计失败到阈值还继续下去, 模型会拿着一堆错误结果硬凑答案。
+    """
+
+    def _tool(self, retryable=True, calls=None):
+        from agent.tool_registry import Tool
+
+        state = calls if calls is not None else {"n": 0}
+
+        def boom(**kw):
+            state["n"] += 1
+            raise RuntimeError("network timeout")
+
+        return Tool("risky", "x", {"type": "object", "properties": {}}, boom,
+                    retryable=retryable), state
+
+    def test_level2_readonly_tools_retry(self):
+        """可重放的操作: 超时重试是对的。"""
+        import asyncio
+
+        t, state = self._tool(retryable=True)
+        out = asyncio.run(t.execute())
+        assert state["n"] == 3          # 试了 3 次
+        assert "重试3次后" in out
+
+    def test_level2_side_effecting_tools_do_not_retry(self):
+        """不可重放的操作: 失败即停 —— 超时不代表没生效。"""
+        import asyncio
+
+        t, state = self._tool(retryable=False)
+        out = asyncio.run(t.execute())
+        assert state["n"] == 1          # 只试了 1 次
+        assert "不自动重试" in out
+        # 必须把"先查状态"讲清楚, 否则模型会自己再调一遍, 绕过这层保护
+        assert "先查询当前状态" in out
+
+    def test_level1_a_parameter_error_carries_the_fix(self, tool):
+        """一级: 回灌的不是"你错了", 而是"错在哪、应该是什么"。"""
+        err = tool.validate({"query": "x", "limit": 9999})
+        assert "最大为 50" in err              # 正确取值
+        assert "参数结构" in err               # 完整 schema
+        assert "重新调用" in err               # 明确的下一步
+
+    # ── 行为测试: 真正驱动那个循环, 而不是检查源码里有没有某句话 ──
+
+    def _drive_loop(self, monkeypatch, tool_call_builder, max_rounds=10):
+        """跑一次 _run_agent, 用假的 LLM 反复要求调用工具。"""
+        import asyncio
+        import json as _json
+
+        from agent import research_team as rt
+
+        class _Fn:
+            def __init__(self, name, args):
+                self.name, self.arguments = name, args
+
+        class _TC:
+            def __init__(self, name, args):
+                self.id, self.function = "call_1", _Fn(name, _json.dumps(args))
+
+        class _Msg:
+            def __init__(self, calls):
+                self.tool_calls, self.content = calls, ""
+
+            def model_dump(self, **kw):
+                return {"role": "assistant", "content": self.content}
+
+        class _Resp:
+            def __init__(self, calls):
+                self.choices = [type("C", (), {"message": _Msg(calls),
+                                               "finish_reason": "tool_calls"})()]
+
+        rounds = {"n": 0}
+        seen_results = []
+
+        async def fake_chat(**kw):
+            rounds["n"] += 1
+            # 把上一轮的工具结果记下来, 断言才有依据
+            for m in kw.get("messages", []):
+                if m.get("role") == "tool":
+                    seen_results.append(m["content"])
+            return _Resp([_TC(*tool_call_builder(rounds["n"]))])
+
+        monkeypatch.setattr(rt, "chat_with_retry", fake_chat)
+
+        team = rt.ResearchTeam(run_id="loop-test")
+        out = asyncio.run(
+            team._run_agent(
+                "search_papers",
+                {"name": "检索员", "role": "x", "layer": "upstream", "prompt": "x",
+                 "tools": ["download_and_index"]},
+            )
+        )
+        return out, rounds["n"], seen_results
+
+    def test_level1_gives_one_correction_then_blocks_the_tool(self, monkeypatch):
+        """一级: 回灌一次错误, 第二次就真正停用 —— 不是反复提示了事。
+
+        参数错误是确定性的: 第二次写不对, 第三次也不会对。原实现只改提示文案、
+        照旧执行, 循环一直跑到 8 轮上限 —— 那一级等于没有。
+        """
+        out, rounds, results = self._drive_loop(
+            monkeypatch,
+            lambda n: ("download_and_index",
+                       {"urls": "not-a-list", "topic_id": "e9d9e4e4a9fa"}),
+        )
+        joined = "\n".join(results)
+        assert "参数校验未通过" in joined     # 第 1 次: 带上正确 schema 让它改
+        assert "本轮已停用" in joined          # 第 2 次: 真正停用
+        assert rounds < 8                 # 没有一直烧到轮次上限
+
+    def test_level3_terminates_the_task(self, monkeypatch):
+        """三级: 累计失败到阈值必须终止 —— 否则模型会拿着一堆错误结果硬凑答案。"""
+        out, rounds, results = self._drive_loop(
+            monkeypatch, lambda n: ("citation_chain", {"paper_id": "!!not-hex!!"})
+        )
+        assert "已终止" in out
+        assert "请勿据此继续判断" in out
+        assert rounds < 8

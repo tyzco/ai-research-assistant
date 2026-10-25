@@ -100,6 +100,7 @@ async def run_one(task_def: dict, topic_id: str, table_name: str) -> dict:
         "tokens": 0,
         "steps_failed": 0,
         "tools": [],
+        "termination_reason": "",
         "degradations": {},
         "answer_preview": "",
         "error": "",
@@ -116,6 +117,9 @@ async def run_one(task_def: dict, topic_id: str, table_name: str) -> dict:
         rec["success"] = bool(res.get("success"))
         rec["turns"] = int(trace.get("turns") or len(steps) or 0)
         rec["tokens"] = int(trace.get("tokens") or trace.get("total_tokens") or 0)
+        rec["termination_reason"] = res.get("termination_reason") or trace.get(
+            "termination_reason", ""
+        )
         rec["tool_calls"] = len(steps)
         rec["steps_failed"] = sum(1 for s in steps if not s.get("success"))
         # 工具调用序列 —— 诊断"为什么这个任务花了 6 步"必须能看到它调了什么
@@ -139,8 +143,14 @@ def summarize(records: list[dict]) -> dict:
     for r in records:
         for k, v in (r["degradations"] or {}).items():
             deg[k] = deg.get(k, 0) + v
+    by_term: dict[str, int] = {}
+    for r in records:
+        k = r.get("termination_reason") or "unknown"
+        by_term[k] = by_term.get(k, 0) + 1
     return {
         "tasks": len(records),
+        # 按失败原因切片: 总分相同但"超时终止"和"正常完成"是两回事, 必须分开看
+        "by_termination": by_term,
         "completion_rate": round(sum(1 for r in records if r["success"]) / n, 4),
         "avg_turns": round(sum(r["turns"] for r in records) / n, 2),
         "total_tool_calls": total_calls,

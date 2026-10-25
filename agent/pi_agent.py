@@ -68,6 +68,13 @@ class TraceState:
     # 没理解工具契约, 再试只是烧步数 (与"失败兜底"分级的思路一致:
     # 一级给一次修正机会, 二级靠重试层处理瞬时故障, 三级才整体熔断)。
     param_failures: dict = field(default_factory=dict)
+    # === 可复现与切片所需的结构化字段 ===
+    # 没有这些, 两次实验指标不同时无法判断"是模型/提示词变了, 还是任务本身变了"。
+    model: str = ""            # 实际使用的模型
+    prompt_version: str = ""   # 系统提示词指纹 (sha1 前 8 位) —— 提示词改了能一眼看出
+    # 终止原因 (结构化, 不再只藏在人类可读文本里):
+    #   completed / max_steps / timeout / hook_blocked / llm_error / error_accumulation
+    termination_reason: str = ""
 
 
 class PiAgent:
@@ -194,11 +201,15 @@ class PiAgent:
         self._tools_schema = schemas_for_tools(tool_names)
 
         self._trace = TraceState(goal=self.goal or task[:80], start_time=time.time())
+        _sys_prompt = self._build_system_prompt(skill_prompt, task)
+        self._trace.model = DEEPSEEK_MODEL
+        # 提示词指纹: 不存全文 (可能很长/含用户数据), 只存哈希 —— 足以判断两次实验
+        # 用的提示词是否同一版。
+        import hashlib as _hl
+
+        self._trace.prompt_version = _hl.sha1(_sys_prompt.encode("utf-8")).hexdigest()[:8]
         self._messages = [
-            {
-                "role": "system",
-                "content": self._build_system_prompt(skill_prompt, task),
-            },
+            {"role": "system", "content": _sys_prompt},
             {"role": "user", "content": task},
         ]
 
@@ -450,6 +461,7 @@ class PiAgent:
             # === 超时检查 ===
             if time.time() - trace.start_time > self.max_time:
                 final_result = f"任务超时 ({self.max_time}s)"
+                trace.termination_reason = "timeout"
                 break
 
             turn = TurnState(index=turn_idx)
@@ -459,6 +471,7 @@ class PiAgent:
             hr = self._fire_hook("turn_start", state)
             if hr.block:
                 final_result = hr.block_reason
+                trace.termination_reason = "hook_blocked"
                 break
 
             # === 上下文压缩检查 ===
@@ -488,6 +501,7 @@ class PiAgent:
             hr = self._fire_hook("before_model", state)
             if hr.block:
                 final_result = hr.block_reason
+                trace.termination_reason = "hook_blocked"
                 break
             if hr.tools is not None:
                 tools = hr.tools  # intersection-merge already applied
@@ -512,6 +526,7 @@ class PiAgent:
             except Exception as e:
                 logger.error(f"LLM call failed at turn {turn_idx}: {e}")
                 final_result = f"LLM 调用失败: {e}"
+                trace.termination_reason = "llm_error"
                 break
 
             msg = resp.choices[0].message
@@ -525,6 +540,7 @@ class PiAgent:
             )
             if hr.block:
                 final_result = hr.block_reason
+                trace.termination_reason = "hook_blocked"
                 break
 
             if msg.tool_calls:
@@ -803,6 +819,7 @@ class PiAgent:
                                 _mx.record_degradation("agent_error_accumulation")
                             except Exception:
                                 pass
+                            trace.termination_reason = "error_accumulation"
                             final_result = (
                                 f"已连续 {trace.consecutive_failures} 次工具调用失败，"
                                 f"为避免在错误路径上继续消耗，已提前终止。\n\n"
@@ -887,6 +904,7 @@ class PiAgent:
                 except Exception as e:
                     logger.error(f"LLM stream call failed at turn {turn_idx}: {e}")
                     final_result = f"LLM 调用失败: {e}"
+                    trace.termination_reason = "llm_error"
                     break
                 # 防截断续写 (流式末块未带 finish_reason → 续写, 不污染 messages)
                 if not _finished and answer:
@@ -924,6 +942,7 @@ class PiAgent:
                 if _rc:
                     _am2["reasoning_content"] = _rc
                 final_result = answer
+                trace.termination_reason = "completed"
                 messages.append(_am2)
 
                 # === HOOK: before_emit ===
@@ -997,15 +1016,26 @@ class PiAgent:
             "trace_end", {"result": final_result, "turns": len(trace.turns)}
         )
 
+        # 循环跑满仍未产出答案 → 结构化记为 max_steps (此前只体现在兜底文案里)
+        if not final_result and not trace.termination_reason:
+            trace.termination_reason = "max_steps"
+
         return {
             "success": bool(final_result) and "超时" not in final_result,
             "result": final_result or "Agent 未能在限制步数内完成任务",
+            # 可复现/可切片所需: 模型、提示词指纹、终止原因
+            "termination_reason": trace.termination_reason or "max_steps",
+            "model": trace.model,
+            "prompt_version": trace.prompt_version,
             # 统一 state 的消费点: 意图与实体随结果一起返回, 供前端展示/监控统计,
             # 而不是只写进 _state 就没人用
             "intent": self._state.get("intent") or {},
             "entities": self._state.get("entities") or {},
             "trace": {
                 "goal": trace.goal,
+                "model": trace.model,
+                "prompt_version": trace.prompt_version,
+                "termination_reason": trace.termination_reason or "max_steps",
                 "turns": len(trace.turns),
                 "tools_used": trace.tools_used,
                 "total_tokens": trace.total_tokens,

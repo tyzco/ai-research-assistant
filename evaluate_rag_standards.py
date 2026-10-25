@@ -15,6 +15,7 @@
   - 每个样本会走真实管线 (ask_with_context: 检索+重排+生成答案) 再打分, 较慢 (约 20-30s/题)。
 """
 import argparse
+from pathlib import Path
 import asyncio
 import json
 import logging
@@ -165,13 +166,81 @@ async def run_eval(qa_list: list[dict], table_name: str, limit: int = 0) -> dict
     return report
 
 
+async def eval_overconfidence(qa_list: list[dict], table_name: str) -> dict:
+    """量"依据不足时是否硬答" —— 这批题目的答案在知识库里**不存在**。
+
+    为什么单列一项: RAGAS 四指标衡量的是"有据可依时答得好不好", 但**依据不足时是否
+    敢说不知道**是另一个维度。实测过最危险的失败形态: 内层判定"库内无相关内容"、
+    外层却用参数化知识写出看似严谨的答案 —— 整体分数可能很高, 但那是幻觉伪装成引用。
+    所以这里只看两件事: 有没有如实说明资料不足; 有没有在无依据时给出结论性回答。
+    """
+    from qa_engine import ask_with_context
+
+    MARK = "【库内无相关内容】"
+    rows = []
+    for item in qa_list:
+        q = item.get("question", "")
+        try:
+            answer, _ = await ask_with_context(table_name, q)
+        except Exception as e:
+            rows.append({"question": q, "error": str(e)})
+            continue
+        refused = MARK in (answer or "")
+        rows.append(
+            {
+                "question": q,
+                "refused": refused,
+                "overconfident": not refused,
+                "answer_len": len(answer or ""),
+                "answer_preview": (answer or "")[:160],
+            }
+        )
+    valid = [r for r in rows if "error" not in r]
+    n = len(valid) or 1
+    return {
+        "n": len(valid),
+        "refusal_rate": round(sum(1 for r in valid if r["refused"]) / n, 4),
+        # 越高越危险: 库内明明没有, 却给出了结论性回答
+        "overconfidence_rate": round(sum(1 for r in valid if r["overconfident"]) / n, 4),
+        "rows": rows,
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--kb", type=str, default="")
     ap.add_argument("--qa", type=str, default="data/benchmark_qa.json")
     ap.add_argument("--topic", type=str, default="", help="只评该主题(可逗号分隔, 如 '强化学习,大语言模型')")
+    ap.add_argument(
+        "--unanswerable",
+        type=str,
+        default="",
+        metavar="QA_JSON",
+        help="只跑**库外问题**切片, 报告 refusal_rate / overconfidence_rate "
+        "(如 data/eval_unanswerable.json)",
+    )
     args = ap.parse_args()
+
+    if args.unanswerable:
+        from eval_common import load_eval_qa as _load
+
+        uq = _load(args.unanswerable, limit=args.limit or 0)
+        table = args.kb or pick_kb(prefer=("benchmark", "eval", "papers"))
+        print(f"库外问题切片: {len(uq)} 题 | KB: {table}")
+        rep = asyncio.run(eval_overconfidence(uq, table))
+        print("\n===== 库外问题 (依据不足) 评估 =====")
+        print(f"  如实说明资料不足: {rep['refusal_rate']:.0%}")
+        print(f"  依据不足仍硬答  : {rep['overconfidence_rate']:.0%}  ← 越低越好")
+        for r in rep["rows"]:
+            flag = "❌ 硬答" if r.get("overconfident") else "✅ 如实说明"
+            print(f"    {flag} {r['question'][:32]}")
+        import json as _json
+
+        _p = Path("data/overconfidence_report.json")
+        _p.write_text(_json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"已保存 {_p}")
+        return
 
     qa = load_eval_qa(args.qa, limit=0)
     if args.topic:

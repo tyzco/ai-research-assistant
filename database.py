@@ -476,7 +476,17 @@ class Database:
     def label_review(
         self, item_id: int, label: str, note: str = "", labeled_by: str = ""
     ) -> bool:
-        """人工标注一条: label 如 grounded / hallucinated / retrieval_miss / bad_question。"""
+        """人工标注一条。
+
+        label 分类 (与"规划错误/工具选错/参数错误单独归类"对应, 便于分别迭代):
+          grounded        有据可依
+          hallucinated    编造内容
+          retrieval_miss  库里有但没召回
+          bad_question    问题本身有问题
+          tool_misuse     工具选错/该调没调
+          param_error     工具参数写错
+          planning_error  多步规划跑偏 (顺序错、漏步骤、绕远路)
+        """
         self._ensure_tables()
         c = self._conn()
         cur = c.execute(

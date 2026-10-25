@@ -10,6 +10,12 @@
             "timeout": 300,
             "async": true,
             "statusMessage": "RAG faithfulness 冒烟评估运行中（3题，后台）…"
+          },
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // .tool_response.filePath' | { read -r f; case \"$f\" in */ai-research-assistant/*.py) cd \"/Users/ty/Downloads/大模型项目/ai-research-assistant\" && out=$(python3 -m pytest tests/ -q 2>&1); rc=$?; if [ $rc -ne 0 ]; then printf '%s' \"$out\" | tail -40 | python3 -c 'import sys,json; print(json.dumps({\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"pytest 未通过:\\n\"+sys.stdin.read()}}, ensure_ascii=False))'; fi ;; esac; } 2>/dev/null || true",
+            "timeout": 120,
+            "statusMessage": "运行 pytest 测试…"
           }
         ]
       }

@@ -115,7 +115,7 @@ function refreshReview(){
         +'<div class="v" style="font-size:12px">'+esc((it.question||'').slice(0,90))+'</div>'
         +'<div style="font-size:11px;color:var(--muted)">['+esc(it.source)+'] '+esc(it.reason||'')+'</div>'
         +'<div style="margin-top:4px">'
-        +['grounded','hallucinated','retrieval_miss','bad_question'].map(function(lb){
+        +['grounded','hallucinated','retrieval_miss','bad_question','tool_misuse','param_error','planning_error'].map(function(lb){
             return '<button onclick="labelReview('+it.id+',\''+lb+'\')" style="margin-right:4px;font-size:11px;padding:2px 6px;cursor:pointer">'+lb+'</button>'
           }).join('')
         +'</div></div>';

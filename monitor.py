@@ -8,6 +8,7 @@
 """
 
 import asyncio
+import collections
 import logging
 import re
 import threading
@@ -19,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 # ===== 安全过滤 =====
 
-from config import INJECTION_PATTERNS
+from config import INJECTION_PATTERNS, LATENCY_SAMPLE_SIZE
 
 # Unicode 零宽字符 / 混淆字符 (可被用于绕过过滤)
 _ZERO_WIDTH_CHARS = re.compile("[​‌‍‎‏⁠⁡⁢⁣⁤﻿￹￺￻]")
@@ -66,6 +67,10 @@ class MetricsTracker:
         self.error_count = 0
         self.total_tokens = 0
         self.total_latency_ms = 0.0
+        # 延迟分位数: avg 会把长尾藏起来 —— 一次 30s 的超时混在 100 次 1s 里,
+        # 平均值几乎看不出来, 但对用户就是"偶发卡死"。面试/复盘里真正看的是 P95/P99。
+        # 用固定窗口的环形缓冲, 内存有界 (不随请求数增长)。
+        self._latencies = collections.deque(maxlen=LATENCY_SAMPLE_SIZE)
         self.search_count = 0
         self.download_count = 0
         self.search_errors = 0
@@ -86,6 +91,8 @@ class MetricsTracker:
             self.total_requests += 1
             self.total_tokens += tokens
             self.total_latency_ms += latency_ms
+            if latency_ms > 0:
+                self._latencies.append(float(latency_ms))
             # 记录真实 token 分布 (用于准确成本估算)
             if prompt_tokens or completion_tokens:
                 if not hasattr(self, "_prompt_tokens_total"):
@@ -93,6 +100,27 @@ class MetricsTracker:
                     self._completion_tokens_total = 0
                 self._prompt_tokens_total += prompt_tokens
                 self._completion_tokens_total += completion_tokens
+
+    def _latency_percentiles(self) -> dict:
+        """P50/P95/P99 (ms)。样本不足时返回 None, 不拿 3 个请求编一个分位数。"""
+        with self._lock:
+            vals = sorted(self._latencies)
+        if not vals:
+            return {"p50_latency_ms": None, "p95_latency_ms": None, "p99_latency_ms": None, "latency_samples": 0}
+
+        def _pct(q: float) -> float:
+            # 最近秩法: 取第 ceil(q*n) 个, 不插值 (插值在大延迟样本上会给出不存在的值)
+            import math
+
+            idx = max(0, min(len(vals) - 1, math.ceil(q * len(vals)) - 1))
+            return round(vals[idx], 1)
+
+        return {
+            "p50_latency_ms": _pct(0.50),
+            "p95_latency_ms": _pct(0.95),
+            "p99_latency_ms": _pct(0.99),
+            "latency_samples": len(vals),
+        }
 
     def record_error(self, source: str = "", error_type: str = ""):
         with self._lock:
@@ -253,6 +281,7 @@ class MetricsTracker:
                 "uptime_seconds": round(uptime),
                 "total_requests": self.total_requests,
                 "avg_latency_ms": round(avg_latency, 1),
+                **self._latency_percentiles(),
                 "error_rate": round(error_rate, 4),
                 "total_tokens": self.total_tokens,
                 **self.estimate_cost(),

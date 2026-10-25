@@ -98,6 +98,9 @@ COST_GATE_MIN_PAPERS = _env("COST_GATE_MIN_PAPERS", 20, int)   # 下载>=此篇�
 COST_GATE_SEC_PER_PAPER = _env("COST_GATE_SEC_PER_PAPER", 12, float)  # 每篇下载+解析+嵌入约12s
 COST_GATE_TEAM_ESTIMATE = _env("COST_GATE_TEAM_ESTIMATE", 13, int)    # 科研团队约13次LLM调用
 
+# 延迟分位数采样窗口 (环形缓冲, 内存有界)
+LATENCY_SAMPLE_SIZE = _env("LATENCY_SAMPLE_SIZE", 1000, int)
+
 LOAD_HIGH_THRESHOLD = _env("LOAD_HIGH_THRESHOLD", 8, int)      # 并发>=此值 → 跳 stage2精排+查询变体
 LOAD_OVERLOAD_THRESHOLD = _env("LOAD_OVERLOAD_THRESHOLD", 16, int)  # 并发>=此值 → 极致降级(单路+单级)
 

@@ -101,6 +101,8 @@ async def run_one(task_def: dict, topic_id: str, table_name: str) -> dict:
         "steps_failed": 0,
         "tools": [],
         "termination_reason": "",
+        "completed": False,
+        "completion_checks": {},
         "degradations": {},
         "answer_preview": "",
         "error": "",
@@ -120,6 +122,9 @@ async def run_one(task_def: dict, topic_id: str, table_name: str) -> dict:
         rec["termination_reason"] = res.get("termination_reason") or trace.get(
             "termination_reason", ""
         )
+        # 完成判定: 来自 trace 证据, 不是模型自称
+        rec["completed"] = bool(res.get("completed"))
+        rec["completion_checks"] = res.get("completion_checks") or {}
         rec["tool_calls"] = len(steps)
         rec["steps_failed"] = sum(1 for s in steps if not s.get("success"))
         # 工具调用序列 —— 诊断"为什么这个任务花了 6 步"必须能看到它调了什么
@@ -151,7 +156,13 @@ def summarize(records: list[dict]) -> dict:
         "tasks": len(records),
         # 按失败原因切片: 总分相同但"超时终止"和"正常完成"是两回事, 必须分开看
         "by_termination": by_term,
+        # completion_rate  = success (旧口径: 产出了非空输出)
+        # verified_completion_rate = 按 trace 证据核验过的完成 (见 pi_agent.assess_completion)
+        # 两者差值就是"看起来完成、实则无依据/兜底话术"的比例 —— 这个差值本身是信号。
         "completion_rate": round(sum(1 for r in records if r["success"]) / n, 4),
+        "verified_completion_rate": round(
+            sum(1 for r in records if r.get("completed")) / n, 4
+        ),
         "avg_turns": round(sum(r["turns"] for r in records) / n, 2),
         "total_tool_calls": total_calls,
         "avg_tool_calls": round(total_calls / n, 2),
@@ -230,6 +241,9 @@ async def main() -> int:
             )
             if rec["tools"]:
                 print(f"      工具序列: {rec['tools']}")
+            if not rec["completed"]:
+                failed = [k for k, v in (rec["completion_checks"] or {}).items() if not v]
+                print(f"      ⚠️ 未通过完成核验: {failed}")
     finally:
         try:
             import lancedb

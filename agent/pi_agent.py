@@ -306,6 +306,18 @@ class PiAgent:
                 pass
         self._verify_high_risk(result)
         self._verify_insufficient_propagated(result)
+        # 完成判定放在最后: 上面的核验可能已改写答案 (如补上"资料不足"提示),
+        # 判定要基于**用户最终看到的那一版**。
+        _verdict = assess_completion(result)
+        result["completed"] = _verdict["completed"]
+        result["completion_checks"] = _verdict["checks"]
+        if not _verdict["completed"]:
+            try:
+                from monitor import metrics as _mx
+
+                _mx.record_degradation("task_not_completed")
+            except Exception:
+                pass
         return result
 
     def _verify_insufficient_propagated(self, result: dict) -> None:
@@ -1316,6 +1328,67 @@ class PiAgent:
 # ============================================================
 _pi_agents: dict[str, PiAgent] = {}
 _pi_agents_lock = threading.Lock()
+
+
+# 产出内容类工具: 用了它们, 答案就必须可溯源, 否则"完成"没有依据
+_CONTENT_TOOLS = {"agent_ask", "ask_knowledge_base", "get_paper_content", "search_papers"}
+# 答案里出现任一标记 → 可溯源 (库内引用 / 明确声明依据不足 / 明确标注库外知识)
+_GROUNDING_MARKERS = (
+    "[论文:",
+    "[论文：",
+    "【库内无相关内容】",
+    "（库外通用知识）",
+    "(库外通用知识)",
+    "通用学术共识",
+)
+# 这些开头是兜底话术, 不是任务结果
+_FALLBACK_PREFIXES = (
+    "已连续",
+    "任务超时",
+    "LLM 调用失败",
+    "Agent 未能",
+    "执行失败",
+    "已终止",
+)
+
+
+def assess_completion(result: dict) -> dict:
+    """按**可观测证据**判定任务是否真的完成, 而不是听模型说"完成了"。
+
+    面试/评审里最容易被糊弄的一点: 模型输出一段读起来很完整的话, 就叫"完成"。
+    但那段话可能没有任何依据 —— 看起来完成, 实际是幻觉。这里把"完成"定义成四条
+    可从 trace 直接核验的硬条件, 全部满足才算完成:
+
+      1. terminated_normally  终止原因是 completed (不是超时/步数耗尽/熔断/LLM 错误)
+      2. has_output           输出非空且有实质长度 (>=20 字符, 排除"好的""完成")
+      3. not_fallback_text    输出不是兜底话术 (超时提示/熔断提示不算结果)
+      4. tool_evidence        调用过工具的话, 至少有一次成功 (否则是空转)
+      5. grounded_or_declared 若用过**产出内容类**工具, 答案必须可溯源:
+                              含库内引用, 或明确声明"库内无相关内容",
+                              或明确标注"库外通用知识"。
+                              —— 这条专门排除"看起来完整但没有任何依据"的答案。
+
+    纯状态查询 (只用 get_topic_state 等) 不需要第 5 条, 由 tool 集合自动豁免。
+
+    返回 {"completed": bool, "checks": {名称: bool}} —— 逐项给出, 便于定位差在哪一条。
+    """
+    trace = result.get("trace") or {}
+    ans = str(result.get("result") or "").strip()
+    term = result.get("termination_reason") or trace.get("termination_reason") or ""
+    steps = trace.get("steps") or []
+    attempts = [st for st in steps if st.get("tool")]
+    used = set(trace.get("tools_used") or [])
+    needs_grounding = bool(used & _CONTENT_TOOLS)
+    grounded = any(m in ans for m in _GROUNDING_MARKERS)
+
+    checks = {
+        "terminated_normally": term == "completed",
+        "has_output": len(ans) >= 20,
+        "not_fallback_text": bool(ans) and not ans.startswith(_FALLBACK_PREFIXES),
+        "tool_evidence": (not attempts) or any(st.get("success") for st in attempts),
+        "grounded_or_declared": grounded or not needs_grounding,
+    }
+    return {"completed": all(checks.values()), "checks": checks}
 
 
 def _describe_intent(task: str, selected_skills: list[str]) -> dict:

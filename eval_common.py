@@ -44,9 +44,20 @@ def list_tables() -> list[str]:
     return list(raw.tables) if hasattr(raw, "tables") else [str(t) for t in raw]
 
 
+# 临时知识库标记: 这些由评测/冒烟脚本创建, 内容极少 (常常只有 1 篇论文),
+# 一旦被 pick_kb 选中, 任何问题都能"召回"到唯一那篇 → R@5=1.0 / MRR=1.0 的假指标。
+# 实测踩过: 一次被 kill 的评测留下 papers_agent_eval_xxx, 之后 run_eval 就一直在
+# 那份单篇库上跑, 报告显示 MRR=1.0, 而真实值约 0.67。
+_TEMP_KB_MARKERS = ("agent_eval_", "e2e_", "probe_", "smoke_")
+
+
+def _is_temp_kb(name: str) -> bool:
+    return any(m in str(name) for m in _TEMP_KB_MARKERS)
+
+
 def pick_kb(cli_kb: str = "", prefer: tuple = ("eval", "papers")) -> str:
-    """选择评估表: CLI 指定 > prefer 前缀 > 首个。空表优雅退出。"""
-    tables = list_tables()
+    """选择评估表: CLI 指定 > prefer 子串 > 首个。**排除临时库**。"""
+    tables = [t for t in list_tables() if not _is_temp_kb(t)]
     if cli_kb:
         if cli_kb not in tables:
             raise SystemExit(f"指定的 KB 不存在: {cli_kb}")

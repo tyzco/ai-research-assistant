@@ -117,7 +117,7 @@ async def main() -> int:
 
     # 多取一些候选, 生成失败的用后面的补
     random.Random(args.seed).shuffle(rows)
-    cand = rows[: min(len(rows), args.n * 2)]
+    cand = rows[: min(len(rows), int(args.n * 1.3) + 20)]
 
     client = get_client()
     sem = asyncio.Semaphore(args.concurrency)

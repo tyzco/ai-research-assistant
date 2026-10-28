@@ -207,6 +207,12 @@ TEAM_PLANNER_ENABLED = _env_bool("TEAM_PLANNER_ENABLED", True)
 # 注: 条件里显式包含 status = '' 是为了兼容迁移前写入的行。
 KB_ACTIVE_FILTER = "is_fulltext = true AND is_image = false AND (status = 'active' OR status = '')"
 
+# 查询变体里的 CN→EN 翻译 (外部 LLM 调用)。
+# 生产默认开; **离线评测必须关**: 否则每道题都要等一次网络, 评测变慢且不可复现,
+# 更糟的是 wait_for 取消请求会留下 CLOSE_WAIT 连接, 连接池耗尽后整批静默挂死
+# (实测 800 题评测卡死 30+ 分钟, 5 个 socket 停在 CLOSE_WAIT)。
+QUERY_TRANSLATION_ENABLED = _env_bool("QUERY_TRANSLATION_ENABLED", True)
+
 # 中文关键词召回 (BM25) 开关。
 # 背景: LanceDB 默认 FTS 分词器是 simple/English, 无空格中文被当一个巨大 token ——
 # "曲轴箱温度报警阈值是九十五摄氏度" 搜 "曲轴箱温度" 命中 0, 即 BM25 支路对中文

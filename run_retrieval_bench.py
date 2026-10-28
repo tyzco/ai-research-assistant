@@ -22,6 +22,7 @@
 """
 
 import argparse
+import asyncio
 import json
 import math
 import os
@@ -68,38 +69,73 @@ def _rank_of(rows: list[dict], gold: str) -> int | None:
     return None
 
 
-def evaluate(hr, items: list[dict], mode: str) -> dict:
-    """mode: vector | hybrid | hybrid_no_stage1 | hybrid_full"""
-    rec5, rec10, mrr, ndcg = [], [], [], []
-    for it in items:
-        q, gold = it["question"], it["gold_chunk_id"]
-        try:
-            if mode == "vector":
-                rows = hr._vector_recall(q, 10, F)
-            elif mode == "hybrid":
-                # 关掉级联重排, 只看融合结果
-                saved = hr._cascade_rerank
-                hr._cascade_rerank = lambda query, chunks, top_k=5, stage1_k=None: chunks[:top_k]
-                try:
-                    rows, _ = hr.search_sync(q, top_k=10, filter_expr=F)
-                finally:
-                    hr._cascade_rerank = saved
-            elif mode == "hybrid_no_stage2":
-                # 只做 Stage1 预筛, 跳 Stage2 精排
-                hr._cascade_rerank = _stage1_only(hr)
-                try:
-                    rows, _ = hr.search_sync(q, top_k=10, filter_expr=F)
-                finally:
-                    del hr._cascade_rerank
-            else:  # hybrid_full
-                rows, _ = hr.search_sync(q, top_k=10, filter_expr=F)
-        except Exception:
-            rows = []
-        r = _rank_of(rows or [], gold)
-        rec5.append(_recall_at(r, 5))
-        rec10.append(_recall_at(r, 10))
-        mrr.append(1.0 / r if r else 0.0)
-        ndcg.append(_ndcg_at(r, 10))
+Q_TIMEOUT = 60  # 单题超时: 没有它, 一个卡住的调用会让整批判测静默挂死
+
+
+def make_retriever(kb: str, mode: str):
+    """按消融模式构造检索器, **在并发开始前**一次性打补丁。
+
+    不能在每题内部临时替换 `_cascade_rerank`: 并发下多个协程会互相覆盖对方的补丁,
+    消融结果就串了 (早期版本正是每查询 patch 一次)。
+    """
+    from hybrid_retriever import AdaptiveHybridRetriever
+
+    hr = AdaptiveHybridRetriever(kb)
+    if mode == "hybrid":
+        # 关掉级联重排, 只看融合结果
+        hr._cascade_rerank = (
+            lambda query, chunks, top_k=5, stage1_k=None: chunks[:top_k]
+        )
+    elif mode == "hybrid_no_stage2":
+        # 只做 Stage1 预筛, 跳 Stage2 精排
+        hr._cascade_rerank = _stage1_only(hr)
+    return hr
+
+
+async def _run_query(hr, q: str, mode: str) -> list[dict]:
+    if mode == "vector":
+        # 纯向量: 不涉及 LLM, 放线程池避免阻塞事件循环
+        return await asyncio.to_thread(hr._vector_recall, q, 10, F)
+    rows, _ = await asyncio.wait_for(
+        hr.search(q, top_k=10, filter_expr=F), timeout=Q_TIMEOUT
+    )
+    return rows or []
+
+
+async def evaluate(hr, items: list[dict], mode: str, concurrency: int = 6) -> dict:
+    """并发评测; 每题独立计时, 单题失败记为未命中并继续。
+
+    并发只发生在**本地 CPU 检索**上 (评测已关闭外部翻译, 见 QUERY_TRANSLATION_ENABLED),
+    因此不会重演"共享 LLM 客户端连接池被跨 loop 拖垮"的挂死。
+    """
+    sem = asyncio.Semaphore(concurrency)
+    metrics: list[tuple[float, float, float, float]] = []
+    done = [0]
+
+    async def _one(it: dict) -> None:
+        async with sem:
+            try:
+                rows = await _run_query(hr, it["question"], mode)
+            except Exception:
+                rows = []
+            r = _rank_of(rows, it["gold_chunk_id"])
+            metrics.append(
+                (
+                    _recall_at(r, 5),
+                    _recall_at(r, 10),
+                    1.0 / r if r else 0.0,
+                    _ndcg_at(r, 10),
+                )
+            )
+            done[0] += 1
+            if done[0] % 100 == 0:
+                print(f"    {mode}: {done[0]}/{len(items)}", flush=True)
+
+    await asyncio.gather(*[_one(it) for it in items])
+    rec5 = [m[0] for m in metrics]
+    rec10 = [m[1] for m in metrics]
+    mrr = [m[2] for m in metrics]
+    ndcg = [m[3] for m in metrics]
     out = {"n": len(items)}
     for name, vals in (("recall@5", rec5), ("recall@10", rec10), ("mrr", mrr), ("ndcg@10", ndcg)):
         lo, hi = _bootstrap_ci(vals)
@@ -137,6 +173,7 @@ def main() -> int:
     ap.add_argument("--bench", default="data/retrieval_bench.json")
     ap.add_argument("--kb", default="")
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--concurrency", type=int, default=6)
     args = ap.parse_args()
 
     p = Path(args.bench)
@@ -152,10 +189,7 @@ def main() -> int:
         return 1
     kb = args.kb or data.get("kb", "")
 
-    from hybrid_retriever import AdaptiveHybridRetriever
-
-    hr = AdaptiveHybridRetriever(kb)
-    print(f"KB={kb} | 题数={len(items)} | 协议={data.get('protocol','')}")
+    print(f"KB={kb} | 题数={len(items)} | 并发={args.concurrency} | 协议={data.get('protocol','')}")
     print(f"{'配置':<18} {'R@5':>7} {'R@5 95%CI':>16} {'R@10':>7} {'MRR':>7} {'NDCG@10':>8}")
     modes = [
         ("vector", "纯向量"),
@@ -164,15 +198,20 @@ def main() -> int:
         ("hybrid_full", "+两级级联(完整)"),
     ]
     report = {"kb": kb, "n": len(items), "protocol": data.get("protocol", ""), "results": {}}
-    for mode, label in modes:
-        r = evaluate(hr, items, mode)
-        report["results"][mode] = r
-        ci = r["recall@5_ci"]
-        print(
-            f"{label:<16} {r['recall@5']:>7.4f} "
-            f"[{ci[0]:.4f}, {ci[1]:.4f}] "
-            f"{r['recall@10']:>7.4f} {r['mrr']:>7.4f} {r['ndcg@10']:>8.4f}"
-        )
+    async def _run_all():
+        for mode, label in modes:
+            hr = make_retriever(kb, mode)
+            r = await evaluate(hr, items, mode, args.concurrency)
+            report["results"][mode] = r
+            ci = r["recall@5_ci"]
+            print(
+                f"{label:<16} {r['recall@5']:>7.4f} "
+                f"[{ci[0]:.4f}, {ci[1]:.4f}] "
+                f"{r['recall@10']:>7.4f} {r['mrr']:>7.4f} {r['ndcg@10']:>8.4f}",
+                flush=True,
+            )
+
+    asyncio.run(_run_all())
 
     out = Path("data/retrieval_bench_result.json")
     out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

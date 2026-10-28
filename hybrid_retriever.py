@@ -305,7 +305,9 @@ class AdaptiveHybridRetriever:
         stripped = self._query_variants(q)
         if len(stripped) > 1 and stripped[1] not in variants:
             variants.append(stripped[1])
-        if any(19968 <= ord(c) <= 40869 for c in q):
+        from config import QUERY_TRANSLATION_ENABLED
+
+        if QUERY_TRANSLATION_ENABLED and any(19968 <= ord(c) <= 40869 for c in q):
             try:
                 from search import _translate_cn_query
 

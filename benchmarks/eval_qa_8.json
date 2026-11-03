@@ -1,0 +1,10 @@
+[
+  {"question": "人脸识别有哪些主流方法？", "ground_truth": "主流方法包括ArcFace、FaceNet、DeepFace等基于深度学习的度量学习，使用CNN提取特征后用角度间隔或三元组损失训练。"},
+  {"question": "什么是ArcFace算法？", "ground_truth": "ArcFace使用加性角度间隔损失，在特征和权重间添加角度惩罚增强判别能力，训练稳定不需复杂三元组挖掘。"},
+  {"question": "FaceNet的主要创新是什么？", "ground_truth": "FaceNet用三元组损失直接学习128维嵌入，通过triplet mining选择难样本，将人脸验证和聚类统一为嵌入空间最近邻搜索。"},
+  {"question": "LFW数据集有什么特点？", "ground_truth": "LFW包含5749人的13233张网络图像，是非约束环境下的人脸验证标准基准，评估不同姿态光照表情下的识别性能。"},
+  {"question": "DeepFace在LFW上的效果如何？", "ground_truth": "DeepFace在LFW达到97.35%准确率接近人类水平，使用深度神经网络集成进行人脸验证。"},
+  {"question": "人脸识别常用的损失函数有哪些？", "ground_truth": "常用包括Softmax、Triplet Loss、Center Loss、ArcFace、CosFace、SphereFace等，核心趋势在分类边界引入角度间隔。"},
+  {"question": "ArcFace相比FaceNet有什么优势？", "ground_truth": "ArcFace角度间隔损失比FaceNet三元组损失训练更稳定，不需复杂triplet mining，直接在类别间添加角度间隔实现更好类间分离。"},
+  {"question": "如何评估人脸识别算法性能？", "ground_truth": "通过LFW、MegaFace、IJB-C等基准评估，常用指标包括验证准确率、ROC曲线、AUC值及1:1验证和1:N识别的rank-1准确率。"}
+]

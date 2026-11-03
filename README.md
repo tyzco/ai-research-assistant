@@ -90,15 +90,21 @@ python demo/demo_01_search.py "研究方向"  # 单模块演示
 ### 挨个模块测试
 
 ```bash
-python test_e2e.py                # 端到端自动化测试 (策略→嵌入→建库→问答, 断言+清理+JSON报告)
-python run_eval.py --limit 5      # 检索评估: hybrid vs vector 对比 + 回归门禁 (下降>0.02 阻断)
-python benchmark.py --limit 5     # 检索延迟 p50 + token 估算 + 成本
-python evaluate_rag_standards.py --limit 2   # RAGAS 生成质量指标
-python reindex_all.py --dry-run   # 查看待重建表 (嵌入模型换型后: python reindex_all.py)
-python -m pytest tests/ 2>/dev/null || echo "无 pytest 套件, 用上方脚本即可"
+pytest tests/ -q                    # 54 项 (含驱动 Agent 循环的行为测试, 不 mock 核心逻辑)
+python test_e2e.py                  # 端到端: 策略→嵌入→建库→问答 (自动断言 + 清理 + JSON 报告)
+python run_eval.py                  # 检索回归门禁 (人工 8 题 → benchmarks/eval_qa_8.json, 语义近似口径, 下降>0.02 阻断)
+python run_retrieval_bench.py --bench benchmarks/retrieval_bench_800.json --kb <你的表名> \
+       --concurrency 6              # 客观检索基准: gold=chunk_id + 95% CI + 四档消融
+python evaluate_rag_standards.py --limit 3          # RAGAS 风格生成质量 (4 指标)
+python evaluate_rag_standards.py --unanswerable benchmarks/eval_unanswerable_5.json  # 库外拒答/过度自信
+python run_agent_eval.py --limit 1  # Agent 层: 完成率/步数/无效调用/终止原因 (真实 LLM)
+python benchmark.py --limit 5       # 检索延迟 p50 + token 估算
 ```
 
 每个脚本支持 `--kb 表名` / `--qa 路径` / `--limit N`。评估结果存 `data/*.json` 可对比回归。
+
+> **离线评测请设 `QUERY_TRANSLATION_ENABLED=0`**：关闭查询变体里的 CN→EN 外部翻译，
+> 只测本地检索链路，保证可复现且不被网络拖慢。
 
 ### 实时监控
 
@@ -260,16 +266,35 @@ query → 指代消解 → 查询改写(语义校验) → 自适应混合检索(
 | 前端 | 纯 HTML/CSS/JS (零构建) | 面试演示无需 npm install |
 | 图谱 | D3.js force-graph | 零依赖前端可视化 |
 
-## 评估指标
+## 评测体系
 
-| 指标 | 数值 (bge-small-zh 512d) | 说明 |
-|---|---|---|
-| Recall@5 | 0.7703 | top-5 与 ground truth 最大余弦相似度 |
-| Hybrid vs Vector | 0.7704 vs 0.7703 | BM25 贡献 (中文分词限制) |
-| MRR | 0.75 | Mean Reciprocal Rank |
-| Faithfulness | 0.8227 | LLM-as-judge 忠实度 |
+三层评测，各自回答不同问题，**口径不同不可混用**。
 
-**bge-m3 升级**: 模型已就绪，GPU 重建向量后预期 Recall@5 提升至 0.80-0.85。
+| 层 | 脚本 | 指标 | 口径 |
+|---|---|---|---|
+| 检索（客观） | `run_retrieval_bench.py` | Recall@5/10、MRR、NDCG@10 + bootstrap 95% CI | 合成基准，gold = 源 `chunk_id`，800 题 |
+| 检索（人工） | `run_eval.py` | Recall@5、MRR | 人工 8 题，语义相似度近似 |
+| 生成 | `evaluate_rag_standards.py` | faithfulness / answer_relevancy / context_recall / context_precision | LLM-as-judge（温度 0） |
+| 库外拒答 | `evaluate_rag_standards.py --unanswerable` | refusal_rate / overconfidence_rate | 5 题库外问题 |
+| Agent | `run_agent_eval.py` | 完成率、步数、无效调用、终止原因分布 | 真实 LLM 驱动 |
+
+### 检索消融（800 题 / 4337 块 / 193 篇，关闭外部翻译以保证可复现）
+
+| 配置 | R@5 | 95% CI | MRR | NDCG@10 |
+|---|---|---|---|---|
+| 纯向量 | 0.1025 | [0.083, 0.124] | 0.073 | 0.092 |
+| 自适应 RRF | 0.3000 | [0.269, 0.331] | 0.214 | 0.245 |
+| + Stage1 预筛 | 0.3225 | [0.288, 0.354] | 0.215 | 0.270 |
+| **+ 两级级联（完整）** | **0.5025** | **[0.466, 0.540]** | **0.405** | **0.445** |
+
+**怎么读**：融合负责把正确块捞进候选池，精排负责把它推进 top-5；纯向量 → 完整链路 R@5 提升 5 倍。
+
+### 口径说明（务必先看）
+
+- 客观基准是**合成问题**：从库内块生成、gold 就是该块 `chunk_id`，措辞贴近原文 → **指标偏乐观**。
+- 人工 8 题用语义相似度近似（R@5 ≈ 0.77），与精确命中口径**不可直接比较**；报告时分开列。
+- 评测关闭 CN→EN 翻译以剥离外部依赖；开启翻译变体指标会更高，但无法离线复现。
+- 曾因评测误跑在临时单篇库上得到 MRR=1.0 的假指标，现已过滤临时库并打印库名与行数。
 
 ## 设计原则
 

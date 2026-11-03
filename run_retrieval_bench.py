@@ -170,7 +170,7 @@ def _stage1_only(hr):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--bench", default="data/retrieval_bench.json")
+    ap.add_argument("--bench", default="benchmarks/retrieval_bench_800.json")
     ap.add_argument("--kb", default="")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--concurrency", type=int, default=6)

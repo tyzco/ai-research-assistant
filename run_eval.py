@@ -53,7 +53,7 @@ def run_hybrid_search(tbl, question: str, top_k: int = 10) -> list[str]:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--kb", default="", help="指定 LanceDB 表名 (默认自动选择)")
-    ap.add_argument("--qa", default="data/eval_qa.json", help="测试集路径")
+    ap.add_argument("--qa", default="benchmarks/eval_qa_8.json", help="测试集路径")
     ap.add_argument("--topk", type=int, default=5)
     ap.add_argument("--limit", type=int, default=0, help="仅评估前 N 题 (默认全部)")
     args = ap.parse_args()

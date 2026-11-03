@@ -210,7 +210,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--kb", type=str, default="")
-    ap.add_argument("--qa", type=str, default="data/benchmark_qa.json")
+    ap.add_argument("--qa", type=str, default="benchmarks/eval_qa_30.json")
     ap.add_argument("--topic", type=str, default="", help="只评该主题(可逗号分隔, 如 '强化学习,大语言模型')")
     ap.add_argument(
         "--unanswerable",

@@ -1,0 +1,152 @@
+[
+ {
+  "topic": "人脸识别",
+  "question": "FaceNet 的主要创新是什么？",
+  "ground_truth": "FaceNet 用卷积网络把人脸映射到欧氏嵌入空间, 用三元组损失训练, 使得同类人脸距离小、异类距离大, 实现高质量人脸识别"
+ },
+ {
+  "topic": "人脸识别",
+  "question": "人脸识别常用的损失函数有哪些？",
+  "ground_truth": "常用包括三元组损失、对比损失、Softmax 变体如 ArcFace 的加性角度间隔损失"
+ },
+ {
+  "topic": "人脸识别",
+  "question": "ArcFace 相对 Softmax 的改进是什么？",
+  "ground_truth": "ArcFace 在角度空间加固定间隔, 增强类间可分性, 是经典损失函数之一"
+ },
+ {
+  "topic": "人脸识别",
+  "question": "LFW 数据集用来做什么？",
+  "ground_truth": "LFW 是名人脸对数据集, 用于评测人脸验证算法正确率"
+ },
+ {
+  "topic": "人脸识别",
+  "question": "人脸识别的经典流程是什么？",
+  "ground_truth": "检测人脸 → 对齐 → 特征提取 → 特征比对/分类"
+ },
+ {
+  "topic": "人脸识别",
+  "question": "DeepFace 的方法特点是什么？",
+  "ground_truth": "DeepFace 用深度卷积网络 + 3D 对齐做人脸验证, 是早期深度人脸识别代表"
+ },
+ {
+  "topic": "Transformer",
+  "question": "Transformer 的核心机制是什么？",
+  "ground_truth": "自注意力机制, 允许序列任意位置直接交互, 并行处理整个序列"
+ },
+ {
+  "topic": "Transformer",
+  "question": "多头注意力的作用是什么？",
+  "ground_truth": "多个注意力头从不同表示子空间捕获不同关系, 增强模型表达力"
+ },
+ {
+  "topic": "Transformer",
+  "question": "位置编码解决什么问题？",
+  "ground_truth": "自注意力本身无位置信息, 位置编码注入序列顺序"
+ },
+ {
+  "topic": "Transformer",
+  "question": "残差连接在 Transformer 里的作用？",
+  "ground_truth": "缓解深层训练退化, 稳定梯度, 使深层网络可训练"
+ },
+ {
+  "topic": "Transformer",
+  "question": "Transformer 与 RNN 的主要区别？",
+  "ground_truth": "RNN 顺序处理, Transformer 并行 + 自注意力, 长距离依赖更好"
+ },
+ {
+  "topic": "Transformer",
+  "question": "BERT 用 Transformer 的哪部分？",
+  "ground_truth": "BERT 用 Transformer 编码器, 双向上下文, 做预训练"
+ },
+ {
+  "topic": "CNN",
+  "question": "卷积核的作用是什么？",
+  "ground_truth": "卷积核提取局部特征, 通过滑窗做特征映射, 参数共享"
+ },
+ {
+  "topic": "CNN",
+  "question": "池化层的作用？",
+  "ground_truth": "下采样降维, 增平移不变性, 减少计算量"
+ },
+ {
+  "topic": "CNN",
+  "question": "ResNet 解决什么问题？",
+  "ground_truth": "残差连接缓解深层网络梯度消失/退化, 支持更深网络"
+ },
+ {
+  "topic": "CNN",
+  "question": "1x1 卷积的作用？",
+  "ground_truth": "改变通道数, 做跨通道信息融合, 降低计算量"
+ },
+ {
+  "topic": "CNN",
+  "question": "AlexNet 的历史贡献？",
+  "ground_truth": "用 ReLU + 深度卷积在 ImageNet 取得突破, 开启深度学习时代"
+ },
+ {
+  "topic": "CNN",
+  "question": "感受野是什么意思？",
+  "ground_truth": "输出像素对应输入区域的大小, 层越深感受野越大"
+ },
+ {
+  "topic": "强化学习",
+  "question": "强化学习的三要素是什么？",
+  "ground_truth": "状态、动作、奖励; agent 通过试错最大化累计奖励"
+ },
+ {
+  "topic": "强化学习",
+  "question": "Q-learning 的核心思想？",
+  "ground_truth": "用 Q 值表估计 状态-动作 的价值, 通过贝尔曼方程迭代更新"
+ },
+ {
+  "topic": "强化学习",
+  "question": "DQN 的创新是什么？",
+  "ground_truth": "用深度网络近似 Q 函数 + 经验回放, 解决高维状态"
+ },
+ {
+  "topic": "强化学习",
+  "question": "探索与利用的权衡是什么？",
+  "ground_truth": "探索未知动作 vs 利用已知最优; 常用 epsilon-greedy"
+ },
+ {
+  "topic": "强化学习",
+  "question": "PPO 的特点？",
+  "ground_truth": "近端策略优化, 通过裁剪限制策略更新幅度, 训练稳定"
+ },
+ {
+  "topic": "强化学习",
+  "question": "折扣因子 gamma 的作用？",
+  "ground_truth": "衡量未来奖励的权重, gamma 越大越重视长期回报"
+ },
+ {
+  "topic": "大语言模型",
+  "question": "什么是自回归语言模型？",
+  "ground_truth": "按序列顺序逐 token 预测下一个 token 的模型, 如 GPT"
+ },
+ {
+  "topic": "大语言模型",
+  "question": "LLM 的幻觉问题是什么？",
+  "ground_truth": "模型生成与事实不符或凭空捏造的内容"
+ },
+ {
+  "topic": "大语言模型",
+  "question": "RAG 解决什么问题？",
+  "ground_truth": "检索增强生成, 外接知识库缓解知识陈旧与幻觉"
+ },
+ {
+  "topic": "大语言模型",
+  "question": "指令微调的目的是什么？",
+  "ground_truth": "让模型学会遵循指令, 提升对话与任务能力"
+ },
+ {
+  "topic": "大语言模型",
+  "question": "RLHF 是什么？",
+  "ground_truth": "人类反馈强化学习, 用人类偏好对齐模型行为"
+ },
+ {
+  "topic": "大语言模型",
+  "question": "上下文窗口指什么？",
+  "ground_truth": "模型单次输入的最大 token 数, 决定一次能处理多长的信息"
+ }
+]

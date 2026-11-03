@@ -10,3 +10,7 @@ dist/
 .DS_Store
 node_modules/
 demo/output/
+# 环境变量备份（含密钥，禁止入库）
+.env.bak*
+.env.*.bak
+*.env.bak*

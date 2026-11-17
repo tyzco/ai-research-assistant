@@ -17,7 +17,7 @@ export const compareRuns = (a: string, b: string) =>
     body: JSON.stringify({ a, b }),
   })
 export const saveRun = (payload: any) =>
-  fetch('/flow/runs', {
+  json<{ ok: boolean; run_id: string }>('/flow/runs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),

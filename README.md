@@ -70,15 +70,16 @@ cd ai-research-assistant
 cp .env.example .env
 # 编辑 .env，填入 DEEPSEEK_API_KEY (https://platform.deepseek.com)
 
-# 3. 启动 (三选一)
-python api.py                      # 开发模式
-docker-compose up -d               # Docker 生产部署
-pip install -e . && paperlink      # 命令行 (即将支持)
+# 3. 本地启动
+python3.12 -m venv venv
+source venv/bin/activate
+python -m pip install -r requirements.txt
+python api.py
 
 # 4. 打开 http://localhost:8001
 ```
 
-**唯一必填依赖**：DeepSeek API Key（[免费注册](https://platform.deepseek.com)）。嵌入模型首次运行自动下载。
+也可以在配置好 `.env` 后用 `docker compose up -d --build` 构建并启动。模型服务需要 DeepSeek API Key，嵌入模型首次使用时自动下载。
 
 ## 分段演示（拉投资 / 项目展示 / 吸引协作）
 

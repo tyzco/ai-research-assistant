@@ -40,6 +40,7 @@ export default function App() {
   const [running, setRunning] = useState(false)
   const [output, setOutput] = useState('')
   const [runs, setRuns] = useState<RunListItem[]>([])
+  const [historyError, setHistoryError] = useState('')
   const [now, setNow] = useState({ badge: 'IDLE', title: '等待启动', detail: '', time: '--' })
   const [selected, setSelected] = useState<string | null>(null)
   const [compare, setCompare] = useState<any>(null)
@@ -137,17 +138,18 @@ export default function App() {
   }, [nodeStatuses])
 
   const setNowFromEvent = useCallback((ev: any, t: number) => {
+    const awaitingApproval = ev.event === 'result' && ev.status === 'awaiting_approval'
     const badge = ev.event === 'stage' ? (ev.status === 'done' ? 'DONE' : 'AGENT')
-      : ev.event === 'gate' ? 'GATE' : ev.event === 'result' ? 'END'
+      : ev.event === 'gate' || awaitingApproval ? 'GATE' : ev.event === 'result' ? 'END'
       : ev.event === 'rag' ? 'RAG' : ev.event === 'error' ? 'ERR'
       : (ev.event || '').toUpperCase()
     const title = ev.event === 'stage' ? (ev.name || ev.agent)
       : ev.event === 'agent_turn' ? `${ev.name || ev.agent} · 第 ${ev.round} 轮`
       : ev.event === 'agent_llm' ? `${ev.agent} · 模型返回`
       : ev.event === 'agent_tool' ? `${ev.tool || '工具'} · ${ev.agent || ''}`
-      : ev.event === 'gate' ? '等待人工确认' : ev.event === 'result' ? '运行结束'
+      : ev.event === 'gate' || awaitingApproval ? '等待人工确认' : ev.event === 'result' ? '运行结束'
       : ev.event === 'rag' ? `RAG · ${ev.stage || ''}` : (ev.event || '')
-    const detail = ev.detail || ev.preview || ev.title
+    const detail = ev.detail || ev.preview || ev.title || ev.message || ev.request?.title
       || (ev.event === 'result' ? String(ev.result || '').slice(0, 120) : '')
     setNow({ badge, title, detail, time: `${(t / 1000).toFixed(1)}s` })
   }, [])
@@ -158,18 +160,16 @@ export default function App() {
 
   const push = useCallback((ev: any) => {
     const t = Date.now() - t0.current
-    setRec((prev) => {
-      const next = [...prev, { t, ev }]
-      recRef.current = next
-      return next
-    })
+    recRef.current = [...recRef.current, { t, ev }]
+    setRec(recRef.current)
     setTotalMs((prev) => Math.max(prev, t))
     if (ev.event === 'rag') { setRagStage(ev.stage || ''); setRagOpen(true) }
     if (ev.event === 'pipeline' && Array.isArray(ev.plan)) {
       setPlan(ev.plan); planRef.current = ev.plan
     }
     if (ev.event === 'token') {
-      setOutput((o) => { const next = o + (ev.token || ''); outRef.current = next; return next })
+      outRef.current += ev.token || ''
+      setOutput(outRef.current)
     }
     if (ev.event === 'result') {
       setOutput(ev.result || ''); outRef.current = ev.result || ''
@@ -179,42 +179,52 @@ export default function App() {
   }, [setNowFromEvent])
 
   const start = useCallback(async () => {
-    if (running) return
-    setRec([]); setPlan([]); setOutput(''); setLive(true); setPlayMs(0); setTotalMs(0)
+    if (ctl.current) return
+    setRec([]); setPlan([]); setOutput(''); setLive(true); setPlaying(false); setPlayMs(0); setTotalMs(0)
+    setHistoryError('')
     recRef.current = []; planRef.current = []; outRef.current = ''
     setRagOpen(false); setRagStage(''); setTraceId('')
     setNow({ badge: 'RUN', title: '初始化', detail: '正在建立任务…', time: '0.0s' })
     setRunning(true)
     t0.current = Date.now()
-    ctl.current = new AbortController()
+    const controller = new AbortController()
+    ctl.current = controller
     try {
-      await streamSSE('/team/stream', { task, confirm: true, params }, push, ctl.current.signal)
+      await streamSSE('/team/stream', { task, confirm: true, params }, push, controller.signal)
     } catch (e: any) {
       if (e.name !== 'AbortError') push({ event: 'error', message: e.message })
     } finally {
-      setRunning(false); setLive(false)
+      setLive(false)
       const total = Date.now() - t0.current
       setPlayMs(total); setTotalMs((prev) => Math.max(prev, total))
       const snapshot = recRef.current
       const resultEv = snapshot.find((e) => e.ev?.event === 'result')?.ev
       const trId = resultEv?.trace_id || ''
       setTraceId(trId)
-      saveRun({
-        run_id: `flow_${Date.now()}`,
-        task,
-        params: { ...params, _mode: 'team' },
-        events: compressEvents(snapshot),
-        result: outRef.current,
-        status: 'completed',
-        total_ms: total,
-        agent_count: graph?.agents?.length || 0,
-        batch_count: new Set(planRef.current.map((p) => p.batch)).size,
-        trace_id: trId,
-      }).then(() => listRuns().then((d) => setRuns(d.runs || [])).catch(() => {}))
+      try {
+        await saveRun({
+          task,
+          params: { ...params, _mode: 'team' },
+          events: compressEvents(snapshot),
+          result: outRef.current,
+          status: controller.signal.aborted ? 'cancelled' : resultEv?.status || 'error',
+          total_ms: total,
+          agent_count: planRef.current.length,
+          batch_count: new Set(planRef.current.map((p) => p.batch)).size,
+          trace_id: trId,
+        })
+        const history = await listRuns()
+        setRuns(history.runs || [])
+      } catch {
+        setHistoryError('历史记录保存或刷新失败，仍可回放本次运行。')
+      } finally {
+        ctl.current = null
+        setRunning(false)
+      }
     }
-  }, [running, task, params, graph, push])
+  }, [task, params, push])
 
-  const stop = useCallback(() => { ctl.current?.abort(); setRunning(false) }, [])
+  const stop = useCallback(() => { ctl.current?.abort() }, [])
 
   useEffect(() => {
     if (!playing) return
@@ -242,11 +252,16 @@ export default function App() {
   }, [compare])
 
   const loadRun = useCallback(async (id: string) => {
-    if (!id) return
-    const d = await getRun(id)
+    if (!id || ctl.current) return
+    const d = await getRun(id).catch(() => {
+      setHistoryError('无法加载这条历史记录。')
+      return null
+    })
+    if (!d || ctl.current) return
+    setHistoryError('')
     const events: Rec[] = (d.events || []).slice()
     setRec(events); recRef.current = events
-    const total = events.reduce((m, e) => Math.max(m, e.t || 0), 0)
+    const total = events.reduce((m, e) => Math.max(m, e.t || 0), d.total_ms || 0)
     setTotalMs(total); setPlayMs(total); setLive(false); setPlaying(false)
     setOutput(d.result || ''); outRef.current = d.result || ''
     setParams((p) => ({ ...p, ...(d.params || {}) }))
@@ -304,7 +319,7 @@ export default function App() {
           <a className="btn" href={`https://cloud.langfuse.com/trace/${traceId}`} target="_blank" rel="noreferrer">Langfuse</a>
         )}
         <span className="spacer" />
-        <select className="select" value="" onChange={(e) => loadRun(e.target.value)} aria-label="历史运行">
+        <select className="select" value="" disabled={running} onChange={(e) => loadRun(e.target.value)} aria-label="历史运行">
           <option value="">历史运行</option>
           {runs.map((r) => (
             <option key={r.run_id} value={r.run_id}>{r.task.slice(0, 16)} · {Math.round(r.total_ms / 1000)}s</option>
@@ -436,6 +451,7 @@ export default function App() {
               <button className="btn primary" style={{ flex: 1, justifyContent: 'center' }} onClick={start} disabled={running} aria-busy={running}>启动</button>
               {running && <button className="btn danger" onClick={stop}>停止</button>}
             </div>
+            {historyError && <p role="alert">{historyError}</p>}
           </div>
 
           <div className="panel" style={{ flex: 1, margin: '0 10px', display: 'flex', flexDirection: 'column', minHeight: 0 }}>

@@ -19,7 +19,11 @@ user input → static/index.html (SPA, ~45KB, IIFE, zero-build)
   ├─ /ask → qa_engine.ask_question() → hybrid_retriever → DeepSeek
   ├─ /chat → DeepSeek (no RAG, with history)
   ├─ /agent/pi → pi_agent.PiAgent (hook-driven, 10 lifecycle hooks)
-  ├─ /team/start → research_team.ResearchTeam (15 agents, 3 approval gates)
+  ├─ /agent/pi/stream → SSE: token + 每步工具(含参数/结果摘要)
+  ├─ /team/start → research_team.ResearchTeam (14 agents, 3 approval gates)
+  ├─ /team/stream → SSE: 实时 agent 进度 + 闸门 (可视化用)
+  ├─ /flow/graph → 从代码导出的编排元数据 (agents/tools/hooks/主循环阶段)
+  ├─ /static/flow.html → Agent 实时工作流可视化 (零构建, 事件驱动)
   ├─ /citation/chain → integrations.expand_citation_chain (Semantic Scholar)
   ├─ /subscribe → integrations.subscribe_topic (auto-scheduled via scheduler.py)
   ├─ /zotero/import + /zotero/scan → Zotero bridge
@@ -48,8 +52,9 @@ user input → static/index.html (SPA, ~45KB, IIFE, zero-build)
 | | `knowledge_graph.py` | Entity extraction + D3.js graph data |
 | | `qa_engine.py` | Full RAG pipeline (8 steps: coref→rewrite→retrieve→rerank→expand→prompt→generate) |
 | | `intent_classifier.py` | 三层漏斗第 2 层: 嵌入语义意图分类 (规则→语义→LLM 工具, margin 判定) |
-| **Agent** | `agent/research_team.py` | **13-agent virtual team + dual-track approval (3 gates)** |
+| **Agent** | `agent/research_team.py` | **14-agent virtual team + dual-track approval (3 gates) + progress_cb** |
 | | `agent/pi_agent.py` | Hook-driven agent loop (trace/turn lifecycle) |
+| | `agent/flow_meta.py` | 工作流可视化元数据 (主循环 22 阶段 + 代码锚点, 无业务逻辑) |
 | | `agent/hooks.py` | 10 lifecycle intervention hooks |
 | | `agent/context_engine.py` | Token compaction + tool output truncation |
 | | `agent/tool_manager.py` | Param validation + security check + error recovery |
@@ -58,7 +63,7 @@ user input → static/index.html (SPA, ~45KB, IIFE, zero-build)
 | **Eval** | `run_eval.py` | Automated retrieval eval (R@5+MRR+regression gate) |
 | | `reindex_all.py` | Vector rebuild tool for model migration |
 
-## 13-Agent Research Team
+## 14-Agent Research Team
 
 ```
 UPSTREAM (3):   topic_evaluator → multi_source_searcher → quality_screener
@@ -67,7 +72,7 @@ UPSTREAM (3):   topic_evaluator → multi_source_searcher → quality_screener
 MIDSTREAM (6):  review_synthesizer → chapter_writer_intro/method/experiment
                     → figure_generator → bib_manager
 
-DOWNSTREAM (4): peer_reviewer → format_checker → ethics_reviewer → final_drafter
+DOWNSTREAM (5): peer_reviewer → citation_verifier → format_checker → ethics_reviewer → final_drafter
                                                           [🔴 Gate 3: final_conclusion]
 ```
 

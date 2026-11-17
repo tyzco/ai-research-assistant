@@ -65,6 +65,40 @@ class ApprovalRequest:
     created_at: str = ""
 
 
+# 证据策略: 团队里每个 agent 都遵守。
+# 背景: 本地知识库只覆盖当前课题的一小部分, 选题评估却常用"库内无内容"
+# 当成"无法评估" —— 于是每份报告开头都是"证据严重不足/置信度受限", 正文
+# 反而没给出判断。库不覆盖是常态, 不是阻断条件: 外部检索与通用学术知识
+# 本来就是选题评估的合法证据来源, 只要求如实标注, 不要求因此拒绝结论。
+EVIDENCE_POLICY = """【证据策略（必须遵守）】
+1. 本地知识库只覆盖当前课题; 它不覆盖你的主题属于**正常情况**, 不等于"无法评估"。
+2. 库内检索为空或不相关时: 改用外部检索工具（search_papers 等）与通用学术知识完成任务,
+   不要反复调用同一个不覆盖的库。
+3. 报告正文正常给出判断; 库内覆盖情况最多用一句话附注
+   （如"本地库未覆盖该主题, 以下基于外部检索与领域共识"）。
+4. 禁止在开头输出"证据严重不足 / 置信度受限 / 请务必阅读证据局限"这类免责声明式段落,
+   也不要把"证据不足"写成结论前提。"""
+
+# 任务复杂度分流: 多 Agent 编排是唯一入口, 简单问题自动退化为单 Agent。
+# 判据刻意保守: 只有"短 + 明确单点动作"才算简单, 其余一律走完整规划 ——
+# 误判为简单会漏掉必要环节, 代价比多跑两个 Agent 高得多。
+_SIMPLE_HINTS = ("解释", "是什么", "什么意思", "概括", "总结", "查询", "列出", "对比", "简述", "一句话")
+_COMPLEX_HINTS = ("综述", "论文", "报告", "初稿", "研究", "调研", "基金", "课题", "方案", "写作", "写一篇")
+
+
+def _task_complexity(task: str) -> str:
+    from agent.run_params import get_param
+
+    t = (task or "").strip()
+    if len(t) >= int(get_param("simple_max_len", 60)):
+        return "full"
+    if any(w in t for w in _COMPLEX_HINTS):
+        return "full"
+    if any(w in t for w in _SIMPLE_HINTS) or len(t) <= 30:
+        return "simple"
+    return "full"
+
+
 # ============================================================
 # 13 个 Agent 定义
 # ============================================================
@@ -389,6 +423,31 @@ class ResearchTeam:
         # 规划器产出的本次执行清单 (与 PIPELINE 同构); 未规划时为 None → 回退完整管线
         self.active_pipeline: Optional[list] = None
         self._lock = asyncio.Lock()  # 并发防护: 同一 run 禁止并发执行/审批
+        # 进度回调 (可视化用): 每进入/离开一个 agent、每个闸门都推一条事件。
+        # 团队执行原本只在全部结束或停在闸门时返回, 中途是黑箱 —— 一个 14 阶段的
+        # 流水线跑几分钟, 前端完全不知道跑到哪了。回调让 SSE 端点能边跑边推。
+        self._progress_cb = None
+
+    def set_progress_cb(self, cb) -> None:
+        self._progress_cb = cb
+
+    async def _emit_progress(self, ev: dict) -> None:
+        """推一条进度事件; 回调出错不得影响流水线本身。"""
+        try:
+            _tr = getattr(self, "_tracer", None)
+            if _tr is not None:
+                _tr.on_event(ev)
+        except Exception:
+            pass
+        cb = self._progress_cb
+        if cb is None:
+            return
+        try:
+            r = cb(ev)
+            if asyncio.iscoroutine(r):
+                await r
+        except Exception as e:
+            logger.warning(f"progress_cb failed: {e}")
 
     def get_agents_by_layer(self, layer: str) -> list[str]:
         return [k for k, v in AGENT_DEFINITIONS.items() if v["layer"] == layer]
@@ -467,6 +526,15 @@ class ResearchTeam:
         聚成一批 asyncio.gather 并行执行 — 上游阶段 ~2-3× 提速, 不影响正确性。
         带审批门的 agent (topic_evaluator) 仍串行, 保持"先确认方向再花检索成本"的闸门语义。"""
         pipeline = getattr(self, "active_pipeline", None) or self.PIPELINE
+        await self._emit_progress(
+            {
+                "event": "pipeline",
+                "agents": [k for k, _, _ in pipeline],
+                "plan": getattr(self, "exec_plan", None)
+                or self._build_exec_plan(pipeline),
+                "start_idx": start_idx,
+            }
+        )
         i = start_idx
         while i < len(pipeline):
             agent_key, description, required = pipeline[i]
@@ -481,13 +549,19 @@ class ResearchTeam:
             # 并行优化: 连续的无门同层 agent (上游/中游) 一波并行执行。
             # 依据: _build_context 只注入"前一层"输出, 同层 agent 互不看见彼此输出
             # → 串行与并行看到相同上下文, 并行是纯提速不改质量。中游 6 章节 writer 全无门 → ~5× 提速。
+            from agent.run_params import get_param as _gp
+
             if (
                 agent_def["layer"] in ("upstream", "midstream")
                 and not agent_def.get("needs_approval")
+                and bool(_gp("parallel_enabled", True))
             ):
                 batch = []
                 j = i
-                while j < len(self.PIPELINE):
+                # 上界必须是裁剪后的 pipeline, 不是完整 PIPELINE ——
+                # 单 agent 规划时 pipeline 只有 1 条, 用 len(self.PIPELINE)
+                # 会在 j=1 时越界 (简单任务必崩)。
+                while j < len(pipeline):
                     _k, _d, _r = pipeline[j]
                     _ad = AGENT_DEFINITIONS[_k]
                     if (
@@ -500,6 +574,16 @@ class ResearchTeam:
                     j += 1
                 if len(batch) > 1:
                     logger.info(f"Layer parallel: {[k for k, _, _ in batch]}")
+                    # 并行批次: 先整批标 running, 完成一个推一个 —— 前端能看到
+                    # 同层 6 个 writer 同时转圈, 而不是等整批结束才一起亮起来。
+                    await self._emit_progress(
+                        {
+                            "event": "batch",
+                            "agents": [k for k, _, _ in batch],
+                            "layer": agent_def["layer"],
+                            "status": "running",
+                        }
+                    )
                     results = await asyncio.gather(
                         *[self._run_agent(k, AGENT_DEFINITIONS[k]) for k, _, _ in batch]
                     )
@@ -515,12 +599,31 @@ class ResearchTeam:
                             }
                         )
                         self._save_snapshot()
+                        await self._emit_progress(
+                            {
+                                "event": "stage",
+                                "agent": k,
+                                "name": AGENT_DEFINITIONS[k]["name"],
+                                "layer": agent_def["layer"],
+                                "status": "done",
+                                "preview": res[:300],
+                            }
+                        )
                     i = j
                     continue
                 # 单个无门 agent, 走下方通用路径
 
             self.current_stage = agent_key
             logger.info(f"Running: {agent_def['name']} ({description})")
+            await self._emit_progress(
+                {
+                    "event": "stage",
+                    "agent": agent_key,
+                    "name": agent_def["name"],
+                    "layer": agent_def["layer"],
+                    "status": "running",
+                }
+            )
 
             result = await self._run_agent(agent_key, agent_def)
 
@@ -535,6 +638,16 @@ class ResearchTeam:
                 }
             )
             self._save_snapshot()  # 每步落盘, 崩溃可恢复
+            await self._emit_progress(
+                {
+                    "event": "stage",
+                    "agent": agent_key,
+                    "name": agent_def["name"],
+                    "layer": agent_def["layer"],
+                    "status": "done",
+                    "preview": result[:300],
+                }
+            )
 
             # 检查是否需要人工审批
             gate = agent_def.get("needs_approval")
@@ -546,8 +659,22 @@ class ResearchTeam:
                     agent_output=result,
                 )
                 self._save_snapshot()  # 待审批状态落盘
+                await self._emit_progress(
+                    {
+                        "event": "gate",
+                        "run_id": self.run_id,
+                        "gate": gate.value,
+                        "agent": agent_key,
+                        "name": agent_def["name"],
+                        "title": self.pending_approval.title,
+                        "summary": self.pending_approval.summary[:500],
+                    }
+                )
+                if getattr(self, "_tracer", None) is not None:
+                    self._tracer.finish(str(result or "")[:2000], "awaiting_approval")
                 return {
                     "status": "awaiting_approval",
+                    "trace_id": getattr(self, "trace_id", ""),
                     "gate": gate.value,
                     "agent": agent_key,
                     "name": agent_def["name"],
@@ -561,10 +688,23 @@ class ResearchTeam:
 
         # 全部完成
         final = self.state.get("final_drafter", "")
+        # 简单任务只跑一个 agent: 直接返回它的产出, 不要再套一层"流程总结"
+        if not final and len(pipeline) == 1:
+            final = self.state.get(pipeline[0][0], "")
         self._save_snapshot(status="completed")
         self._persist_to_memory()  # 跨 agent 记忆: 团队产出沉淀到课题记忆
+        await self._emit_progress(
+            {
+                "event": "team_done",
+                "status": "completed",
+                "completed_stages": [h["agent"] for h in self.history],
+            }
+        )
+        if getattr(self, "_tracer", None) is not None:
+            self._tracer.finish(str(final or ""), "completed")
         return {
             "status": "completed",
+            "trace_id": getattr(self, "trace_id", ""),
             "result": final or self._build_summary(),
             "history": self.history,
             "completed_stages": [h["agent"] for h in self.history],
@@ -609,6 +749,136 @@ class ResearchTeam:
         except Exception as e:
             logger.warning(f"团队记忆沉淀失败: {e}")
 
+    def _build_exec_plan(self, pipeline: list[tuple]) -> list[dict]:
+        """把线性 pipeline 展开成**可画的执行计划**: 哪些 agent 同一批并行、
+        哪些串行、每批的输入来自哪一批。
+
+        规则与 _run_pipeline 的调度必须一致 —— 否则图会画成 A 并行、实际是串行,
+        可视化就成了另一份谎言:
+          - 仅 upstream/midstream 且无人工闸门的连续 agent 合并为一批并行
+          - downstream / 有闸门 / 单 agent 都单独一批串行
+          - 每批的 inputs = 上一批全部输出 (对应 _build_context 的"注入前一层")
+        """
+        items: list[dict] = []
+        completed: list[str] = []  # 当前批之前已完成的所有 agent (对应 _build_context)
+        batch_id = 0
+        i = 0
+        while i < len(pipeline):
+            key, _, _ = pipeline[i]
+            ad = AGENT_DEFINITIONS[key]
+            gate = ad.get("needs_approval")
+            group: list[str] = []
+            if ad["layer"] in ("upstream", "midstream") and not gate:
+                j = i
+                while j < len(pipeline):
+                    kk, _, _ = pipeline[j]
+                    aa = AGENT_DEFINITIONS[kk]
+                    if aa["layer"] != ad["layer"] or aa.get("needs_approval"):
+                        break
+                    group.append(kk)
+                    j += 1
+            if len(group) > 1:
+                for kk in group:
+                    a = AGENT_DEFINITIONS[kk]
+                    items.append(
+                        {
+                            "key": kk,
+                            "name": a["name"],
+                            "layer": a["layer"],
+                            "batch": batch_id,
+                            "parallel": True,
+                            "gate": "",
+                            "inputs": list(completed) or ["task"],
+                        }
+                    )
+                completed.extend(group)
+                batch_id += 1
+                i = j
+            else:
+                items.append(
+                    {
+                        "key": key,
+                        "name": ad["name"],
+                        "layer": ad["layer"],
+                        "batch": batch_id,
+                        "parallel": False,
+                        "gate": getattr(gate, "value", "") if gate else "",
+                        "inputs": list(completed) or ["task"],
+                    }
+                )
+                completed.append(key)
+                batch_id += 1
+                i += 1
+        return items
+
+    async def _plan_single_agent(self, task: str) -> list[tuple]:
+        """简单任务: 从非闸门 agent 中选一个直接完成。
+
+        这就是原来的"单 Agent 模式", 现在作为编排器的一个分支存在 ——
+        用户不再需要先选模式, 复杂度决定跑几个。
+        """
+        candidates = [
+            (k, v) for k, v in AGENT_DEFINITIONS.items() if not v.get("needs_approval")
+        ]
+        # 规则优先 (零延迟): 关键词 → 最匹配的单个 agent
+        rules = [
+            (("总结", "综述", "归纳", "梳理"), "review_synthesizer"),
+            (("检索", "找文献", "搜索", "查文献"), "multi_source_searcher"),
+            (("审稿", "评审", "批判", "挑错"), "peer_reviewer"),
+            (("引用", "核验", "溯源"), "citation_verifier"),
+            (("格式", "排版"), "format_checker"),
+            (("伦理", "合规"), "ethics_reviewer"),
+        ]
+        key = ""
+        # 任务里**点名了工具** → 选声明该工具的 agent。
+        # 否则会出现: 任务说"调用 agent_ask", 规划器却选了工具集里没有
+        # agent_ask 的 multi_source_searcher, 模型只能回答"我没有这个工具"。
+        try:
+            from agent.tool_registry import TOOLS as _TOOLS
+
+            _named = [t.name for t in _TOOLS if t.name and t.name in task]
+            if _named:
+                for cand_key, cand in candidates:
+                    if any(t in (cand.get("tools") or []) for t in _named):
+                        key = cand_key
+                        break
+        except Exception:
+            pass
+        if not key:
+            for kws, cand in rules:
+                if any(w in task for w in kws):
+                    key = cand
+                    break
+        if not key:
+            # 规则没命中 → 让模型选一个 (一次小调用, 输出只有键名)
+            menu = "\n".join(f"- {k}: {v['role']}" for k, v in candidates)
+            try:
+                resp = await chat_with_retry(
+                    model=DEEPSEEK_MODEL,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": (
+                                "任务较简单，只需要一个 agent 完成。从下列 agent 中选最合适的"
+                                "一个，只输出它的键名，不要解释。\n\n"
+                                f"【任务】{task[:300]}\n\n【候选】\n{menu}"
+                            ),
+                        }
+                    ],
+                    temperature=0.0,
+                    max_tokens=40,
+                    extra_body={"thinking": {"type": "disabled"}},
+                    retries=1,
+                )
+                raw = (resp.choices[0].message.content or "").strip()
+                key = next((k for k, _ in candidates if k in raw), "")
+            except Exception as e:
+                logger.warning(f"single-agent planner failed: {e}")
+        if not key:
+            key = "review_synthesizer"
+        desc = next((d for k, d, _ in self.PIPELINE if k == key), "")
+        return [(key, desc or "单环节处理", True)]
+
     async def plan_task(self, task: str) -> list[tuple]:
         """**规划器**: 根据任务决定本次要跑哪些 agent, 返回与 PIPELINE 同构的列表。
 
@@ -626,6 +896,14 @@ class ResearchTeam:
 
         if not TEAM_PLANNER_ENABLED:
             return list(self.PIPELINE)
+
+        # 复杂度分流: 简单问题只跑一个不带闸门的 agent —— 这就是"单 Agent",
+        # 现在它是编排器的一个分支, 不再作为独立入口。
+        if _task_complexity(task) == "simple":
+            single = await self._plan_single_agent(task)
+            if single:
+                logger.info(f"Team plan: simple task → single agent {single[0][0]}")
+                return single
 
         optional = [p for p in self.PIPELINE if not p[2]]
         if not optional:
@@ -680,6 +958,33 @@ class ResearchTeam:
             self.state = {"task": task}
             self.history = []
             self.active_pipeline = await self.plan_task(task)
+            # 执行计划供前端画动态 DAG (批次/并行/输入来源)
+            self.exec_plan = self._build_exec_plan(self.active_pipeline)
+            # Langfuse 追踪 (未配置 key 时 no-op)
+            try:
+                from agent.run_params import get_param as _gp
+                from observability.tracer import RunTracer
+
+                _params = {
+                    k: _gp(k)
+                    for k in (
+                        "rag_top_k",
+                        "rerank_min_score",
+                        "rag_rerank",
+                        "simple_max_len",
+                        "agent_max_rounds",
+                        "agent_timeout",
+                        "parallel_enabled",
+                    )
+                }
+                self._tracer = RunTracer(self.run_id, task, _params, self.exec_plan)
+                self.trace_id = getattr(self._tracer, "trace_id", "")
+                self._tracer.register_prompts(
+                    {k: (v.get("prompt") or "") for k, v in AGENT_DEFINITIONS.items()}
+                )
+            except Exception:
+                self._tracer = None
+                self.trace_id = ""
             return await self._run_pipeline(0)
 
     async def approve_and_continue(self, feedback: str = "") -> dict:
@@ -694,13 +999,14 @@ class ResearchTeam:
             if feedback:
                 self.state[f"feedback_{gate.value}"] = feedback
 
-            # 从当前 agent 的下一个开始继续
+            # 从当前 agent 的下一个开始继续。
+            # 必须在**本次实际执行的 pipeline** 里找下标: 规划器裁剪后
+            # active_pipeline 与 PIPELINE 的顺序/长度不同, 用 PIPELINE 的
+            # 下标去索引 active_pipeline 会跳过或重跑 agent (例如裁剪后
+            # [A,B,D] 在 B 处批准, PIPELINE 里 B=2 → start=3 → D 被跳过)。
+            pl = self.active_pipeline or self.PIPELINE
             current_idx = next(
-                (
-                    i
-                    for i, (k, _, _) in enumerate(self.PIPELINE)
-                    if k == self.current_stage
-                ),
+                (i for i, (k, _, _) in enumerate(pl) if k == self.current_stage),
                 -1,
             )
             return await self._run_pipeline(current_idx + 1)
@@ -716,6 +1022,21 @@ class ResearchTeam:
         """
         tools_desc = ", ".join(agent_def.get("tools", []))
         context = self._build_context(agent_def["layer"])
+        # 检索类 Agent 必须知道真实可用的库, 否则只能编表名
+        kb_block = ""
+        if any(t in (agent_def.get("tools") or []) for t in ("agent_ask", "ask_knowledge_base")):
+            try:
+                from agent.kb_registry import available_hint
+
+                _hint = available_hint(10)
+                if _hint:
+                    kb_block = (
+                        "\n\n【可用知识库（真实存在；调用 agent_ask / ask_knowledge_base 时 "
+                        "table_name 只能从这里选，否则会被工具拒绝）】\n"
+                        + "\n".join(f"- {h}" for h in _hint)
+                    )
+            except Exception:
+                kb_block = ""
 
         # 人工审批反馈注入 (修复: 原 feedback 只存 state 无 agent 读取 → "修改后通过"是摆设)
         feedbacks = [
@@ -733,7 +1054,8 @@ class ResearchTeam:
                     f"所属层级: {self.get_layer_name(agent_def['layer'])}。"
                     f"你的职责: {agent_def['role']}\n"
                     f"可用工具: {tools_desc}\n\n"
-                    f"{agent_def['prompt']}"
+                    f"{agent_def['prompt']}\n\n"
+                    f"{EVIDENCE_POLICY}{kb_block}"
                 ),
             },
             {
@@ -777,18 +1099,32 @@ class ResearchTeam:
             call_fingerprints: list[str] = []
             _agent_t0 = time.time()
 
-            for _round in range(TEAM_AGENT_MAX_ROUNDS):
+            from agent.run_params import get_param as _rp
+
+            _max_rounds = int(_rp("agent_max_rounds", TEAM_AGENT_MAX_ROUNDS))
+            _agent_timeout = float(_rp("agent_timeout", AGENT_AGENT_TIMEOUT))
+            for _round in range(_max_rounds):
                 # 超时兜底: 每个 agent 有独立 wall-clock 预算。此前完全没有 —— 单次 LLM
                 # 调用各自有 timeout, 但整个 agent 可以一直"下一轮再说"而无上限。
-                if time.time() - _agent_t0 > AGENT_AGENT_TIMEOUT:
+                if time.time() - _agent_t0 > _agent_timeout:
                     logger.warning(
                         f"agent_timeout agent={agent_key} "
                         f"elapsed={time.time() - _agent_t0:.0f}s"
                     )
                     return (
-                        f"[{agent_def['name']} 超时终止: 超过 {AGENT_AGENT_TIMEOUT}s 未完成。"
+                        f"[{agent_def['name']} 超时终止: 超过 {_agent_timeout:.0f}s 未完成。"
                         f"未产出结果 —— 请勿据此继续判断。]"
                     )
+                # Agent 内部轮次: 团队级事件只到 "Agent 开始/完成", 中间调用
+                # 了什么工具、第几轮、token 多少, 过去在页面上完全看不到
+                await self._emit_progress(
+                    {
+                        "event": "agent_turn",
+                        "agent": agent_key,
+                        "name": agent_def["name"],
+                        "round": _round + 1,
+                    }
+                )
                 resp = await chat_with_retry(
                     model=DEEPSEEK_MODEL,
                     messages=messages,
@@ -801,6 +1137,16 @@ class ResearchTeam:
                 )
                 msg = resp.choices[0].message
                 tool_calls = getattr(msg, "tool_calls", None)
+                _u = getattr(resp, "usage", None)
+                await self._emit_progress(
+                    {
+                        "event": "agent_llm",
+                        "agent": agent_key,
+                        "round": _round + 1,
+                        "tokens": (getattr(_u, "total_tokens", 0) if _u else 0),
+                        "tool_calls": len(tool_calls or []),
+                    }
+                )
 
                 # 无工具调用 → 最终回答 (若 finish_reason==length 被截断则续写)
                 if not tool_calls:
@@ -829,6 +1175,15 @@ class ResearchTeam:
                 # 回填 assistant 消息(含 tool_calls)保持对话连续性
                 messages.append(msg.model_dump(exclude_none=True))
                 for tc in tool_calls:
+                    await self._emit_progress(
+                        {
+                            "event": "agent_tool",
+                            "agent": agent_key,
+                            "tool": tc.function.name,
+                            "status": "start",
+                            "args": (tc.function.arguments or "")[:240],
+                        }
+                    )
                     # 参数 JSON 解析失败时**必须告诉模型**, 不能静默当空参数。
                     # 原实现 `except JSONDecodeError: args = {}` ——工具拿着空参数去跑,
                     # 要么报一个和真实原因无关的错, 要么把默认值当成了模型的意思。
@@ -935,7 +1290,30 @@ class ResearchTeam:
                                         )
                                     else:
                                         _tm.note_call(tc.function.name)
-                                        result = await tool.execute(**args)
+                                        # 与 pi_agent 一致: 把进度回调带进工具栈,
+                                        # 让团队里的 RAG 检索也能逐步可见
+                                        from agent.tool_progress import (
+                                            reset_emitter as _tp_reset,
+                                            set_emitter as _tp_set,
+                                        )
+
+                                        def _tool_emit(ev, _team=self):
+                                            # 工具内部 (RAG) 事件: 同时给前端与 tracer
+                                            try:
+                                                _tr = getattr(_team, "_tracer", None)
+                                                if _tr is not None:
+                                                    _tr.on_event(ev)
+                                            except Exception:
+                                                pass
+                                            if _team._progress_cb is not None:
+                                                return _team._progress_cb(ev)
+                                            return None
+
+                                        _tp_token = _tp_set(_tool_emit)
+                                        try:
+                                            result = await tool.execute(**args)
+                                        finally:
+                                            _tp_reset(_tp_token)
                                         if not result.startswith("❌"):
                                             called_ok[tool.name] = time.time()
 
@@ -961,6 +1339,25 @@ class ResearchTeam:
                         # ── 三级: 累计失败到阈值就终止任务 ──
                         total_failures += 1
 
+                    # 库内无内容不是"任务无法完成"的信号, 而是"换证据来源"的信号。
+                    # 不追加这句, 模型会把标记原样复述成整段"证据不足"声明。
+                    if "【库内无相关内容】" in str(result):
+                        result = (
+                            f"{result}\n\n[系统提示] 该结果只说明本地知识库不覆盖这个主题, "
+                            "不代表主题不可研究。请改用外部检索工具（search_papers 等）"
+                            "或通用学术知识完成当前环节; 不要重复调用同一个不覆盖的库, "
+                            "也不要把'证据不足'写成结论前提。"
+                        )
+                    await self._emit_progress(
+                        {
+                            "event": "agent_tool",
+                            "agent": agent_key,
+                            "tool": tc.function.name,
+                            "status": "done",
+                            "ok": not str(result).startswith("❌"),
+                            "result": str(result)[:240],
+                        }
+                    )
                     messages.append(
                         {"role": "tool", "tool_call_id": tc.id, "content": result}
                     )

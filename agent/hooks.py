@@ -173,6 +173,14 @@ class HookRegistry:
     def get_stats(self) -> dict:
         return dict(self._stats)
 
+    def list_registered(self) -> dict[str, list[str]]:
+        """已注册 hook: {干预点: [hook 名]}。可视化页面用它展示"谁在哪个点插手"。"""
+        return {
+            point.value: [name for name, _ in fns]
+            for point, fns in self._hooks.items()
+            if fns
+        }
+
 
 # 全局单例 (DeepSeek 审查 #4: 加锁防多线程/多事件循环重复初始化)
 _registry: Optional[HookRegistry] = None

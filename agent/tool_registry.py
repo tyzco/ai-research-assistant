@@ -416,9 +416,18 @@ async def _tool_download_index(urls: list, topic_id: str) -> dict:
 
 
 async def _tool_ask_kb(table_name: str, question: str) -> dict:
+    from agent.kb_registry import available_hint, resolve_kb
+
+    real = resolve_kb(table_name)
+    if not real:
+        # 表名不存在 ≠ 库为空。明确告诉模型可用表, 否则它会反复硬写
+        return {
+            "error": f"知识库 '{table_name}' 不存在。请从 available 中选择真实表名后重试。",
+            "available": available_hint(10),
+        }
     from qa_engine import ask_question
 
-    result = await ask_question(table_name, question)
+    result = await ask_question(real, question)
     return {
         "answer": result.answer[:1500],
         "references": len(result.references),
@@ -781,26 +790,16 @@ def get_tools_schema() -> list[dict]:
 async def _tool_search_knowledge_bases(query: str = "") -> dict:
     """搜索已构建的知识库列表，按大小排序，优先返回内容最丰富的。
     query 为占位参数 (DeepSeek 审查 #5/#10: 当前不参与过滤, 保持可选)。"""
-    import lancedb
+    from agent.kb_registry import list_kbs
 
-    from config import LANCEDB_DIR
-
-    db = lancedb.connect(str(LANCEDB_DIR))
-    tables = db.table_names()
     # 只列出用户构建的知识库（papers_* 前缀），排除评估表
-    kb_tables = [
-        t for t in tables if (t.startswith("papers_") and "eval" not in t.lower())
+    scored = [
+        (r["rows"], r["table"])
+        for r in list_kbs()
+        if "eval" not in r["table"].lower()
     ]
-    if not kb_tables:
+    if not scored:
         return {"best_kb": "", "all_kbs": [], "total": 0, "tip": "暂无知识库，请先上传 PDF 构建知识库"}
-    # 按行数排序
-    scored = []
-    for t in kb_tables:
-        try:
-            n = db.open_table(t).count_rows()
-            scored.append((n, t))
-        except Exception:
-            scored.append((0, t))
     scored.sort(key=lambda x: x[0], reverse=True)
     return {
         "best_kb": scored[0][1] if scored else "",
@@ -812,9 +811,17 @@ async def _tool_search_knowledge_bases(query: str = "") -> dict:
 
 async def _tool_agent_ask(table_name: str, question: str) -> dict:
     """基于指定知识库问专业学术问题。table_name 从 search_knowledge_bases 获取。"""
+    from agent.kb_registry import available_hint, resolve_kb
+
+    real = resolve_kb(table_name)
+    if not real:
+        return {
+            "error": f"知识库 '{table_name}' 不存在。请从 available 中选择真实表名后重试。",
+            "available": available_hint(10),
+        }
     from qa_engine import ask_question
 
-    result = await ask_question(table_name, question)
+    result = await ask_question(real, question)
     refs = [
         {"title": r.get("title", ""), "year": r.get("year")}
         for r in result.references[:5]

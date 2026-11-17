@@ -46,6 +46,10 @@ class TurnState:
     tool_name: str = ""
     tool_success: bool = False
     elapsed_ms: float = 0.0
+    # 可视化用: 本轮工具入参与结果摘要 (截断)。没有这两项, trace 只能看到
+    # "调了 search_papers、耗时 1.2s", 看不到它拿什么去搜、搜回了什么。
+    tool_args_preview: str = ""
+    tool_result_preview: str = ""
 
 
 @dataclass
@@ -169,6 +173,19 @@ class PiAgent:
             self._tool_mgr = get_tool_manager()
         return self._tool_mgr
 
+    async def _emit(self, event: str, **payload) -> None:
+        """推一条可视化事件 (心跳/阶段/护栏触发)。
+
+        与 step/token 区分: 那些是"结果", 这些是"过程" —— 压缩、校验、守卫命中
+        都发生在两次模型调用之间, 不推出来, 前端只能看到结果看不到原因。
+        """
+        if self._step_cb is None:
+            return
+        try:
+            await self._step_cb({"event": event, **payload})
+        except Exception:
+            pass
+
     def _fire_hook(self, point, state, payload: str = ""):
         """触发 hook，异常隔离 (DeepSeek 审查 #4): 单个 hook 崩溃不中断 agent。"""
         try:
@@ -213,6 +230,15 @@ class PiAgent:
             {"role": "user", "content": task},
         ]
 
+        await self._emit(
+            "phase",
+            phase="preflight",
+            detail=(
+                f"技能={','.join(selected) or '默认'} · "
+                f"工具={len(tool_names)} 个 · 提示词={self._trace.prompt_version}"
+            ),
+        )
+
         # === HOOK: trace_start ===
         hook_result = self._fire_hook("trace_start", {"task": task, "goal": self.goal})
         if hook_result.block:
@@ -229,6 +255,11 @@ class PiAgent:
             _plan_ret = await self._plan(task)
             if _plan_ret:
                 _p, _p_rc = _plan_ret
+                await self._emit(
+                    "phase",
+                    phase="plan",
+                    detail=f"生成计划：{_p.strip().splitlines()[0][:100]}",
+                )
                 _pm = {
                     "role": "assistant",
                     "content": f"任务计划：\n{_p}",
@@ -478,6 +509,12 @@ class PiAgent:
 
             turn = TurnState(index=turn_idx)
             t_turn_start = time.time()
+            await self._emit(
+                "phase",
+                phase="turn_start",
+                turn=turn_idx + 1,
+                detail=f"第 {turn_idx + 1} 轮开始 (已用 {state['steps']}/{self.max_steps} 步)",
+            )
 
             # === HOOK: turn_start ===
             hr = self._fire_hook("turn_start", state)
@@ -505,6 +542,12 @@ class PiAgent:
                 state["messages"] = messages
                 self._messages = messages
                 logger.info(f"Context compacted: {len(messages)} messages after")
+                await self._emit(
+                    "phase",
+                    phase="compact",
+                    turn=turn_idx + 1,
+                    detail=f"触发上下文压缩：移除 {len(removed)} 条，保留 {len(messages)} 条",
+                )
 
             # === 工具 schema (技能裁剪, before_model hook 可再覆盖) ===
             tools = self._tools_schema
@@ -523,6 +566,13 @@ class PiAgent:
                 self._messages = messages
 
             # === LLM 调用 ===
+            await self._emit(
+                "phase",
+                phase="llm_call",
+                turn=turn_idx + 1,
+                detail=f"调用 {DEEPSEEK_MODEL} · 工具 {len(tools or [])} 个 · "
+                f"上下文 {len(messages)} 条",
+            )
             try:
                 resp = await chat_with_retry(
                     model=DEEPSEEK_MODEL,
@@ -545,6 +595,15 @@ class PiAgent:
             turn.model_input_tokens = resp.usage.prompt_tokens if resp.usage else 0
             turn.model_output_tokens = resp.usage.completion_tokens if resp.usage else 0
             trace.total_tokens += turn.model_input_tokens + turn.model_output_tokens
+            await self._emit(
+                "phase",
+                phase="after_model",
+                turn=turn_idx + 1,
+                detail=(
+                    f"模型返回：tool_calls={len(msg.tool_calls or [])} · "
+                    f"in={turn.model_input_tokens} out={turn.model_output_tokens} tok"
+                ),
+            )
 
             # === HOOK: after_model ===
             hr = self._fire_hook(
@@ -628,8 +687,21 @@ class PiAgent:
                             tool_name, tool_args, tool_def.parameters
                         )
                         if is_valid:
+                            if corrected != tool_args:
+                                await self._emit(
+                                    "phase",
+                                    phase="validate",
+                                    turn=turn_idx + 1,
+                                    detail=f"参数自动修正：{tool_name}",
+                                )
                             tool_args = corrected
                         else:
+                            await self._emit(
+                                "phase",
+                                phase="validate",
+                                turn=turn_idx + 1,
+                                detail=f"参数校验失败：{tool_name} · {err[:120]}",
+                            )
                             _n = trace.param_failures.get(tool_name, 0) + 1
                             trace.param_failures[tool_name] = _n
                             from config import AGENT_PARAM_CORRECTION_BUDGET
@@ -665,6 +737,12 @@ class PiAgent:
                         and tool_def is not None
                         and tool_def.need_confirm
                     ):
+                        await self._emit(
+                            "phase",
+                            phase="confirm",
+                            turn=turn_idx + 1,
+                            detail=f"高危工具需人工确认：{tool_name}，已暂停",
+                        )
                         self._pending_confirm = {
                             "tool_name": tool_name,
                             "tool_args": tool_args,
@@ -703,6 +781,8 @@ class PiAgent:
                                         "tokens": t.model_input_tokens
                                         + t.model_output_tokens,
                                         "elapsed_ms": round(t.elapsed_ms),
+                                        "args": t.tool_args_preview,
+                                        "result": t.tool_result_preview,
                                     }
                                     for t in trace.turns
                                 ],
@@ -712,6 +792,23 @@ class PiAgent:
 
                     # === HOOK: before_tool + 安全检查 ===
                     if tool_result is None:
+                        # 工具开始执行: 立刻推 tool_start。step 事件要等工具跑完才发,
+                        # 而检索类工具可能跑 40s+ —— 期间前端只看到"LLM 调用",
+                        # 不知道它在查什么, 那就不叫实时。
+                        if self._step_cb is not None:
+                            try:
+                                await self._step_cb(
+                                    {
+                                        "event": "tool_start",
+                                        "turn": turn.index + 1,
+                                        "tool": tool_name,
+                                        "args": json.dumps(
+                                            tool_args, ensure_ascii=False
+                                        )[:300],
+                                    }
+                                )
+                            except Exception:
+                                pass
                         hr = self._fire_hook(
                             "before_tool",
                             state,
@@ -720,6 +817,12 @@ class PiAgent:
                         if hr.block:
                             tool_result = f"工具 {tool_name} 被安全策略拦截: {hr.block_reason}"
                             turn.tool_success = False
+                            await self._emit(
+                                "phase",
+                                phase="before_tool",
+                                turn=turn_idx + 1,
+                                detail=f"安全策略拦截：{tool_name} · {hr.block_reason[:80]}",
+                            )
                         elif self.enable_tool_check:
                             safe, reason = self.tool_mgr.security_check(
                                 tool_name, tool_args
@@ -727,6 +830,12 @@ class PiAgent:
                             if not safe:
                                 tool_result = f"安全检查未通过: {reason}"
                                 turn.tool_success = False
+                                await self._emit(
+                                    "phase",
+                                    phase="before_tool",
+                                    turn=turn_idx + 1,
+                                    detail=f"安全检查未通过：{tool_name} · {reason[:80]}",
+                                )
 
                     # === 工具治理: 黑名单 + 单任务频次上限 ===
                     if tool_result is None and tool_def is not None:
@@ -734,6 +843,12 @@ class PiAgent:
                         if _budget_err:
                             tool_result = _budget_err
                             turn.tool_success = False
+                            await self._emit(
+                                "phase",
+                                phase="budget",
+                                turn=turn_idx + 1,
+                                detail=f"调用预算拦截：{tool_name} · {_budget_err[:80]}",
+                            )
 
                     # === 重复动作检测 (死循环第三道防线) ===
                     # 轮次限制(max_steps) 与超时兜底(max_time) 都是"烧到上限才停";
@@ -746,6 +861,12 @@ class PiAgent:
                         trace.call_fingerprints.append(_fp)
                         if _repeats >= AGENT_REPEAT_CALL_LIMIT - 1:
                             trace.repeat_hits += 1
+                            await self._emit(
+                                "phase",
+                                phase="repeat",
+                                turn=turn_idx + 1,
+                                detail=f"重复动作拦截：{tool_name} 已重复 {_repeats + 1} 次",
+                            )
                             logger.warning(
                                 f"repeat action detected: {tool_name} ×{_repeats + 1} "
                                 f"(goal={trace.goal[:40]})"
@@ -774,12 +895,23 @@ class PiAgent:
                                 turn.tool_success = False
                             else:
                                 # 瞬时故障 (超时/连接/限流/5xx) 自动退避重试; 参数类错误不重试
-                                _ok, _res = await self.tool_mgr.execute_with_retry(
-                                    tool_name,
-                                    tool_def,
-                                    tool_args,
-                                    timeout=min(remaining, 60),
+                                # 把 step_cb 带进工具调用栈: 检索内部 (改写/召回/
+                                # 融合/重排) 的事件才能推到前端
+                                from agent.tool_progress import (
+                                    reset_emitter as _tp_reset,
+                                    set_emitter as _tp_set,
                                 )
+
+                                _tp_token = _tp_set(self._step_cb)
+                                try:
+                                    _ok, _res = await self.tool_mgr.execute_with_retry(
+                                        tool_name,
+                                        tool_def,
+                                        tool_args,
+                                        timeout=min(remaining, 60),
+                                    )
+                                finally:
+                                    _tp_reset(_tp_token)
                                 self.tool_mgr.note_call(tool_name)  # 频次统计 (被拦下的不计)
                                 if _ok:
                                     raw_result = _res
@@ -821,6 +953,12 @@ class PiAgent:
                     else:
                         trace.consecutive_failures += 1
                         if trace.consecutive_failures >= AGENT_MAX_CONSECUTIVE_FAILURES:
+                            await self._emit(
+                                "phase",
+                                phase="failure_circuit",
+                                turn=turn_idx + 1,
+                                detail=f"错误累积熔断：连续 {trace.consecutive_failures} 次失败，提前终止",
+                            )
                             logger.warning(
                                 f"错误累积熔断: 连续 {trace.consecutive_failures} 次工具失败 "
                                 f"(goal={trace.goal[:40]})"
@@ -839,6 +977,15 @@ class PiAgent:
                                 f"建议：换一个更具体的任务描述，或先确认知识库/网络状态后重试。"
                             )
                             break
+
+                    # 可视化摘要: 截断后随 trace/step 事件下发给前端
+                    try:
+                        turn.tool_args_preview = json.dumps(
+                            tool_args, ensure_ascii=False
+                        )[:300]
+                    except Exception:
+                        turn.tool_args_preview = str(tool_args)[:300]
+                    turn.tool_result_preview = str(tool_result)[:300]
 
                     # === HOOK: after_tool ===
                     self._fire_hook(
@@ -864,6 +1011,12 @@ class PiAgent:
                     state["steps"] += 1
             else:
                 # === 直接回答 (无工具调用) — 流式生成, 逐字推送 (step_cb event=token) ===
+                await self._emit(
+                    "phase",
+                    phase="direct_answer",
+                    turn=turn_idx + 1,
+                    detail="模型未调用工具，开始流式生成答案",
+                )
                 from llm_client import get_client
 
                 answer = ""
@@ -961,6 +1114,12 @@ class PiAgent:
                 hr = self._fire_hook("before_emit", state, final_result)
                 if hr.block:
                     final_result = hr.block_reason
+                    await self._emit(
+                        "phase",
+                        phase="before_emit",
+                        turn=turn_idx + 1,
+                        detail=f"输出闸拦截：{hr.block_reason[:100]}",
+                    )
 
                 # DeepSeek 审查 #9: 直答轮也记录 turn, 使 trace.steps 完整
                 turn.tool_success = True
@@ -978,6 +1137,12 @@ class PiAgent:
                     critique = await self._reflexion_critique(messages)
                     if critique:
                         self._reflexed = True
+                        await self._emit(
+                            "phase",
+                            phase="reflexion",
+                            turn=turn_idx + 1,
+                            detail=f"自批判命中，重试一轮：{critique[:100]}",
+                        )
                         messages.append(
                             {
                                 "role": "user",
@@ -1015,6 +1180,8 @@ class PiAgent:
                             "elapsed_ms": round(turn.elapsed_ms),
                             "tokens": turn.model_input_tokens
                             + turn.model_output_tokens,
+                            "args": turn.tool_args_preview,
+                            "result": turn.tool_result_preview,
                         }
                     )
                 except Exception:
@@ -1023,14 +1190,22 @@ class PiAgent:
         self._messages = messages
         self._state = state
 
+        # 循环跑满仍未产出答案 → 结构化记为 max_steps (此前只体现在兜底文案里)
+        if not final_result and not trace.termination_reason:
+            trace.termination_reason = "max_steps"
+        await self._emit(
+            "phase",
+            phase="completion",
+            detail=(
+                f"结束：{trace.termination_reason or 'completed'} · "
+                f"{len(trace.turns)} 轮 · {trace.total_tokens} tok"
+            ),
+        )
+
         # === HOOK: trace_end ===
         self._fire_hook(
             "trace_end", {"result": final_result, "turns": len(trace.turns)}
         )
-
-        # 循环跑满仍未产出答案 → 结构化记为 max_steps (此前只体现在兜底文案里)
-        if not final_result and not trace.termination_reason:
-            trace.termination_reason = "max_steps"
 
         return {
             "success": bool(final_result) and "超时" not in final_result,
@@ -1059,6 +1234,8 @@ class PiAgent:
                         "success": t.tool_success,
                         "tokens": t.model_input_tokens + t.model_output_tokens,
                         "elapsed_ms": round(t.elapsed_ms),
+                        "args": t.tool_args_preview,
+                        "result": t.tool_result_preview,
                     }
                     for t in trace.turns
                 ],

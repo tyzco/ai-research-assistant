@@ -325,6 +325,17 @@ def _should_drop(p: PaperMeta) -> bool:
     # 标题短于4字且无DOI才丢弃
     if len(p.title or "") < 4 and not p.doi:
         return True
+    # 检索入口页/导航页: 标题像页面而不是论文, 且没有摘要 —— 这类"文献"进了
+    # 选题评估就是噪声 (实测知网检索页被当成 1 条证据, 直接把整份报告带成
+    # "证据严重不足")。只丢"无摘要 + 导航词"的组合, 不误伤正常论文。
+    title = (p.title or "").strip()
+    _nav_words = ("检索", "登录", "首页", "数据库导航", "全文数据库", "文献检索", "高级搜索")
+    if not (p.abstract or "").strip():
+        if any(w in title for w in _nav_words):
+            return True
+        # 知网/数据库的搜索入口页: 标题形如 "[知网] 搜索「...」", 不是论文
+        if title.startswith("[知网]") or "搜索「" in title:
+            return True
     return False
 
 

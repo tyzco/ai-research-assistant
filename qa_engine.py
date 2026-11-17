@@ -342,18 +342,30 @@ async def ask_question(
         mem_ctx = mem.get_context(question)  # 语义选择: 按当前问题取相关记忆
     except Exception:
         pass
+    # RAG 内部进度: 无回调时 no-op, 评测/CLI 无副作用
+    from agent.tool_progress import emit as _tp
+
     resolved_question = question
     if mem_ctx and len(question) < COREF_MAX_LENGTH:
         resolved_question = await _resolve_coreference(question, mem_ctx)
+        _tp({"event": "rag", "stage": "coref", "detail": "指代消解完成"})
 
     # 查询改写（短问题跳过，节省 2-3s；复杂意图短问题仍改写）
     if len(resolved_question) < REWRITE_MIN_LENGTH and not any(
         kw in resolved_question for kw in COMPLEX_EXPAND_KEYWORDS
     ):
         expanded = resolved_question
+        _tp({"event": "rag", "stage": "rewrite", "detail": "短问题跳过改写"})
     else:
         expanded = await _expand_query(resolved_question)
+        _tp({"event": "rag", "stage": "rewrite", "detail": expanded[:100]})
 
+    # 本次运行参数 (可视化面板可调; 未设置时用代码默认)
+    from agent.run_params import get_param as _gp
+
+    _top_k = max(1, int(_gp("rag_top_k", 5)))
+    if not bool(_gp("rag_rerank", True)):
+        use_rerank = False
     # 自适应混合检索 + 快速模式（短问题跳过 Rerank 省 1-2s）
     # DeepSeek 审查 #5: _is_complex_query 内部已含 len>15, 外层冗余判断删除
     use_rerank = use_rerank and _is_complex_query(resolved_question)
@@ -366,7 +378,7 @@ async def ask_question(
 
         hr = AdaptiveHybridRetriever(table_name)
         text_res, _ = await hr.search(
-            expanded, top_k=5, filter_expr=KB_ACTIVE_FILTER
+            expanded, top_k=_top_k, filter_expr=KB_ACTIVE_FILTER
         )
         img_res, _ = await hr.search(
             expanded, top_k=3, filter_expr="is_image = true"
@@ -378,8 +390,16 @@ async def ask_question(
             table_name, expanded, top_k=20
         )
         if use_rerank:
-            text_res = await _rerank_async(question, text_res, top_k=5)
+            text_res = await _rerank_async(question, text_res, top_k=_top_k)
             img_res = await _rerank_async(question, img_res, top_k=3)
+
+    _tp(
+        {
+            "event": "rag",
+            "stage": "retrieve",
+            "detail": f"全文 {len(text_res)} 条 · 图 {len(img_res)} 条",
+        }
+    )
 
     # 摘要层用简单检索
     if not abs_res:
@@ -480,6 +500,13 @@ async def ask_question(
     else:
         ab = "（无补充线索）"
 
+    _tp(
+        {
+            "event": "rag",
+            "stage": "generate",
+            "detail": f"上下文 {len(text_res) + len(img_res) + len(abs_res)} 条，开始生成",
+        }
+    )
     try:
         prompt_content = QA_PROMPT.format(
             fulltext_context=ft,

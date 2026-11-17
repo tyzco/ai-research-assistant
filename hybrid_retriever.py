@@ -111,7 +111,14 @@ class AdaptiveHybridRetriever:
         self, query: str, top_k: int, filter_expr: str | None = None
     ) -> list[dict]:
         query_vec = _embed_texts_sync([query])[0]
-        return _cosine_search(self.table, query_vec, top_k, filter_expr)
+        res = _cosine_search(self.table, query_vec, top_k, filter_expr)
+        try:
+            from agent.tool_progress import emit as _tp
+
+            _tp({"event": "rag", "stage": "vector", "detail": f"向量召回 {len(res)} 条"})
+        except Exception:
+            pass
+        return res
 
     def _bm25_recall(self, query: str, top_k: int) -> list[dict]:
         """BM25 关键词召回。
@@ -137,7 +144,20 @@ class AdaptiveHybridRetriever:
         # 老表回退时不做分词 (索引是按原文本建的, 分词反而对不上)
         q = query if field == "text" else _segment_query(query)
         try:
-            return self.table.search(q, query_type="fts").limit(top_k).to_list()
+            res = self.table.search(q, query_type="fts").limit(top_k).to_list()
+            try:
+                from agent.tool_progress import emit as _tp
+
+                _tp(
+                    {
+                        "event": "rag",
+                        "stage": "bm25",
+                        "detail": f"关键词召回 {len(res)} 条",
+                    }
+                )
+            except Exception:
+                pass
+            return res
         except Exception:
             return []
 
@@ -172,6 +192,18 @@ class AdaptiveHybridRetriever:
         sorted_items = sorted(fused.items(), key=lambda x: x[1][0], reverse=True)[
             :top_k
         ]
+        try:
+            from agent.tool_progress import emit as _tp
+
+            _tp(
+                {
+                    "event": "rag",
+                    "stage": "rrf",
+                    "detail": f"RRF 融合 {len(fused)} 条（BM25 权重 {alpha:.2f}）",
+                }
+            )
+        except Exception:
+            pass
         return [item[1][1] for item in sorted_items]
 
     # ---- 两阶段级联排序 ----
@@ -202,6 +234,18 @@ class AdaptiveHybridRetriever:
                 range(len(scores)), key=lambda i: scores[i], reverse=True
             )[:stage1_keep]
             stage1_chunks = [chunks[i] for i in stage1_indices]
+            try:
+                from agent.tool_progress import emit as _tp
+
+                _tp(
+                    {
+                        "event": "rag",
+                        "stage": "rerank1",
+                        "detail": f"MiniLM 预筛 {len(chunks)} → {len(stage1_chunks)}",
+                    }
+                )
+            except Exception:
+                pass
         except Exception as e:
             logger.error(f"Stage1 rerank failed: {e}")  # DeepSeek 审查 #5
             return chunks[:top_k]
@@ -215,10 +259,12 @@ class AdaptiveHybridRetriever:
             reranker = self._get_stage2()
             pairs = [[query, c.get("text", "")[:512]] for c in stage1_chunks]
             scores2 = reranker.predict(pairs, convert_to_numpy=True)
-            from config import RERANK_MIN_SCORE, RERANK_KEEP_BEST_IF_NONE
+            from config import RERANK_KEEP_BEST_IF_NONE, RERANK_MIN_SCORE
+            from agent.run_params import get_param as _gp
 
-            if RERANK_MIN_SCORE > 0:
-                valid = [(i, sc) for i, sc in enumerate(scores2) if sc >= RERANK_MIN_SCORE]
+            _min_score = float(_gp("rerank_min_score", RERANK_MIN_SCORE))
+            if _min_score > 0:
+                valid = [(i, sc) for i, sc in enumerate(scores2) if sc >= _min_score]
                 # 修复: 原实现 `if valid:` 后直接落到下面的未过滤分支 —— 于是**全部低于阈值时
                 # 反而一个都不滤**, 恰好在最该生效的低置信度场景下静默失效。
                 # 现改为显式策略: 全都不达标 → 要么回退保留 top-1 (RERANK_KEEP_BEST_IF_NONE,
@@ -231,6 +277,18 @@ class AdaptiveHybridRetriever:
             stage2_indices = sorted(
                 range(len(scores2)), key=lambda i: scores2[i], reverse=True
             )[:top_k]
+            try:
+                from agent.tool_progress import emit as _tp
+
+                _tp(
+                    {
+                        "event": "rag",
+                        "stage": "rerank2",
+                        "detail": f"CrossEncoder 精排 → {len(stage2_indices)} 条",
+                    }
+                )
+            except Exception:
+                pass
             return [stage1_chunks[i] for i in stage2_indices]
         except Exception as e:
             logger.error(f"Stage2 rerank failed: {e}")  # DeepSeek 审查 #5

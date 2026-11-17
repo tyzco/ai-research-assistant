@@ -189,6 +189,23 @@ class Database:
                 updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
+            -- 可视化运行历史: 一次运行 = 任务 + 参数快照 + 完整事件 + 结果。
+            -- 前端回放/参数对照都从这里读; 只保留最近若干条 (save 时裁剪)。
+            CREATE TABLE IF NOT EXISTS flow_runs (
+                run_id       TEXT PRIMARY KEY,
+                task         TEXT NOT NULL DEFAULT '',
+                params_json  TEXT NOT NULL DEFAULT '{}',
+                events_json  TEXT NOT NULL DEFAULT '[]',
+                result       TEXT NOT NULL DEFAULT '',
+                status       TEXT NOT NULL DEFAULT '',
+                total_ms     REAL NOT NULL DEFAULT 0,
+                agent_count  INTEGER NOT NULL DEFAULT 0,
+                batch_count  INTEGER NOT NULL DEFAULT 0,
+                trace_id     TEXT NOT NULL DEFAULT '',
+                created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_flow_runs_created
+                ON flow_runs(created_at DESC);
             CREATE TABLE IF NOT EXISTS topic_state_log (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 topic_id     TEXT NOT NULL,
@@ -779,6 +796,103 @@ class Database:
             )
         except Exception:
             d["pending_approval"] = None
+        return d
+
+    # ---------- 可视化运行历史 ----------
+
+    def _migrate_flow_runs(self):
+        """旧库补 trace_id 列 (SQLite 无 IF NOT EXISTS for column)。"""
+        try:
+            c = self._conn()
+            cols = {r[1] for r in c.execute("PRAGMA table_info(flow_runs)").fetchall()}
+            if "trace_id" not in cols:
+                c.execute("ALTER TABLE flow_runs ADD COLUMN trace_id TEXT NOT NULL DEFAULT ''")
+                c.commit()
+        except Exception:
+            pass
+
+    def save_flow_run(
+        self,
+        run_id: str,
+        task: str,
+        params: dict,
+        events: list,
+        result: str,
+        status: str,
+        total_ms: float,
+        agent_count: int = 0,
+        batch_count: int = 0,
+        trace_id: str = "",
+        keep: int = 5,
+    ) -> None:
+        """保存一次可视化运行 (含参数快照与完整事件), 只保留最近 keep 条。"""
+        self._ensure_tables()
+        self._migrate_flow_runs()
+        c = self._conn()
+        c.execute(
+            """
+            INSERT INTO flow_runs (run_id, task, params_json, events_json,
+                result, status, total_ms, agent_count, batch_count, trace_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(run_id) DO UPDATE SET
+                task=excluded.task, params_json=excluded.params_json,
+                events_json=excluded.events_json, result=excluded.result,
+                status=excluded.status, total_ms=excluded.total_ms,
+                agent_count=excluded.agent_count,
+                batch_count=excluded.batch_count, trace_id=excluded.trace_id
+            """,
+            (
+                run_id,
+                task,
+                json.dumps(params, ensure_ascii=False),
+                json.dumps(events, ensure_ascii=False),
+                result,
+                status,
+                float(total_ms or 0),
+                int(agent_count or 0),
+                int(batch_count or 0),
+                trace_id or "",
+            ),
+        )
+        c.execute(
+            """DELETE FROM flow_runs WHERE run_id NOT IN (
+                   SELECT run_id FROM flow_runs
+                   ORDER BY created_at DESC, rowid DESC LIMIT ?
+               )""",
+            (int(keep),),
+        )
+        c.commit()
+
+    def list_flow_runs(self, limit: int = 10) -> list[dict]:
+        """历史列表 (不含 events, 避免一次传几十 MB)。"""
+        self._ensure_tables()
+        c = self._conn()
+        rows = c.execute(
+            """SELECT run_id, task, result, status, total_ms, agent_count,
+                      batch_count, trace_id, created_at
+               FROM flow_runs ORDER BY created_at DESC, rowid DESC LIMIT ?""",
+            (int(limit),),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_flow_run(self, run_id: str) -> Optional[dict]:
+        """完整运行: params / events 已解析。"""
+        self._ensure_tables()
+        c = self._conn()
+        row = c.execute(
+            "SELECT * FROM flow_runs WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        for src, dst, default in (
+            ("params_json", "params", {}),
+            ("events_json", "events", []),
+        ):
+            try:
+                d[dst] = json.loads(d.get(src) or default)
+            except Exception:
+                d[dst] = default
         return d
 
 

@@ -22,6 +22,22 @@ PaperLink 是一个面向中文研究者的 **AI 学术研究伴侣**。核心�
 
 **技术底座**：自适应混合检索（BM25+向量 RRF + 两级级联重排 + 双语重排）、三层意图漏斗、自我进化三环（反思/反馈教训/技能记忆）、LLM 容错降级、学术白名单闸门 + SSRF/路径穿越防护。
 
+### 实时可视化与可观测性
+
+![Agent 编排实时可视化](docs/screenshot-flow.png)
+
+- **动态编排图**：规划结果生成节点与批次，执行中的边有流光、节点显示当前动作；RAG 检索以画中画展开并行召回（BM25 / 向量 → RRF → 两级重排）。
+- **连续时间轴回放**：按真实耗时回放，参数快照随运行保存；可对比两次运行的总耗时、token、各 Agent 耗时。
+- **Langfuse 追踪**：run / Agent / 工具 / RAG span，prompt 版本登记，duration 与结果长度作为 score；未配置 key 时自动 no-op。
+
+启动可视化（需先构建前端）：
+
+```bash
+cd web && npm install && npm run build && cd ..
+python api.py
+# 打开 http://127.0.0.1:8001/app/
+```
+
 ![PaperLink 界面](docs/screenshot.png)
 
 *「你的选题有新进展」——主动推送（蓝海差异化）：系统记住你的选题，每日检索新论文并主动告知。*

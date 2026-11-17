@@ -8,6 +8,16 @@
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](https://www.docker.com/)
 
+## 作者负责范围
+
+系统设计、模块拆分与技术选型由我完成，代码逐模块实现并验收：
+
+- **架构与链路**：FastAPI 单体 + LanceDB 双层索引；科研团队 14 Agent / 3 个人工闸门；单 Agent ReAct 主循环。
+- **RAG**：PDF/Word 解析与质量闸门、结构感知分块、混合召回（BM25 + 向量 + 自适应 RRF）、两级级联重排、引用定位与数字核验。
+- **Agent 工程**：Hook 驱动生命周期、工具治理（参数校验 / 按可重放性重试 / 调用预算 / 人工确认门）、三级兜底与熔断。
+- **评测**：客观检索基准（gold = chunk_id、bootstrap 95% CI、四档消融）、LLM-as-judge、库外问题拒绝率。
+- **可视化与观测**：React Flow 动态编排图、连续时间轴回放、运行参数快照、两次运行对比、Langfuse trace 与 prompt 版本。
+
 ## 这是什么
 
 PaperLink 是一个面向中文研究者的 **AI 学术研究伴侣**。核心差异化不是「搜索/问答」（那是 DeepSeek/Perplexity 的红海），而是：

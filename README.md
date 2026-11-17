@@ -3,6 +3,7 @@
 > 不是又一个搜索框，是「记住你的研究、主动告诉你该读什么」的学术助手。
 > 面向中文研究者的「选题 → 初稿」全流程：选题可行性判断 → 12 源检索建库 → 证据问答 → 辅助写作。
 
+[![CI](https://github.com/tyzco/ai-research-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/tyzco/ai-research-assistant/actions/workflows/ci.yml)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.109+-green.svg)](https://fastapi.tiangolo.com/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)

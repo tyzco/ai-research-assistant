@@ -112,4 +112,5 @@ CORS_ORIGINS=http://your-domain     # deployment config
 - `run_eval.py` — Full retrieval eval (Recall@5, MRR, Vector vs Hybrid, regression gate)
 - `test_e2e.py` — 4-step end-to-end (strategy → embed → kb → qa)
 - `benchmark.py` — Performance benchmark (latency + throughput)
-- Baseline: bge-small-zh 512d, R@5=0.7703, MRR=0.75
+- Baseline（客观基准，800 题，gold=chunk_id）：完整链路 R@5=0.5025、MRR=0.405（95% CI 见 README 消融表）
+- 人工 8 题（语义近似）R@5≈0.77，与精确命中口径不可直接比较，报告中分开列

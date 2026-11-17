@@ -412,7 +412,7 @@ class ResearchTeam:
 
     def __init__(self, run_id: str = "", topic_id: str = ""):
         """创建团队实例。run_id 为空 → 自动生成 (每个 /team/start 独立 run)。
-        DeepSeek 审查 #7: 弃用全局单例, 按 run_id 隔离多用户并发。
+        弃用全局单例, 按 run_id 隔离多用户并发。
         topic_id: 关联课题, 用于 _should_run 按"是否已有知识库"跳过冗余上游搜索。"""
         self.run_id: str = run_id or f"run_{uuid.uuid4().hex[:12]}"
         self.topic_id: str = topic_id
@@ -457,7 +457,7 @@ class ResearchTeam:
             layer, layer
         )
 
-    # ---- 快照持久化 (DeepSeek 审查 #2) ----
+    # ---- 快照持久化  ----
 
     def _pending_dict(self) -> dict | None:
         """pending_approval → 可 JSON 序列化 dict。"""
@@ -519,7 +519,7 @@ class ResearchTeam:
         return team
 
     async def _run_pipeline(self, start_idx: int) -> dict:
-        """从 start_idx 开始执行流水线 (DeepSeek 审查 #6: 去重 execute/approve_and_continue)。
+        """从 start_idx 开始执行流水线 (去重 execute/approve_and_continue)。
         遇审批闸门 → 返回 awaiting_approval; 全部完成 → 返回 completed。
 
         速度优化 (保速度提质量): 无审批门的上游 agent 互相独立 (同层不注入前输出),
@@ -1014,7 +1014,7 @@ class ResearchTeam:
     async def _run_agent(self, agent_key: str, agent_def: dict) -> str:
         """运行单个 agent——构建 system prompt + 上下文 → LLM 调用 + 工具调用循环。
 
-        DeepSeek 审查 #1: 原实现传入 tools/tool_choice 但只读 message.content,
+        原实现传入 tools/tool_choice 但只读 message.content,
         tool_calls 被静默丢弃, 依赖工具的 agent (检索/问答) 全部失效。
         现实现标准 Function Calling 循环: 检测 tool_calls → 执行 → 结果回填 → 再调用。
         #8: schema 只暴露 agent 声明过的工具, 防止误调无 topic_id 的工具。
@@ -1379,7 +1379,7 @@ class ResearchTeam:
 
     def _build_context(self, current_layer: str) -> str:
         """为下游 agent 构建上游产出摘要。
-        DeepSeek 审查 #3: 截断上限 500 → 1500, 减少下游上下文丢失。"""
+        截断上限 500 → 1500, 减少下游上下文丢失。"""
         layer_order = ["upstream", "midstream", "downstream"]
         context_parts = []
         for layer in layer_order:
@@ -1431,7 +1431,7 @@ class ResearchTeam:
 
 
 # ============================================================
-# 团队实例注册表 — 按 run_id 隔离 (DeepSeek 审查 #7: 弃用全局单例)
+# 团队实例注册表 — 按 run_id 隔离 (弃用全局单例)
 # ============================================================
 _teams: dict[str, ResearchTeam] = {}
 _teams_lock = threading.Lock()

@@ -22,6 +22,8 @@ def team(monkeypatch):
     import config
 
     monkeypatch.setattr(config, "TEAM_PLANNER_ENABLED", True)
+    # 这些用例验证的是"规划器边界", 不是复杂度分流; 固定走完整规划路径。
+    monkeypatch.setattr(rt_mod, "_task_complexity", lambda task: "full")
     return rt_mod.ResearchTeam(run_id="planner-test")
 
 
@@ -117,3 +119,28 @@ class TestPlanningActuallyNarrows:
         ]
         assert skipped  # 有可跳过的
         assert all(p[0] not in skipped for p in plan)
+
+
+class TestSimpleTaskRouting:
+    """简单任务是编排器的一个分支: 只选一个非闸门 Agent, 不经过完整管线。"""
+
+    def test_simple_task_runs_a_single_agent(self, team, monkeypatch):
+        monkeypatch.setattr(rt_mod, "_task_complexity", lambda task: "simple")
+        _fake_llm(monkeypatch, "review_synthesizer")
+        plan = asyncio.run(team.plan_task("总结 RRF 的定义"))
+        assert len(plan) == 1
+        assert plan[0][0] == "review_synthesizer"
+
+    def test_simple_task_never_picks_a_gate_agent(self, team, monkeypatch):
+        monkeypatch.setattr(rt_mod, "_task_complexity", lambda task: "simple")
+        _fake_llm(monkeypatch, "review_synthesizer")
+        plan = asyncio.run(team.plan_task("总结 RRF 的定义"))
+        assert not rt_mod.AGENT_DEFINITIONS[plan[0][0]].get("needs_approval")
+
+
+class TestComplexityThreshold:
+    def test_short_single_action_is_simple(self):
+        assert rt_mod._task_complexity("总结 RRF 的定义") == "simple"
+
+    def test_research_task_is_full(self):
+        assert rt_mod._task_complexity("大语言模型推理加速方法研究") == "full"

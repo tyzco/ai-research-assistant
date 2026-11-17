@@ -5,7 +5,7 @@
     python benchmark.py --kb papers_xxx  # 指定表
     python benchmark.py --qa data/eval_qa.json --topk 5
 
-DeepSeek 审查: 空表防护/CLI 参数(#3), 数据校验(#4), 命中率修正(#1),
+空表防护/CLI 参数(#3), 数据校验(#4), 命中率修正(#1),
 CN-EN token 估算(#2), 批量嵌入(#6), JSON 报告(#9), 成本可配(#8)。
 """
 import argparse

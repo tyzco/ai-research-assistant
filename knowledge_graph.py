@@ -101,8 +101,7 @@ def build_graph_from_kb(table_name: str) -> dict:
     """从 LanceDB 知识库构建图谱（同步，不含 LLM 抽取）。
     返回 D3.js 兼容的 force-graph JSON。
 
-    DeepSeek 审查:
-      #1: 补充共同作者关系边, 使图谱成为真实的合作网络 (原实现 edges 恒空,
+    #1: 补充共同作者关系边, 使图谱成为真实的合作网络 (原实现 edges 恒空,
           只有孤立论文节点, 不成其为知识图谱)。
       #2: 简化 LanceDB 表列举兼容逻辑 (去掉脆弱的 tuple 解构)。
       #6: 用 is_fulltext=false 过滤扫描取"每篇论文一条摘要", 替代无查询 search()。

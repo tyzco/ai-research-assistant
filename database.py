@@ -741,7 +741,7 @@ class Database:
         pending_approval: dict = None,
         status: str = "active",
     ):
-        """持久化科研团队快照 (DeepSeek 审查 #2: 崩溃可恢复, 多 run 并存)。"""
+        """持久化科研团队快照 (崩溃可恢复, 多 run 并存)。"""
         self._ensure_tables()
         c = self._conn()
         c.execute(

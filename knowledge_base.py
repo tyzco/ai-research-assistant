@@ -52,7 +52,7 @@ def _get_table(db, table_name: str):
                 logger.warning(f"Migrate version columns on {table_name} failed: {e}")
         return t
     except ValueError as e:
-        # LanceDB 表不存在抛 ValueError (DeepSeek 审查 #1: 精确捕获, 其他异常向上抛避免数据丢失)
+        # LanceDB 表不存在抛 ValueError (精确捕获, 其他异常向上抛避免数据丢失)
         if "not found" not in str(e).lower():
             raise
         dim = LOCAL_EMBEDDING_DIM
@@ -457,7 +457,7 @@ def store_image_descriptions(
     except ValueError as e:
         if "not found" not in str(e).lower():
             raise
-        # 表不存在 → 自动创建 (DeepSeek 审查 #4: 原静默 return 丢数据无感知)
+        # 表不存在 → 自动创建 (原静默 return 丢数据无感知)
         logger.warning(f"Table {table_name} not found, creating for image descriptions")
         table = _get_table(db, table_name)
 
@@ -500,7 +500,7 @@ def _cosine_search(
 
 
 def _stable_key(r: dict, rank: int) -> str:
-    """稳定 RRF 键 (DeepSeek 审查 #6): chunk_id 优先, 否则 paper_id+chunk_index 组合。"""
+    """稳定 RRF 键 : chunk_id 优先, 否则 paper_id+chunk_index 组合。"""
     cid = r.get("chunk_id", "")
     if cid:
         return cid

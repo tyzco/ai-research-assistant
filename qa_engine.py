@@ -95,7 +95,7 @@ def _rerank(question: str, chunks: list[dict], top_k: int = 5) -> list[dict]:
 
 
 async def _rerank_async(question: str, chunks: list[dict], top_k: int = 5) -> list[dict]:
-    """异步重排 (DeepSeek 审查 #2: CrossEncoder.predict 同步阻塞事件循环)。
+    """异步重排 (CrossEncoder.predict 同步阻塞事件循环)。
     通过 to_thread 放入线程池执行, 不阻塞 asyncio 主循环。"""
     import asyncio
 
@@ -148,7 +148,7 @@ async def _resolve_coreference(question: str, history: str) -> str:
         resolved = resp.choices[0].message.content.strip()
         return resolved if len(resolved) >= 5 else question
     except Exception as e:
-        logger.warning(f"Coreference resolution failed: {e}")  # DeepSeek 审查 #4
+        logger.warning(f"Coreference resolution failed: {e}")  # 
         _rec_degraded("coref")
         return question
 
@@ -183,7 +183,7 @@ async def _expand_query(question: str) -> str:
             return expanded
         return question
     except Exception as e:
-        logger.warning(f"Query expansion failed: {e}")  # DeepSeek 审查 #4
+        logger.warning(f"Query expansion failed: {e}")  # 
         return question
 
 
@@ -270,7 +270,7 @@ def _is_complex_query(question: str) -> bool:
     )
 
 
-# 复杂意图关键词集：由 config.INTENT_KEYWORDS + COMPLEX_INTENT_TYPES 派生 (DeepSeek 审查 #6)
+# 复杂意图关键词集：由 config.INTENT_KEYWORDS + COMPLEX_INTENT_TYPES 派生 
 # 替代原硬编码 ["对比", "区别", "优缺点", "机制"]，新增意图关键词无需改代码
 COMPLEX_EXPAND_KEYWORDS = {
     kw for label in COMPLEX_INTENT_TYPES for kw in INTENT_KEYWORDS.get(label, [])
@@ -367,9 +367,9 @@ async def ask_question(
     if not bool(_gp("rag_rerank", True)):
         use_rerank = False
     # 自适应混合检索 + 快速模式（短问题跳过 Rerank 省 1-2s）
-    # DeepSeek 审查 #5: _is_complex_query 内部已含 len>15, 外层冗余判断删除
+    # _is_complex_query 内部已含 len>15, 外层冗余判断删除
     use_rerank = use_rerank and _is_complex_query(resolved_question)
-    # DeepSeek 审查 #7: 预初始化, 避免降级分支抛异常时 UnboundLocalError
+    # 预初始化, 避免降级分支抛异常时 UnboundLocalError
     text_res: list[dict] = []
     img_res: list[dict] = []
     abs_res: list[dict] = []
@@ -436,7 +436,7 @@ async def ask_question(
             expanded_ids.add(cid)
             pid = r.get("paper_id", "")
             ci = r.get("chunk_index")
-            # DeepSeek 审查 #2: pid 白名单校验, 防止拼接进 where 子句引发语法错误/注入
+            # pid 白名单校验, 防止拼接进 where 子句引发语法错误/注入
             if not pid or ci is None or not re.fullmatch(r"[A-Za-z0-9_-]+", pid):
                 continue
             # 查同一论文 chunk_index ±1 的块
@@ -514,7 +514,7 @@ async def ask_question(
             abstract_context=ab,
             question=question,
         )
-        # DeepSeek 审查 #8: 历史放开头, 避免污染末端的回答指令
+        # 历史放开头, 避免污染末端的回答指令
         if mem_ctx:
             prompt_content = f"【对话历史】\n{mem_ctx}\n\n{prompt_content}"
 
@@ -570,7 +570,7 @@ async def ask_question(
     except Exception:
         pass
 
-    # 引用列表 (DeepSeek 审查 #3: 去重键 DOI/paper_id 优先, 避免同名论文误去重)
+    # 引用列表 (去重键 DOI/paper_id 优先, 避免同名论文误去重)
     def _ref_key(r: dict) -> str:
         return (
             f"doi:{r.get('doi','').lower()}"

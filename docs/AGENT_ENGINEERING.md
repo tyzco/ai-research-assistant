@@ -260,7 +260,7 @@
 
 **② 通用方案**：来源白名单 + 合规边界声明 + 处置闭环（证据→决策→记录）。
 
-**③ 本项目落地**：**法律红线写死**——只处理 OA 内容 + 用户上传论文，绝不碰付费/盗版（Sci-Hub 类）；`fetch_url` 只读用户提供的链接 + OA 公开页面；`scope_gate` 拦截违法犯罪类请求；合规声明在 `docs/PITCH_FACTS.md`。
+**③ 本项目落地**：**法律红线写死**——只处理 OA 内容 + 用户上传论文，绝不碰付费/盗版（Sci-Hub 类）；`fetch_url` 只读用户提供的链接 + OA 公开页面；`scope_gate` 拦截违法犯罪类请求；合规声明见 README 的「使用边界」一节。
 
 ---
 
@@ -332,4 +332,4 @@
 | `run_benchmark.py` / `run_eval.py` | RAG 评测 |
 | `monitor.py` / `static/dev.html` | 可观测 / 开发者中心 |
 
-> 本篇与 `docs/ARCHITECTURE.md`（系统架构）、`docs/BENCHMARK.md`（评测方法）、`docs/SELF_EVOLUTION.md`（自我进化）互为补充；总纲见根目录 `PROJECT_SUMMARY.md`。
+> 本篇与 `docs/ARCHITECTURE.md`（系统架构）、`docs/BENCHMARK.md`（评测方法）、`docs/SELF_EVOLUTION.md`（自我进化）互为补充；总纲见根目录 `README.md`。

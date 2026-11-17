@@ -553,7 +553,7 @@ def parse_pdf(pdf_bytes: bytes, pdf_name: str) -> dict:
 
     safe_name = Path(pdf_name).stem.replace(" ", "_")[:40]
 
-    # 图片上限 (DeepSeek 审查 #4: 防止大 PDF 内存/磁盘激增)
+    # 图片上限 (防止大 PDF 内存/磁盘激增)
     max_images = getattr(config, "MAX_IMAGES_PER_PDF", 200)
 
     reordered_pages = 0  # 触发双栏重排的页数 (观测用)
@@ -676,7 +676,7 @@ def _fast_image_filter(
         return False
     if max(width, height) / max(1, min(width, height)) > config.IMAGE_MAX_ASPECT_RATIO:
         return False
-    # 首页/尾页丢弃 (DeepSeek 审查 #1: 原 `>= page_count-1` 误丢倒数第二页, 尾页泄漏)
+    # 首页/尾页丢弃 (原 `>= page_count-1` 误丢倒数第二页, 尾页泄漏)
     # 开关见 IMAGE_FILTER_SKIP_FIRST_PAGE / IMAGE_FILTER_SKIP_LAST_PAGE
     if config.IMAGE_FILTER_SKIP_FIRST_PAGE and page_num <= 1:
         return False
@@ -701,7 +701,7 @@ def _get_splitter(chunk_size: int | None = None, chunk_overlap: int | None = Non
     """创建 LangChain RecursiveCharacterTextSplitter 分割器。
     分隔符优先级：中英文句号 → 换行 → 空格 → 字符级切分。
     准备2(技术) §1545 建议递归切分是多数项目的默认选择。
-    v5.3: 修正注释——函数每次创建新实例, 非单例 (DeepSeek 审查 #2)。"""
+    v5.3: 修正注释——函数每次创建新实例, 非单例 。"""
     from langchain_text_splitters import RecursiveCharacterTextSplitter
 
     cs = chunk_size or CHUNK_SIZE
@@ -739,7 +739,7 @@ def chunk_text(text: str, chunk_size: int = CHUNK_SIZE,
                chunk_overlap: int | None = None) -> list[str]:
     """使用 LangChain RecursiveCharacterTextSplitter 进行递归语义切分。
     按 准备2(技术) §364 建议：NLP 语义感知动态切分 + 15% token 重叠窗口。
-    v5.3: 支持显式 chunk_overlap (DeepSeek 审查 #3)。"""
+    v5.3: 支持显式 chunk_overlap 。"""
     if not text or not text.strip():
         return []
     splitter = _get_splitter(chunk_size, chunk_overlap)

@@ -64,7 +64,7 @@ from search import search_papers_for_topic
 from topic_manager import active_topics, create_topic, save_topic_state
 
 # 消息历史存储（按 topic_id）
-_translation_lock = threading.Lock()  # DeepSeek 审查 #7: 翻译缓存并发写保护
+_translation_lock = threading.Lock()  # 翻译缓存并发写保护
 
 app = FastAPI(title="AI Research Assistant", version="0.3.0")
 
@@ -162,7 +162,7 @@ _rate_limiter: dict[str, list[float]] = defaultdict(list)
 
 
 def _list_lance_tables(db) -> list[str]:
-    """统一 LanceDB 表列举 (DeepSeek 审查 #4: 兼容不同版本 API, 去重各处脆弱代码)。"""
+    """统一 LanceDB 表列举 (兼容不同版本 API, 去重各处脆弱代码)。"""
     raw = db.list_tables() if hasattr(db, "list_tables") else db.table_names()
     return list(raw.tables) if hasattr(raw, "tables") else [str(t) for t in raw]
 
@@ -174,7 +174,7 @@ async def rate_limit_middleware(request: Request, call_next):
 
     set_request_id(uuid.uuid4().hex[:8])
 
-    # DeepSeek 审查 #2: 反向代理下取 X-Forwarded-For 首个 IP, 否则用直连 IP
+    # 反向代理下取 X-Forwarded-For 首个 IP, 否则用直连 IP
     forwarded = request.headers.get("x-forwarded-for", "")
     ip = (
         forwarded.split(",")[0].strip()
@@ -713,7 +713,7 @@ async def _translate_cn_query(query: str) -> str:
 
 def _update_translation_cache(query: str, translation: str):
     """更新翻译缓存 JSON 文件 (LRU 淘汰旧条目, 最多 500 条)。
-    DeepSeek 审查 #7: 加锁保护并发读写, 防止 JSON 文件损坏。"""
+    加锁保护并发读写, 防止 JSON 文件损坏。"""
     import json
     from pathlib import Path
 
@@ -1090,7 +1090,7 @@ async def api_download_bulk(request: Request, user_id: str = Depends(get_current
 
     pdf_contents: list[tuple[str, bytes]] = []
     async with httpx.AsyncClient(timeout=DOWNLOAD_TIMEOUT) as client:
-        sem = asyncio.Semaphore(DOWNLOAD_CONCURRENCY)  # DeepSeek 审查 #14: 配置化
+        sem = asyncio.Semaphore(DOWNLOAD_CONCURRENCY)  # 配置化
 
         async def _fetch(i, url):
             async with sem:
@@ -1159,7 +1159,7 @@ async def api_download_bulk(request: Request, user_id: str = Depends(get_current
         for fname, content in pdf_contents:
             try:
                 state.progress.current += 1  # 进度: 逐篇解析/索引
-                # DeepSeek 审查 #13: CPU 密集解析放入线程池
+                # CPU 密集解析放入线程池
                 result = await asyncio.to_thread(parse_pdf, content, fname)
                 # 解析质量闸门: 垃圾解析结果不入库 (见 downloader.assess_text_quality)
                 _q = assess_text_quality(result)
@@ -1268,12 +1268,12 @@ async def api_upload_pdf(
             )
             continue
         raw_bytes = await file.read()
-        # DeepSeek 审查 #15: 大小上限 + 魔数校验
+        # 大小上限 + 魔数校验
         if len(raw_bytes) > MAX_UPLOAD_BYTES:
             logger.warning(f"Upload skipped (too large): {file.filename}")
             rejected.append({"file": file.filename, "reason": "文件过大"})
             continue
-        # DeepSeek 审查 #13: CPU 密集解析放入线程池, 不阻塞事件循环
+        # CPU 密集解析放入线程池, 不阻塞事件循环
         if is_docx:
             # DOCX 有显式标题层级 → 结构感知切分, 每块绑定所属章节 (PDF 做不到)
             if not raw_bytes[:4].startswith(b"PK"):
@@ -1397,7 +1397,7 @@ async def api_topic_status(topic_id: str, user_id: str = Depends(get_current_use
     if not state:
         raise HTTPException(404, "Topic not found")
     ready = state.status == TopicStatus.READY
-    # DeepSeek 审查 #5: getattr 安全访问, 防 progress/stats 缺失时 500
+    # getattr 安全访问, 防 progress/stats 缺失时 500
     stats = state.stats
     progress = state.progress
     uploaded = getattr(stats, "uploaded_papers", 0) if stats else 0
@@ -1492,7 +1492,7 @@ async def api_chat(request: Request):
         + (resp.usage.completion_tokens if resp.usage else 0),
     )
 
-    # DeepSeek 审查 #1: 保存消息移到 return 之前 (原代码在 return 后, 不可达),
+    # 保存消息移到 return 之前 (原代码在 return 后, 不可达),
     # 且改用 SQLite 持久化 (#12: 移除未使用的 message_store)。
     tid = req.get("topic_id")
     if tid:

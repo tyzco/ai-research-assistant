@@ -39,7 +39,7 @@ class Skill:
             "category": self.category,
             "tools": self.tools,
             "enabled": self.enabled,
-            # DeepSeek 审查 #6: 暴露提示预览, 便于前端/监控查看完整定义
+            # 暴露提示预览, 便于前端/监控查看完整定义
             "prompt_preview": self.system_prompt_appendix[:200],
         }
 
@@ -180,7 +180,7 @@ EXPERIMENT_DESIGN = Skill(
 # ===== 技能注册表 =====
 
 # 基础能力工具地板: 任何技能模式都保留, 防止技能选择造成能力缺口
-# (DeepSeek 审查 #2: 动态激活时不能丢掉检索/KB 发现/问答核心能力)
+# (动态激活时不能丢掉检索/KB 发现/问答核心能力)
 CORE_TOOLS = {"search_papers", "search_knowledge_bases", "agent_ask"}
 
 # 路由强证据阈值: 命中 >= 此数量的关键词才认为路由可信;
@@ -242,7 +242,7 @@ class SkillRegistry:
         self._validate_tools()
 
     def _validate_tools(self) -> None:
-        """DeepSeek 审查 #1: 校验技能声明的工具在注册表中存在, 缺失时警告。
+        """校验技能声明的工具在注册表中存在, 缺失时警告。
         防止技能引用了未实现/改名后的工具导致运行时错误。"""
         try:
             from agent.tool_registry import get_tool
@@ -272,7 +272,7 @@ class SkillRegistry:
         return self._skills.get(name)
 
     def select_for_task(self, task: str, max_skills: int = 2) -> list[str]:
-        """DeepSeek 审查 #2: 按意图关键词动态激活最相关技能 (仅限激活技能)。
+        """按意图关键词动态激活最相关技能 (仅限激活技能)。
 
         无匹配 → 默认 literature_review; 未激活 → 取第一个激活技能。
         返回技能名列表, 供 tool 裁剪与 system prompt 拼接使用。
@@ -352,7 +352,7 @@ class SkillRegistry:
         return "\n\n".join(parts)
 
     def register(self, skill: Skill) -> bool:
-        """注册/覆盖一个技能 (DeepSeek 审查 #8: 支持第三方动态扩展)。"""
+        """注册/覆盖一个技能 (支持第三方动态扩展)。"""
         self._skills[skill.name] = skill
         if skill.enabled:
             self.active.add(skill.name)
@@ -360,7 +360,7 @@ class SkillRegistry:
         return True
 
 
-# 全局单例 (DeepSeek 审查 #10: 加锁防多线程重复初始化)
+# 全局单例 (加锁防多线程重复初始化)
 _skill_registry: Optional[SkillRegistry] = None
 _skill_registry_lock = threading.Lock()
 

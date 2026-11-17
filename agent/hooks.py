@@ -93,7 +93,7 @@ class HookRegistry:
                     merged.block_reason = result.block_reason or merged.block_reason
 
                 # tools: intersection (只能缩小, 不能新增)
-                # DeepSeek 审查 #1: 空列表视为"不修改"(防止误清空工具集);
+                # 空列表视为"不修改"(防止误清空工具集);
                 # 空交集时保留原集合并告警
                 if result.tools:
                     if merged.tools is None:
@@ -120,7 +120,7 @@ class HookRegistry:
                         f"hook {name}@{point.value} returned empty tools, treated as no-op"
                     )
 
-                # tool_calls: 交集式过滤, 同样防空集 (DeepSeek 审查 #3)
+                # tool_calls: 交集式过滤, 同样防空集 
                 if result.tool_calls:
                     if merged.tool_calls is None:
                         merged.tool_calls = result.tool_calls
@@ -146,7 +146,7 @@ class HookRegistry:
                         f"hook {name}@{point.value} returned empty tool_calls, treated as no-op"
                     )
 
-                # messages: first-writer-wins (DeepSeek 审查 #5: 冲突时告警)
+                # messages: first-writer-wins (冲突时告警)
                 if result.messages is not None:
                     if merged.messages is None:
                         merged.messages = result.messages
@@ -165,7 +165,7 @@ class HookRegistry:
                 merged.metadata.update(result.metadata)
 
             except Exception as e:
-                # DeepSeek 审查 #9: 带堆栈, 便于排查 hook 内部错误
+                # 带堆栈, 便于排查 hook 内部错误
                 logger.warning(f"Hook {name}@{point.value} failed: {e}", exc_info=True)
 
         return merged
@@ -182,7 +182,7 @@ class HookRegistry:
         }
 
 
-# 全局单例 (DeepSeek 审查 #4: 加锁防多线程/多事件循环重复初始化)
+# 全局单例 (加锁防多线程/多事件循环重复初始化)
 _registry: Optional[HookRegistry] = None
 _registry_lock = threading.Lock()
 
@@ -212,7 +212,7 @@ def _register_builtins(registry: HookRegistry):
         return None
 
     def _sensitive_word_filter(_, payload) -> Optional[HookResult]:
-        """BEFORE_EMIT: 敏感词检测 (DeepSeek 审查 #6: 可配置 + 记录命中词)。
+        """BEFORE_EMIT: 敏感词检测 (可配置 + 记录命中词)。
 
         默认词表来自 config.HOOK_SENSITIVE_WORDS。不含 "execute arbitrary code"——
         学术安全论文中该词组很常见, 硬拦截会误杀正常讨论。"""
@@ -237,7 +237,7 @@ def _register_builtins(registry: HookRegistry):
 
     def _tool_allowlist(_, payload) -> Optional[HookResult]:
         """BEFORE_TOOL: 仅允许注册表中的工具执行。
-        DeepSeek 审查 #7: 记录每次工具尝试 (审计), 未来可加黑名单。"""
+        记录每次工具尝试 (审计), 未来可加黑名单。"""
         try:
             import json as _json
 

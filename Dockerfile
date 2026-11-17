@@ -1,3 +1,11 @@
+# ---- Web build stage: React Flow 前端 ----
+FROM node:22-slim AS web
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+RUN npm run build
+
 # ---- Build stage: install dependencies ----
 FROM python:3.12-slim AS builder
 
@@ -26,8 +34,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /root/.local /root/.local
 ENV PATH=/root/.local/bin:$PATH
 
-# Copy application code
+# Copy application code + built frontend
 COPY . .
+COPY --from=web /web/dist ./web/dist
 
 # Create writable data directories (mounted as volume in docker-compose)
 RUN mkdir -p data/lancedb_data data/images data/memory paper_cache

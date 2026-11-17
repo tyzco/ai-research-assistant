@@ -18,6 +18,12 @@
 - **评测**：客观检索基准（gold = chunk_id、bootstrap 95% CI、四档消融）、LLM-as-judge、库外问题拒绝率。
 - **可视化与观测**：React Flow 动态编排图、连续时间轴回放、运行参数快照、两次运行对比、Langfuse trace 与 prompt 版本。
 
+## 使用边界
+
+- 只处理开放获取（OA）论文与用户自行上传的文档，不提供付费/盗版论文下载。
+- 检索结果是公开元数据索引；全文仅用于用户本地建库与问答，不做再分发。
+- 生成内容需人工复核，不构成学术结论或法律意见。
+
 ## 这是什么
 
 PaperLink 是一个面向中文研究者的 **AI 学术研究伴侣**。核心差异化不是「搜索/问答」（那是 DeepSeek/Perplexity 的红海），而是：
@@ -212,13 +218,13 @@ curl -s localhost:8001/metrics | python -m json.tool
 ## 架构
 
 ```
-research_team.py    ← 13 Agent 虚拟科研团队 (上游3+中游6+下游4)
+research_team.py    ← 14 Agent 虚拟科研团队 (上游3+中游6+下游5)
 pi_agent.py         ← Hook 驱动单 Agent 循环 (10 个干预节点)
 hooks.py            ← 生命周期钩子系统 (trace→turn→model→tool→emit)
 context_engine.py   ← 上下文工程 (token 阈值压缩 + 工具输出截断)
 tool_manager.py     ← 工具调用管理 (参数校验 + 安全检查 + 错误恢复)
 skills.py           ← 七大能力技能系统 (检索/写作/问答/决策/引用链/批判/实验)
-tool_registry.py    ← 14 工具注册表 (OpenAI Function Calling + tools_extra 插件动态加载)
+tool_registry.py    ← 21 工具注册表 (OpenAI Function Calling + tools_extra 插件动态加载)
 intent_classifier.py← 三层漏斗第 2 层: 嵌入语义意图分类 (规则快路径 → 语义兜底 → LLM 工具层)
 eval_common.py      ← 评估脚本共享工具 (数据加载/选表/语义召回/MRR)
 ```
@@ -250,7 +256,7 @@ query → 指代消解 → 查询改写(语义校验) → 自适应混合检索(
 ├── conversation_memory.py   # 多轮对话记忆 (SQLite)
 ├── intent_classifier.py     # 三层漏斗第 2 层: 嵌入语义意图分类 (margin 相对置信度)
 ├── agent/
-│   ├── research_team.py     # ★ 13 Agent 虚拟科研团队 + 双轨审批
+│   ├── research_team.py     # ★ 14 Agent 虚拟科研团队 + 双轨审批
 │   ├── pi_agent.py          # Hook 驱动单 Agent (默认前端入口)
 │   ├── hooks.py             # 10 个生命周期干预节点
 │   ├── context_engine.py    # 上下文压缩 + 工具输出管理
@@ -331,10 +337,10 @@ query → 指代消解 → 查询改写(语义校验) → 自适应混合检索(
 
 ## 竞品定位
 
-PaperLink 在 GitHub 上的差异化优势（详见 [竞品全景分析](docs/COMPETITIVE_ANALYSIS.md)、[自我进化系统](docs/SELF_EVOLUTION.md) 与 [交付总结](docs/DELIVERY.md) 与 [宣传数据事实清单](docs/PITCH_FACTS.md)）：
+PaperLink 的差异化优势（详见 [自我进化系统](docs/SELF_EVOLUTION.md)）：
 
 - **12 学术源并行** — 同类最多（OpenDraft 4源, ScholarFlow 5源, arxiv-tracker 仅 arXiv）
-- **15 Agent + 三层双轨审批** — 唯一结合"上游调研→中游产出→下游智控"三层架构 + 引用精度验证的项目
+- **14 Agent + 三层双轨审批** — 唯一结合"上游调研→中游产出→下游智控"三层架构 + 引用精度验证的项目
 - **零外部依赖部署** — Docker + SQLite + LanceDB, 不需要 GPU
 - **全链路覆盖** — 选题→检索→筛选→综述→写作→审稿→校验→伦理→定稿→导出
 - **多格式论文导出** — Markdown / DOCX / LaTeX / BibTeX 一键导出

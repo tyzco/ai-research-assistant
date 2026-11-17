@@ -42,7 +42,7 @@ SAFE_DOMAINS = [
 
 def _is_safe_domain(url: str) -> bool:
     """严格域名匹配: 白名单域名或其子域名。
-    DeepSeek 审查 #1: 原 `d in url` 子串匹配可被 fake-arxiv.org 绕过。"""
+    原 `d in url` 子串匹配可被 fake-arxiv.org 绕过。"""
     try:
         host = (urlparse(url).hostname or "").lower()
     except Exception:
@@ -91,7 +91,7 @@ class ToolManager:
         self.call_history: list[dict] = []
         self.error_count: dict[str, int] = {}  # tool_name → error count
         self.call_counts: dict[str, int] = {}  # 本次任务内 tool_name → 已调用次数
-        self._lock = threading.Lock()  # DeepSeek 审查 #4: 并发写保护
+        self._lock = threading.Lock()  # 并发写保护
 
     # ── 工具治理: 黑名单 + 单任务频次 ──
     def check_call_budget(self, tool_name: str) -> str:
@@ -154,7 +154,7 @@ class ToolManager:
             value = corrected[key]
 
             try:
-                # DeepSeek 审查 #2: bool 是 int 子类, 先显式处理 bool 避免误转
+                # bool 是 int 子类, 先显式处理 bool 避免误转
                 if expected_type == "integer":
                     if isinstance(value, bool):
                         corrected[key] = int(value)
@@ -261,7 +261,7 @@ class ToolManager:
                 # 检查协议
                 if not url_str.startswith(("http://", "https://")):
                     return False, f"不安全的 URL 协议: {url}"
-                # DeepSeek 审查 #1: 严格域名匹配; 默认仅告警, 配置可升级为阻止
+                # 严格域名匹配; 默认仅告警, 配置可升级为阻止
                 if not _is_safe_domain(url_str):
                     logger.warning(
                         f"Non-academic domain in {tool_name}.{key}: {url_str[:80]}"
@@ -271,7 +271,7 @@ class ToolManager:
 
         # 危险工具标记 (仅审计, 不自动阻止)
         # download_and_index 是科研团队核心工具; 人工确认由 tool_registry 的
-        # need_confirm 机制负责 (DeepSeek 审查 #3: 默认阻止会破坏检索→下载主流程)
+        # need_confirm 机制负责 (默认阻止会破坏检索→下载主流程)
         if tool_name in DANGEROUS_TOOLS:
             logger.info(
                 f"Dangerous tool called: {tool_name} — {DANGEROUS_TOOLS[tool_name]}"

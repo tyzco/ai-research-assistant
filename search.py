@@ -230,7 +230,7 @@ async def _generate_strategy_uncached(query: str) -> dict:
             logger.warning(f"Strategy missing related_terms for: {query}")
         return parsed
 
-    # 重试一次 (DeepSeek 审查 #2: 降低温度提高结构化输出稳定性)
+    # 重试一次 (降低温度提高结构化输出稳定性)
     logger.warning(
         f"Strategy JSON parse failed, retrying with lower temp: {text[:200]}"
     )
@@ -423,7 +423,7 @@ async def search_papers_for_topic(
     related_en: list[str] | None = None,
     related_cn: list[str] | None = None,
 ) -> list[PaperMeta]:
-    """9 源并行搜索 + Query扩展: 每源独立超时, 快源先回。参考 academic-search 的 Query 扩展策略。
+    """12 源并行搜索 + Query扩展: 每源独立超时, 快源先回。参考 academic-search 的 Query 扩展策略。
     related_en/cn: 领域联想词 (策略第2层), 并入关键词池补覆盖 — 不常见选题用户措辞≠标准术语时,
     联想词进 arXiv/OpenAlex/CORE 等 [:2]/[:3] 源检索。"""
     try:
@@ -547,7 +547,7 @@ async def search_papers_for_topic(
     papers: list[PaperMeta] = []
 
     def _dedup_key(p: PaperMeta) -> str:
-        """去重键: DOI 优先 (唯一标识), 否则标题规范化前 60 字符 (DeepSeek 审查 #6)。"""
+        """去重键: DOI 优先 (唯一标识), 否则标题规范化前 60 字符 。"""
         if p.doi:
             return f"doi:{p.doi.lower().strip()}"
         return (p.title or "").lower().strip()[:60]
@@ -906,7 +906,7 @@ APIFY_GS_URL = "https://api.apify.com/v2/acts/apify~google-scholar-scraper/runs"
 async def _search_google_scholar_apify(keywords: list[str]) -> list[PaperMeta]:
     """通过 Apify 调用谷歌学术搜索（需要 APIFY_API_KEY）。
 
-    v5.3 修复 (DeepSeek 审查 #1): 原实现 POST 后立即解析结果——但 Apify /runs 端点
+    v5.3 修复 : 原实现 POST 后立即解析结果——但 Apify /runs 端点
     返回的是运行对象而非搜索结果, 导致永远拿不到论文。现改为正确流程:
     POST 启动运行 → 轮询运行状态 → 拉取数据集结果。"""
     if not APIFY_API_KEY:

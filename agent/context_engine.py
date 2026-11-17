@@ -21,7 +21,7 @@ from config import AGENT_CONTEXT_MAX_TOKENS, AGENT_CONTEXT_RESERVE_TOKENS
 
 logger = logging.getLogger(__name__)
 
-# tiktoken cl100k_base 编码缓存 (DeepSeek 审查 #1: 英文/代码 token 估算更准)
+# tiktoken cl100k_base 编码缓存 (英文/代码 token 估算更准)
 _tok_cache = None
 
 # 压缩阈值: 剩余 token 低于此值时触发压缩
@@ -60,12 +60,12 @@ class ContextEngine:
 
     def __post_init__(self):
         Path(self.fulltext_dir).mkdir(parents=True, exist_ok=True)
-        self._lock = threading.Lock()  # DeepSeek 审查 #9: 并发计数保护
+        self._lock = threading.Lock()  # 并发计数保护
 
     def estimate_tokens(self, text: str) -> int:
         """token 估算。
 
-        DeepSeek 审查 #1: 优先 tiktoken cl100k_base (英文/代码/JSON 更准),
+        优先 tiktoken cl100k_base (英文/代码/JSON 更准),
         任一边界情况失败时回退字符启发式 (中文 ~1.5 char/token, 英文 ~3.5)。
         """
         if not text:
@@ -114,7 +114,7 @@ class ContextEngine:
         if token_est <= MAX_TOOL_OUTPUT_TOKENS:
             return output, None
 
-        # DeepSeek 审查 #3: 清洗孤立代理项, 防 write_text/JSON 序列化崩溃
+        # 清洗孤立代理项, 防 write_text/JSON 序列化崩溃
         import uuid
 
         clean = output.encode("utf-8", errors="ignore").decode("utf-8")
@@ -158,7 +158,7 @@ class ContextEngine:
             status=f"已压缩 {len(old)} 条历史消息，当前第 {self._compact_count} 次压缩",
         )
 
-        # DeepSeek 审查 #2: 摘要用 system 角色注入, 避免破坏 user/assistant 交替规则
+        # 摘要用 system 角色注入, 避免破坏 user/assistant 交替规则
         return [{"role": "system", "content": summary}] + keep
 
     def get_stats(self) -> dict:

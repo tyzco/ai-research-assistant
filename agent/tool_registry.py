@@ -166,7 +166,7 @@ class Tool:
     async def execute(self, **kwargs) -> str:
         """执行工具：Schema 校验 → 重试。
         准备2 §工具调用优化：Schema校验 + 参数补全 + 自动重试修复。
-        DeepSeek 审查 #1: 退避改用 await asyncio.sleep, 不阻塞事件循环。
+        退避改用 await asyncio.sleep, 不阻塞事件循环。
         #6: need_confirm 工具执行时记录审计日志 (真实人工闸门需审批 UI)。"""
         invalid = self.validate(kwargs)
         if invalid:
@@ -395,7 +395,7 @@ async def _tool_download_index(urls: list, topic_id: str) -> dict:
 
     papers, chunks = [], {}
     for fname, content in pdf_contents:
-        # DeepSeek 审查 #2: parse_pdf/chunk_text 是 CPU 密集同步操作,
+        # parse_pdf/chunk_text 是 CPU 密集同步操作,
         # 放到线程池执行, 避免阻塞 asyncio 事件循环
         result = await asyncio.to_thread(parse_pdf, content, fname)
         pid = uuid.uuid4().hex[:12]
@@ -448,7 +448,7 @@ async def _tool_generate_strategy(query: str) -> dict:
 
 
 def _tool_export_report(topic_id: str) -> dict:
-    """导出课题报告。统一返回 dict, 与其他工具格式一致 (DeepSeek 审查 #8)。"""
+    """导出课题报告。统一返回 dict, 与其他工具格式一致 。"""
     from topic_manager import active_topics
 
     state = active_topics.get(topic_id)
@@ -789,7 +789,7 @@ def get_tools_schema() -> list[dict]:
 
 async def _tool_search_knowledge_bases(query: str = "") -> dict:
     """搜索已构建的知识库列表，按大小排序，优先返回内容最丰富的。
-    query 为占位参数 (DeepSeek 审查 #5/#10: 当前不参与过滤, 保持可选)。"""
+    query 为占位参数 (/#10: 当前不参与过滤, 保持可选)。"""
     from agent.kb_registry import list_kbs
 
     # 只列出用户构建的知识库（papers_* 前缀），排除评估表
@@ -833,7 +833,7 @@ async def _tool_agent_ask(table_name: str, question: str) -> dict:
     }
 
 
-# DeepSeek 审查 #4: 幂等注册, 防止模块重复导入/热重载时工具累积重复项
+# 幂等注册, 防止模块重复导入/热重载时工具累积重复项
 if not any(t.name == "get_paper_content" for t in TOOLS):
     TOOLS.append(
         Tool(

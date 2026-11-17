@@ -39,7 +39,7 @@ class AdaptiveHybridRetriever:
     # 类级别模型缓存——多个 topic 共享，避免重复加载
     _stage1_model = None
     _stage2_model = None
-    _model_lock = threading.Lock()  # DeepSeek 审查 #1: 防并发重复加载
+    _model_lock = threading.Lock()  # 防并发重复加载
 
     def __init__(self, table_name: str):
         import lancedb
@@ -212,7 +212,7 @@ class AdaptiveHybridRetriever:
     ) -> list[dict]:
         """Stage1: MiniLM 快速预筛 → Stage2: CrossEncoder 精排。
 
-        v5.3 (DeepSeek 审查 #2): stage1_k 可配置, 默认 max(top_k*3, 15)。
+        v5.3 : stage1_k 可配置, 默认 max(top_k*3, 15)。
         #8: 点积前 L2 归一化, 保证余弦相似度。"""
         if len(chunks) <= top_k:
             return chunks
@@ -226,7 +226,7 @@ class AdaptiveHybridRetriever:
             texts = [c.get("text", "")[:512] for c in chunks]
             q_emb = stage1.encode([query])[0]
             c_embs = stage1.encode(texts)
-            # 归一化后点积 = 余弦相似度 (DeepSeek 审查 #8)
+            # 归一化后点积 = 余弦相似度 
             q_norm = q_emb / (np.linalg.norm(q_emb) + 1e-12)
             c_norm = c_embs / (np.linalg.norm(c_embs, axis=1, keepdims=True) + 1e-12)
             scores = np.dot(c_norm, q_norm)
@@ -247,7 +247,7 @@ class AdaptiveHybridRetriever:
             except Exception:
                 pass
         except Exception as e:
-            logger.error(f"Stage1 rerank failed: {e}")  # DeepSeek 审查 #5
+            logger.error(f"Stage1 rerank failed: {e}")  # 
             return chunks[:top_k]
 
         # 质量水位管控: 高水位/超载时跳过 stage2 CrossEncoder 精排 (最贵的一环), 直接返回 stage1 结果
@@ -291,7 +291,7 @@ class AdaptiveHybridRetriever:
                 pass
             return [stage1_chunks[i] for i in stage2_indices]
         except Exception as e:
-            logger.error(f"Stage2 rerank failed: {e}")  # DeepSeek 审查 #5
+            logger.error(f"Stage2 rerank failed: {e}")  # 
             return stage1_chunks[:top_k]
 
     def _query_variants(self, query: str) -> list[str]:

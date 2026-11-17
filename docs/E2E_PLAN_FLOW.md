@@ -77,4 +77,4 @@ if (S.writeMode && res.indexOf('【请回答以上问题后继续】') < 0) S.wr
 5. 回答澄清问题 → 确认 agent 据此写（参考文献用你点名的）
 6. 自检通过 → 初稿交付 → 导出
 
-> 与 `docs/BLUE_OCEAN.md`（产品定位）、`docs/INTERVIEW.md`（面试）配套。
+> 与 `docs/ARCHITECTURE.md`（系统架构）、`docs/BENCHMARK.md`（评测方法）配套。

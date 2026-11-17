@@ -345,7 +345,7 @@ TOOL_SECURITY_BLOCK_NON_WHITELIST = _env_bool(
 )
 
 # ===================================================================
-# Upload / Download 资源限制 (DeepSeek 审查 #14/#15)
+# Upload / Download 资源限制 (/#15)
 # ===================================================================
 # 单 PDF 上传大小上限 (字节)
 MAX_UPLOAD_BYTES = _env("MAX_UPLOAD_BYTES", 50 * 1024 * 1024, int)

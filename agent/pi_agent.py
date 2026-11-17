@@ -115,7 +115,7 @@ class PiAgent:
         self.goal = goal
         self.enable_tool_check = enable_tool_check
         self.enable_compaction = enable_context_compaction
-        # DeepSeek 审查: 显式技能名覆盖 auto 意图选择 (None = 按任务自动激活)
+        # 显式技能名覆盖 auto 意图选择 (None = 按任务自动激活)
         self._skills_override = skills
         self.run_id = run_id or f"pi_{uuid.uuid4().hex[:12]}"
         # 步骤流回调 (流式 SSE: 每步工具完成即推送事件, 供 /agent/pi/stream 使用)
@@ -187,7 +187,7 @@ class PiAgent:
             pass
 
     def _fire_hook(self, point, state, payload: str = ""):
-        """触发 hook，异常隔离 (DeepSeek 审查 #4): 单个 hook 崩溃不中断 agent。"""
+        """触发 hook，异常隔离 : 单个 hook 崩溃不中断 agent。"""
         try:
             from agent.hooks import get_hooks
 
@@ -200,7 +200,7 @@ class PiAgent:
 
     async def run(self, task: str) -> dict:
         """执行完整的 agent trace (人工确认暂停后可由 resume 续跑)。"""
-        # === 技能解析: 显式指定 > 意图自动选择 (DeepSeek 审查 #2/#3/#4) ===
+        # === 技能解析: 显式指定 > 意图自动选择 (/#3/#4) ===
         from agent.skills import get_skills, schemas_for_tools
 
         skill_reg = get_skills()
@@ -525,7 +525,7 @@ class PiAgent:
 
             # === 上下文压缩检查 ===
             if self.enable_compaction and self.ctx.should_compact(messages):
-                # DeepSeek 审查 #2/#9: compact_history 保留 messages[-4:],
+                # /#9: compact_history 保留 messages[-4:],
                 # 实际移除的是 messages[:-4]。按真实移除量扣减并 clamp ≥ 0。
                 removed = messages[:-4] if len(messages) > 4 else []
                 messages = self.ctx.compact_history(
@@ -616,8 +616,8 @@ class PiAgent:
 
             if msg.tool_calls:
                 # === 工具执行路径 ===
-                # DeepSeek 审查 #3: 全量处理 tool_calls, 不再丢弃多余调用
-                # DeepSeek 审查 #5: assistant 消息只追加一次, 每条工具结果都回填
+                # 全量处理 tool_calls, 不再丢弃多余调用
+                # assistant 消息只追加一次, 每条工具结果都回填
                 # 修复: 追加 dict 而非原始 ChatCompletionMessage 对象 —
                 # 原 append(msg) 使 messages 混入 pydantic 对象, 下一轮 context_engine
                 # estimate_messages_tokens 的 m.get("content") 崩 AttributeError
@@ -887,7 +887,7 @@ class PiAgent:
 
                     # === 执行工具 ===
                     if tool_result is None and tool_def is not None:
-                        # DeepSeek 审查 #6: 用剩余时间做超时保护, 工具卡住可中止
+                        # 用剩余时间做超时保护, 工具卡住可中止
                         try:
                             remaining = self.max_time - (time.time() - trace.start_time)
                             if remaining <= 0:
@@ -999,7 +999,7 @@ class PiAgent:
                         tool_name, tool_args, str(tool_result)[:200], turn.tool_success
                     )
 
-                    # DeepSeek 审查 #5: 校验/拦截/失败都回填结果, 避免对话停滞
+                    # 校验/拦截/失败都回填结果, 避免对话停滞
                     messages.append(
                         {
                             "role": "tool",
@@ -1007,7 +1007,7 @@ class PiAgent:
                             "content": str(tool_result)[:3000],
                         }
                     )
-                    # DeepSeek 审查 #1: 任何路径都推进 steps, 防死循环
+                    # 任何路径都推进 steps, 防死循环
                     state["steps"] += 1
             else:
                 # === 直接回答 (无工具调用) — 流式生成, 逐字推送 (step_cb event=token) ===
@@ -1121,7 +1121,7 @@ class PiAgent:
                         detail=f"输出闸拦截：{hr.block_reason[:100]}",
                     )
 
-                # DeepSeek 审查 #9: 直答轮也记录 turn, 使 trace.steps 完整
+                # 直答轮也记录 turn, 使 trace.steps 完整
                 turn.tool_success = True
                 turn.elapsed_ms = (time.time() - t_turn_start) * 1000
                 trace.turns.append(turn)

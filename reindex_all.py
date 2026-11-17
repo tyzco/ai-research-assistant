@@ -2,8 +2,7 @@
 
 用法: python reindex_all.py [--table 关键字] [--dry-run]
 
-DeepSeek 审查修复:
-  #1/#10 原子双表替换: 先写临时表并验证, 成功后才删旧表+rename, 失败保留原表
+#1/#10 原子双表替换: 先写临时表并验证, 成功后才删旧表+rename, 失败保留原表
   #2/#3  用 to_arrow() 表扫描 + 分批编码写入 (原 search() 无查询向量会崩溃, 全表加载易 OOM)
   #4     保留原表 schema, 仅替换 vector 字段维度 (原硬编码 14 字段会丢额外列)
   #6     FTS 失败告警 (原静默 pass)
